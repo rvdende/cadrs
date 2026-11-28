@@ -304,6 +304,7 @@ impl Fit {
             })
             .collect();
         Surface::Nurbs(Arc::new(NurbsSurface {
+            screw: None,
             du: DEGREE,
             dv: DEGREE,
             ku: self.knots[0].clone(),

@@ -367,14 +367,11 @@ fn crossing(
         }
     }
     let (ua, ub) = (uv_box(polys(i).0)?, uv_box(polys(j).0)?);
-    let ssi = super::ssi::surface_surface_full(&fa.surf, ua, &fb.surf, ub, ov);
-    for c in &ssi.curves {
-        if !(c.t1 > c.t0) {
-            continue;
-        }
-        for k in 0..SAMPLES {
-            let t = c.t0 + (c.t1 - c.t0) * (k as f64 + 0.5) / SAMPLES as f64;
-            let p = c.c.point(t);
+    // (The crossing's points, without curves fitted through them: a crossing anywhere is
+    // enough.)
+    for pts in super::ssi::crossing_points(&fa.surf, ua, &fb.surf, ub, ov, SAMPLES) {
+        let step = (pts.len() / SAMPLES).max(1);
+        for p in pts.into_iter().step_by(step) {
             if region.contains(&p)
                 && inside(b, polys(i), i, &p, margin)
                 && inside(b, polys(j), j, &p, margin)

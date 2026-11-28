@@ -173,3 +173,44 @@ fn a_lofted_cylinder_cut_on_a_slant_measures_its_closed_form_every_way() {
     let got = area(&k, b);
     assert!((got - ar).abs() <= 1e-9 * ar, "area {got} vs {ar}");
 }
+
+#[test]
+fn a_ruled_loft_cylinder_cut_on_a_slant_measures_its_closed_form() {
+    // The lofted cylinder above through two circles only: a ruled B-spline (degree 1 along its
+    // rulings), whose trimmed side mass properties integrate along the rulings.
+    let mut k = NativeKernel::new();
+    let (r, h, theta) = (5.0, 7.0, 0.3);
+    let sections: Vec<Profile> = [0.0, 15.0]
+        .iter()
+        .map(|&z| Profile::of(Plane::xy(z), vec![circle(0.0, 0.0, r)]))
+        .collect();
+    let can = k
+        .loft_with(&LoftSpec::through(sections))
+        .unwrap()
+        .first()
+        .unwrap();
+    let below = frame(P3::new(0.0, 0.0, -100.0), V3::z(), V3::x());
+    let cut0 = extrude(&mut k, below, rect(0.0, 0.0, 100.0, 100.0), 100.0);
+    let t = translation(V3::new(0.0, 0.0, h)) * rotation(P3::origin(), V3::y(), -theta);
+    let cut = moved(&mut k, cut0, &t);
+    let b = intersection(&mut k, can, cut);
+    let want = PI * r * r * h;
+    let got = volume(&k, b);
+    assert!((got - want).abs() <= 1e-9 * want, "volume {got} vs {want}");
+    let ar = PI * r * r * (1.0 + 1.0 / theta.cos()) + TAU * r * h;
+    let got = area(&k, b);
+    assert!((got - ar).abs() <= 1e-9 * ar, "area {got} vs {ar}");
+    // The centre: below z = h + x·tan θ, x̄ = r² tan θ / (4h), z̄ = h/2 + r² tan² θ / (8h).
+    let m = k.mass_properties(b).unwrap();
+    let tn = theta.tan();
+    let c = P3::new(
+        r * r * tn / (4.0 * h),
+        0.0,
+        h / 2.0 + r * r * tn * tn / (8.0 * h),
+    );
+    assert!(
+        (m.center_of_mass - c).amax() <= 1e-9 * h,
+        "centre {:?} vs {c:?}",
+        m.center_of_mass
+    );
+}

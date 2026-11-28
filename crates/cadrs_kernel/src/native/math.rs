@@ -543,23 +543,40 @@ pub fn poly_roots(c: &[f64], lo: f64, hi: f64) -> Vec<f64> {
         if fb == 0.0 || fa.signum() == fb.signum() {
             continue;
         }
-        // Bisection to the last bit (monotone between the stops: one root).
+        // Newton kept inside the bracket (monotone between the stops: one root), a bisection
+        // wherever its step leaves the bracket or doesn't halve it, to a few units in the last
+        // place (bisection alone to the last bit took hundreds of halvings by zero, where
+        // floats crowd).
         let rising = fb > 0.0;
-        loop {
-            let m = 0.5 * (a + b);
-            if m <= a || m >= b {
+        let deval = |x: f64| dc.iter().rev().fold(0.0, |acc, &k| acc * x + k);
+        let mut x = 0.5 * (a + b);
+        let mut width = b - a;
+        for _ in 0..400 {
+            let fx = eval(x);
+            if fx == 0.0 {
+                (a, b) = (x, x);
                 break;
             }
-            let fm = eval(m);
-            if fm == 0.0 {
-                (a, b) = (m, m);
-                break;
-            }
-            if (fm > 0.0) == rising {
-                b = m;
+            if (fx > 0.0) == rising {
+                b = x;
             } else {
-                a = m;
+                a = x;
             }
+            let close = 4.0 * f64::EPSILON * a.abs().max(b.abs()) + f64::MIN_POSITIVE;
+            if b - a <= close {
+                break;
+            }
+            let d = deval(x);
+            let step = if d != 0.0 { x - fx / d } else { f64::NAN };
+            x = if step > a && step < b && (b - a) <= 0.5 * width {
+                step
+            } else {
+                0.5 * (a + b)
+            };
+            if !(x > a && x < b) {
+                break;
+            }
+            width = b - a;
         }
         out.push(0.5 * (a + b));
     }

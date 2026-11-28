@@ -175,7 +175,22 @@ pub struct SplitResult {
 pub fn split_face(surf: &Surface, flip: bool, boundary: &[Vec<Arc>], cuts: &[Arc]) -> SplitResult {
     let (boundary, cuts) = one_chart(surf, boundary, cuts);
     let (boundary, cuts) = (&boundary[..], &cuts[..]);
-    let (mu, mv) = surf.metric();
+    let (mut mu, mv) = surf.metric();
+    // A cone through its apex has no radius at its frame's origin, its metric's (a millimetre's
+    // thousandth, whatever the cone's size) next to nothing: measured by the widest the face
+    // runs round instead, so that the ends at its apex at different turns stay apart as the
+    // face's size has them.
+    if let Surface::Cone { r, a, .. } = surf
+        && r.abs() < 1e-3
+    {
+        let widest = boundary
+            .iter()
+            .flatten()
+            .flat_map(|arc| [0.0, 0.5, 1.0].map(|t| arc.uv_at(t).y))
+            .map(|v| (r + v * a.sin()).abs())
+            .fold(0.0, f64::max);
+        mu = mu.max(widest);
+    }
     let sgn = if flip { -1.0 } else { 1.0 };
     // Oriented, scaled uv (material on the left for every loop).
     let o = |p: P2| P2::new(p.x * mu, p.y * mv * sgn);

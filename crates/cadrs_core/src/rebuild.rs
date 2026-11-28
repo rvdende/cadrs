@@ -332,7 +332,17 @@ impl Rebuilder {
         state: &Arc<State>,
     ) -> Output {
         self.skipped_meshes.borrow_mut().clear();
+        let t0 = web_time::Instant::now();
         let mut o = self.compute(before, f, state);
+        // (`CADRS_FEATURE_TIMES=1`: each feature's name and how long it took to build.)
+        if std::env::var_os("CADRS_FEATURE_TIMES").is_some() {
+            eprintln!(
+                "[feature] {:>9.1?}  {} ({:?})",
+                t0.elapsed(),
+                f.name,
+                std::mem::discriminant(&f.kind)
+            );
+        }
         let skipped = std::mem::take(&mut *self.skipped_meshes.borrow_mut());
         if !skipped.is_empty() {
             let (one, names) = (skipped.len() == 1, skipped.join(", "));

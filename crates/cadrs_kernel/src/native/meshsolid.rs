@@ -300,6 +300,9 @@ pub fn mesh_solid(triangles: &[[P3; 3]], tol: f64) -> Result<Body, String> {
             Body::reverse_face(f);
         }
     }
+    // A planar region's corners lie within `tol` of its plane, not on it (a file's coplanar
+    // triangles, written to 6 digits): the edges' and vertices' tolerances hold those gaps.
+    body.fit_tolerances_searched(tol);
     Ok(body)
 }
 

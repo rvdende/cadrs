@@ -26,6 +26,7 @@ use std::collections::BinaryHeap;
 use nalgebra::{DMatrix, DVector};
 
 use super::curve::Curve;
+use super::distance_mesh::{Bit, Tree, bit_distance};
 use super::math::*;
 use super::surface::Surface;
 use super::tol;
@@ -660,6 +661,312 @@ pub fn extremum(a: &[Piece], b: &[Piece], sense: Sense) -> Option<Extremum> {
     best
 }
 
+/// Seeds of the exact search kept per pair of entities, spread apart (a pair can have several
+/// minima; two large parallel faces bring many pieces all equally near).
+const SEEDS_PER_PAIR: usize = 32;
+
+/// A seed of the exact search: the mesh pieces' nearest points and their parameters.
+type Seed = (P3, P3, X, X);
+
+/// One side's mesh pieces, each with the index of the exact piece it lies on, and their tree.
+/// A body's mesh for the distance search ([`super::tess::mesh_body`]), kept by what it is made
+/// of (each face's surface, sense and loops' p-curves over their ranges, each edge's curve
+/// over its range) and the deflection: a query asked both ways round, or of a body in several
+/// queries, meshes it once (each query turns the bodies into a frame of their own, a new copy).
+fn mesh_kept(
+    b: &Body,
+    defl: f64,
+) -> std::sync::Arc<(Vec<super::tess::FaceMesh>, super::tess::EdgeSamples)> {
+    type Mesh = std::sync::Arc<(Vec<super::tess::FaceMesh>, super::tess::EdgeSamples)>;
+    const KEPT: usize = 32;
+    #[derive(Default)]
+    struct Kept {
+        new: rustc_hash::FxHashMap<u128, Mesh>,
+        old: rustc_hash::FxHashMap<u128, Mesh>,
+    }
+    static KEPT_MESHES: std::sync::LazyLock<std::sync::Mutex<Kept>> =
+        std::sync::LazyLock::new(|| {
+            // (Emptied by [`crate::native::clear_caches`].)
+            super::par::kept_cache(|| {
+                *KEPT_MESHES.lock().unwrap_or_else(|e| e.into_inner()) = Default::default();
+            });
+            Default::default()
+        });
+    let mut h = super::fingerprint::Key128::new();
+    h.f64s(&[defl, b.faces.len() as f64, b.edges.len() as f64]);
+    for f in &b.faces {
+        h.surface(&f.surf);
+        h.f64s(&[if f.sense { 1.0 } else { -1.0 }, f.loops.len() as f64]);
+        for c in f.loops.iter().flatten() {
+            let e = &b.edges[c.edge];
+            h.curve(&c.pc);
+            h.f64s(&[
+                c.edge as f64,
+                if c.fwd { 1.0 } else { -1.0 },
+                e.t[0],
+                e.t[1],
+            ]);
+        }
+    }
+    for e in &b.edges {
+        h.curve(&e.curve);
+        h.f64s(&[e.t[0], e.t[1], e.v[0] as f64, e.v[1] as f64]);
+    }
+    let key = h.key();
+    {
+        let mut k = KEPT_MESHES.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(m) = k.new.get(&key).cloned() {
+            return m;
+        }
+        if let Some(m) = k.old.remove(&key) {
+            k.new.insert(key, m.clone());
+            return m;
+        }
+    }
+    let m: Mesh = std::sync::Arc::new(super::tess::mesh_body(b, defl, 0.5));
+    let mut k = KEPT_MESHES.lock().unwrap_or_else(|e| e.into_inner());
+    if k.new.len() >= KEPT {
+        let new = std::mem::take(&mut k.new);
+        super::par::discard(std::mem::replace(&mut k.old, new));
+    }
+    k.new.insert(key, m.clone());
+    m
+}
+
+struct MeshSide {
+    bits: Vec<(usize, Bit)>,
+    tree: Tree,
+    defl: f64,
+}
+
+impl MeshSide {
+    /// The pieces' mesh: a face's triangles, an edge's segments, the points.
+    fn new(pieces: &[Piece], body: Option<&Body>) -> MeshSide {
+        let defl = body.map_or(0.0, |b| (4e-3 * b.bbox().diagonal()).max(10.0 * tol::POINT));
+        let meshed = body
+            .filter(|_| pieces.iter().any(|p| !matches!(p, Piece::Point { .. })))
+            .map(|b| mesh_kept(b, defl));
+        let mut bits = Vec::new();
+        for (i, p) in pieces.iter().enumerate() {
+            match p {
+                Piece::Point { p, .. } => bits.push((i, Bit::Pt(*p))),
+                Piece::Curve { edge, .. } => {
+                    if let Some((_, es)) = meshed.as_deref()
+                        && let Some((ts, ps)) = es.get(*edge)
+                    {
+                        for k in 1..ts.len().min(ps.len()) {
+                            bits.push((i, Bit::Seg([ps[k - 1], ps[k]], [ts[k - 1], ts[k]])));
+                        }
+                    }
+                }
+                Piece::Face { face, .. } => {
+                    if let Some((fm, _)) = meshed.as_deref()
+                        && let Some(m) = fm.get(*face)
+                    {
+                        for t in &m.indices {
+                            let [x, y, z] = t.map(|i| i as usize);
+                            bits.push((
+                                i,
+                                Bit::Tri(
+                                    [m.positions[x], m.positions[y], m.positions[z]],
+                                    [m.uvs[x], m.uvs[y], m.uvs[z]],
+                                ),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        let tree = Tree::new(bits.iter().map(|(_, b)| b.bbox()).collect());
+        MeshSide { bits, tree, defl }
+    }
+}
+
+/// The parameters on piece `p` of the point nearest `q`, a point of its mesh piece `bit`: the
+/// mesh's own parameters as the hint (a cone's apex row has no one u).
+fn seed_at(p: &Piece, bit: &Bit, q: &P3) -> X {
+    let hint = bit.param(q);
+    match p {
+        Piece::Point { .. } => hint,
+        Piece::Curve { c, t, .. } => [c.closest(q, t.0.min(t.1), t.0.max(t.1)), 0.0],
+        Piece::Face { dom, .. } => {
+            let (u, v) = dom.surf.project(q, Some((hint[0], hint[1])));
+            if !(u.is_finite() && v.is_finite()) {
+                return hint;
+            }
+            // Into the face's range a period at a time (a projection gives (−π, π]).
+            let into = |x: f64, (lo, hi): (f64, f64), periodic: bool| {
+                let p = std::f64::consts::TAU;
+                if !periodic || hi - lo > p + 1e-9 {
+                    return x;
+                }
+                let mut x = x;
+                while x < lo - 1e-12 {
+                    x += p;
+                }
+                while x > hi + 1e-12 {
+                    x -= p;
+                }
+                x
+            };
+            [
+                into(u, dom.ub, dom.surf.u_periodic()),
+                into(v, dom.vb, dom.surf.v_periodic()),
+            ]
+        }
+    }
+}
+
+/// A seed and, where it lies on a closed face's seam (a full period's range, which the search
+/// keeps it in), the same point at the range's other end: the minimum may lie past either.
+fn seam_twins(p: &Piece, x: X) -> [Option<X>; 4] {
+    let mut out = [Some(x), None, None, None];
+    if let Piece::Face { dom, .. } = p {
+        let tau = std::f64::consts::TAU;
+        let twin = |x: f64, (lo, hi): (f64, f64), periodic: bool| -> Option<f64> {
+            if !periodic || ((hi - lo) - tau).abs() > 1e-9 {
+                None
+            } else if (x - lo).abs() <= 1e-9 {
+                Some(hi)
+            } else if (x - hi).abs() <= 1e-9 {
+                Some(lo)
+            } else {
+                None
+            }
+        };
+        let tu = twin(x[0], dom.ub, dom.surf.u_periodic());
+        let tv = twin(x[1], dom.vb, dom.surf.v_periodic());
+        if let Some(u) = tu {
+            out[1] = Some([u, x[1]]);
+        }
+        if let Some(v) = tv {
+            out[2] = Some([x[0], v]);
+        }
+        if let (Some(u), Some(v)) = (tu, tv) {
+            out[3] = Some([u, v]);
+        }
+    }
+    out
+}
+
+/// How near two sides polished from where their meshes cross must come for them to meet
+/// ([`seeded_min`]).
+const MET: f64 = tol::POINT * 1e-3;
+
+/// The least distance from the pieces' meshes (springrep's method): the nearest pair of mesh
+/// pieces gives it to within the meshes' deflections, and every pair that near seeds the exact
+/// search ([`polish`]) between the entities they lie on; a result counts only where both its
+/// points lie on their entities. The true minimum lies in the basin of one of those seeds.
+/// None where a side has no mesh or no seed polishes to a point of both.
+fn seeded_min(a: &[Piece], ba: Option<&Body>, b: &[Piece], bb: Option<&Body>) -> Option<Extremum> {
+    let (ma, mb) = (MeshSide::new(a, ba), MeshSide::new(b, bb));
+    // Every piece must be meshed for the meshes to stand for the sides.
+    let covered = |pieces: &[Piece], m: &MeshSide| {
+        let mut seen = vec![false; pieces.len()];
+        for (i, _) in &m.bits {
+            seen[*i] = true;
+        }
+        pieces
+            .iter()
+            .zip(&seen)
+            .all(|(p, s)| *s || matches!(p, Piece::Face { dom, .. } if dom.is_empty()))
+    };
+    if ma.bits.is_empty() || mb.bits.is_empty() || !covered(a, &ma) || !covered(b, &mb) {
+        return None;
+    }
+    let mut at = (0, 0, f64::INFINITY);
+    let best = ma.tree.least(&mb.tree, |i, j| {
+        let d = bit_distance(&ma.bits[i].1, &mb.bits[j].1).0;
+        if d < at.2 {
+            at = (i, j, d);
+        }
+        d
+    });
+    if !best.is_finite() {
+        return None;
+    }
+    // The meshes cross (the sides most likely do too, where they cross: the search stopped at
+    // the first crossing): polished from there first, the sides meeting is the answer, and the
+    // pairs near the whole crossing need not be gathered.
+    if best == 0.0 {
+        let (i, j, _) = at;
+        let ((ia, bit_a), (ib, bit_b)) = (&ma.bits[i], &mb.bits[j]);
+        let (_, p, q) = bit_distance(bit_a, bit_b);
+        let (xa, xb) = (seed_at(&a[*ia], bit_a, &p), seed_at(&b[*ib], bit_b, &q));
+        if let Some((d, xa, xb)) = polish(&a[*ia], xa, &b[*ib], xb, Sense::Min)
+            && d <= MET
+        {
+            return Some(Extremum {
+                distance: d,
+                a: jet(&a[*ia], &xa).p,
+                b: jet(&b[*ib], &xb).p,
+                wa: where_of(&a[*ia], &xa),
+                wb: where_of(&b[*ib], &xb),
+            });
+        }
+    }
+    let margin = 2.0 * (ma.defl + mb.defl) + tol::POINT;
+    let reach = best + margin;
+    let spread = 4.0 * (ma.defl + mb.defl);
+    let mut near: Vec<(f64, usize, usize, P3, P3)> = Vec::new();
+    let mut hits = Vec::new();
+    for (i, (_, x)) in ma.bits.iter().enumerate() {
+        mb.tree.within(&ma.tree.boxes[i], reach, &mut hits);
+        for &j in &hits {
+            let (d, p, q) = bit_distance(x, &mb.bits[j].1);
+            if d <= reach {
+                near.push((d, i, j, p, q));
+            }
+        }
+    }
+    near.sort_by(|x, y| x.0.total_cmp(&y.0));
+    let mut seeds: std::collections::BTreeMap<(usize, usize), Vec<Seed>> = Default::default();
+    for (_, i, j, p, q) in near {
+        let ((ia, bit_a), (ib, bit_b)) = (&ma.bits[i], &mb.bits[j]);
+        let kept = seeds.entry((*ia, *ib)).or_default();
+        if kept.len() >= SEEDS_PER_PAIR {
+            continue;
+        }
+        let (xa, xb) = (seed_at(&a[*ia], bit_a, &p), seed_at(&b[*ib], bit_b, &q));
+        // (Near in space and in parameters: either side of a seam is another start.)
+        let close = |x: &X, y: &X| (x[0] - y[0]).abs() + (x[1] - y[1]).abs() <= 0.1;
+        if !kept.iter().any(|(p0, q0, xa0, xb0)| {
+            (p0 - p).norm() <= spread
+                && (q0 - q).norm() <= spread
+                && close(xa0, &xa)
+                && close(xb0, &xb)
+        }) {
+            kept.push((p, q, xa, xb));
+        }
+    }
+    let mut out: Option<Extremum> = None;
+    for ((ia, ib), list) in &seeds {
+        let starts = list.iter().flat_map(|&(_, _, xa, xb)| {
+            let (va, vb) = (seam_twins(&a[*ia], xa), seam_twins(&b[*ib], xb));
+            va.into_iter()
+                .flatten()
+                .flat_map(move |x| vb.into_iter().flatten().map(move |y| (x, y)))
+        });
+        for (xa, xb) in starts {
+            if out.as_ref().is_some_and(|e| e.distance == 0.0) {
+                return out;
+            }
+            if let Some((d, xa, xb)) = polish(&a[*ia], xa, &b[*ib], xb, Sense::Min)
+                && out.as_ref().is_none_or(|e| d < e.distance)
+            {
+                out = Some(Extremum {
+                    distance: d,
+                    a: jet(&a[*ia], &xa).p,
+                    b: jet(&b[*ib], &xb).p,
+                    wa: where_of(&a[*ia], &xa),
+                    wb: where_of(&b[*ib], &xb),
+                });
+            }
+        }
+    }
+    out
+}
+
 /// [`crate::Kernel::min_distance`] and [`crate::Kernel::max_distance`] for the native kernel.
 pub fn kernel_distance(
     k: &super::NativeKernel,
@@ -677,7 +984,27 @@ pub fn kernel_distance(
         return Ok(r);
     }
     if sense == Sense::Min
+        && let Some(r) = point_line_or_circle(k, a, b)
+    {
+        return Ok(r);
+    }
+    if sense == Sense::Min
+        && let Some(r) = two_spheres(k, a, b)
+    {
+        return Ok(r);
+    }
+    if sense == Sense::Min
+        && let Some(r) = ball_against(k, a, b)?
+    {
+        return Ok(r);
+    }
+    if sense == Sense::Min
         && let Some(r) = held(k, a, b)?
+    {
+        return Ok(r);
+    }
+    if sense == Sense::Min
+        && let Some(r) = held_between_cores(k, a, b)?
     {
         return Ok(r);
     }
@@ -686,6 +1013,31 @@ pub fn kernel_distance(
     {
         return Ok(r);
     }
+    // The search bounds pairs of cells by their axis-aligned boxes, tight for geometry along
+    // the axes and loose for the same turned (a box round a tilted disc is far larger than the
+    // disc): it is done in the frame of the first side's first analytic surface, as the model
+    // was likely drawn, and its points turned back. (Distance and surface parameters are the
+    // same in any frame; the faces' polygons too.)
+    let turn = canonical_turn(k, a, b);
+    let mut turned: Vec<(crate::BodyId, Body)> = Vec::new();
+    if let Some(r) = &turn {
+        for t in [a, b] {
+            if let DistanceTarget::Edge(id, _)
+            | DistanceTarget::Face(id, _)
+            | DistanceTarget::Body(id)
+            | DistanceTarget::Solid(id) = *t
+                && !turned.iter().any(|(i, _)| *i == id)
+            {
+                turned.push((id, k.entry(id)?.body.transformed(r)));
+            }
+        }
+    }
+    let body_of = |id: crate::BodyId| -> crate::Result<&Body> {
+        Ok(match turned.iter().find(|(i, _)| *i == id) {
+            Some((_, b)) => b,
+            None => &k.entry(id)?.body,
+        })
+    };
     let side = |t: &DistanceTarget| -> crate::Result<Side<'_>> {
         Ok(match *t {
             DistanceTarget::Point(p) => {
@@ -694,10 +1046,11 @@ pub fn kernel_distance(
                         "a point that isn't finite".into(),
                     ));
                 }
+                let p = turn.as_ref().map_or(p, |r| r.point(&p));
                 (point_pieces(p), None)
             }
             DistanceTarget::Edge(id, e) => {
-                let b = &k.entry(id)?.body;
+                let b = body_of(id)?;
                 let ei = e.0 as usize;
                 if ei >= b.edges.len() {
                     return Err(KernelError::InvalidParameter(format!(
@@ -716,17 +1069,26 @@ pub fn kernel_distance(
                         f.0
                     )));
                 }
-                (face_pieces(&en.body, fi, &en.polys()[fi]), Some(&*en.body))
+                let b = body_of(id)?;
+                (face_pieces(b, fi, &en.polys()[fi]), Some(b))
             }
             DistanceTarget::Body(id) | DistanceTarget::Solid(id) => {
                 let en = k.entry(id)?;
-                (body_pieces(&en.body, en.polys()), Some(&*en.body))
+                let b = body_of(id)?;
+                (body_pieces(b, en.polys()), Some(b))
             }
         })
     };
     let (pa, ba) = side(a)?;
     let (pb, bb) = side(b)?;
-    let Some(x) = extremum(&pa, &pb, sense) else {
+    // (Between two shapes. A point's search is quick as it is, and the mesh would cost more
+    // than the answer: a point picking a face or an edge is asked again and again.)
+    let seeded = if sense == Sense::Min && ba.is_some() && bb.is_some() {
+        seeded_min(&pa, ba, &pb, bb)
+    } else {
+        None
+    };
+    let Some(x) = seeded.or_else(|| extremum(&pa, &pb, sense)) else {
         return Err(KernelError::EmptyResult(
             "nothing to measure from: no faces, edges or vertices".into(),
         ));
@@ -744,14 +1106,321 @@ pub fn kernel_distance(
             Where::Face(f, u, v) => DistanceLocation::Face(crate::FaceId(f as u64), u, v),
         }
     };
+    let back = |p: P3| match &turn {
+        Some(r) => P3::from(r.m.transpose() * p.coords),
+        None => p,
+    };
     Ok(crate::DistanceResult {
         distance: x.distance,
-        a: x.a,
-        b: x.b,
+        a: back(x.a),
+        b: back(x.b),
         a_at: loc(x.wa, ba),
         b_at: loc(x.wb, bb),
     })
 }
+
+/// [`kernel_distance`]'s frame to measure in: a rotation taking the first analytic surface's
+/// frame (of side a, else b) to the axes; None when that frame is along the axes already.
+fn canonical_turn(
+    k: &super::NativeKernel,
+    a: &crate::DistanceTarget,
+    b: &crate::DistanceTarget,
+) -> Option<Affine> {
+    use crate::DistanceTarget;
+    let f = [a, b].into_iter().find_map(|t| {
+        let (id, only) = match *t {
+            DistanceTarget::Face(id, f) => (id, Some(f.0 as usize)),
+            DistanceTarget::Edge(id, _) | DistanceTarget::Body(id) | DistanceTarget::Solid(id) => {
+                (id, None)
+            }
+            DistanceTarget::Point(_) => return None,
+        };
+        let body = &k.entry(id).ok()?.body;
+        let faces = &body.faces;
+        match only {
+            Some(fi) => faces.get(fi).and_then(|f| f.surf.frame().copied()),
+            None => faces.iter().find_map(|f| f.surf.frame().copied()),
+        }
+    })?;
+    let aligned = |v: &V3| v.amax() > 1.0 - 1e-12;
+    if aligned(&f.x) && aligned(&f.y) && aligned(&f.z) {
+        return None;
+    }
+    Some(Affine {
+        m: nalgebra::Matrix3::from_rows(&[f.x.transpose(), f.y.transpose(), f.z.transpose()]),
+        t: V3::zeros(),
+    })
+}
+
+/// The nearest points of a whole ball (a [`crate::DistanceTarget::Solid`] of one closed face on a
+/// sphere) and anything else, from its centre's: the ball is every point within `r` of its centre
+/// `c`, so its distance from a target is `max(0, d(c) − r)`, the nearest point of the target to `c`
+/// the target's side of it, and on the ball the point `r` from `c` toward that (or the target's
+/// own point where it lies in the ball). None where neither side is such a ball.
+fn ball_against(
+    k: &super::NativeKernel,
+    a: &crate::DistanceTarget,
+    b: &crate::DistanceTarget,
+) -> crate::Result<Option<crate::DistanceResult>> {
+    use crate::{DistanceLocation, DistanceTarget};
+    let ball = |t: &DistanceTarget| -> Option<(P3, f64, std::sync::Arc<Body>)> {
+        let DistanceTarget::Solid(id) = *t else {
+            return None;
+        };
+        let body = k.entry(id).ok()?.body.clone();
+        let face = body.faces.first()?;
+        let Surface::Sphere { f, r } = &face.surf else {
+            return None;
+        };
+        // (Its face facing out: a ball, not the space round a hollow.)
+        let whole = body.faces.len() == 1
+            && body.solids.len() == 1
+            && body.shells.len() == 1
+            && body.shells[0].closed
+            && super::classify::outward_sign(face) == Some(1.0);
+        whole.then_some((f.o, *r, body))
+    };
+    let (ball_is_a, (c, r, body), other) = if let Some(x) = ball(a) {
+        (true, x, b)
+    } else if let Some(x) = ball(b) {
+        (false, x, a)
+    } else {
+        return Ok(None);
+    };
+    // (Two balls: their own closed form.)
+    if ball(other).is_some() {
+        return Ok(None);
+    }
+    let near = kernel_distance(k, &DistanceTarget::Point(c), other, Sense::Min)?;
+    let q = near.b;
+    let (dist, on_ball, at_ball) = if near.distance >= r {
+        let p = c + (q - c) * (r / near.distance);
+        let (u, v) = body.faces[0].surf.project(&p, None);
+        (
+            near.distance - r,
+            p,
+            DistanceLocation::Face(crate::FaceId(0), u, v),
+        )
+    } else {
+        // The target's nearest point lies in the ball: the two share it.
+        (0.0, q, DistanceLocation::Point)
+    };
+    let (qa, la, qb, lb) = if ball_is_a {
+        (on_ball, at_ball, q, near.b_at)
+    } else {
+        (q, near.b_at, on_ball, at_ball)
+    };
+    Ok(Some(crate::DistanceResult {
+        distance: dist,
+        a: qa,
+        b: qb,
+        a_at: la,
+        b_at: lb,
+    }))
+}
+
+/// The nearest points of two whole spheres (bodies of one closed face on a sphere, each the
+/// target as its boundary or as its solid), in closed form along the line of their centres: apart,
+/// their gap; crossing, 0 on the circle where they meet; one inside the other, the gap between
+/// the shells, or 0 where the outer one is a solid. None for any other pair.
+fn two_spheres(
+    k: &super::NativeKernel,
+    a: &crate::DistanceTarget,
+    b: &crate::DistanceTarget,
+) -> Option<crate::DistanceResult> {
+    use crate::{DistanceLocation, DistanceTarget};
+    let sphere = |t: &DistanceTarget| -> Option<(P3, f64, bool, std::sync::Arc<Body>)> {
+        let (id, solid) = match *t {
+            DistanceTarget::Body(id) => (id, false),
+            DistanceTarget::Solid(id) => (id, true),
+            _ => return None,
+        };
+        let body = k.entry(id).ok()?.body.clone();
+        let Surface::Sphere { f, r } = &body.faces.first()?.surf else {
+            return None;
+        };
+        let whole = body.faces.len() == 1
+            && body.solids.len() == 1
+            && body.shells.len() == 1
+            && body.shells[0].closed;
+        whole.then_some((f.o, *r, solid, body))
+    };
+    let (c1, r1, s1, b1) = sphere(a)?;
+    let (c2, r2, s2, b2) = sphere(b)?;
+    let w = c2 - c1;
+    let d = w.norm();
+    let dir = w.try_normalize(0.0).unwrap_or_else(V3::x);
+    let on = |b: &Body, q: P3| {
+        let (u, v) = b.faces[0].surf.project(&q, None);
+        DistanceLocation::Face(crate::FaceId(0), u, v)
+    };
+    let result = |dist: f64, qa: P3, qb: P3, la: DistanceLocation, lb: DistanceLocation| {
+        crate::DistanceResult {
+            distance: dist.max(0.0),
+            a: qa,
+            b: qb,
+            a_at: la,
+            b_at: lb,
+        }
+    };
+    if d >= r1 + r2 {
+        // Apart.
+        let (qa, qb) = (c1 + dir * r1, c2 - dir * r2);
+        return Some(result(d - r1 - r2, qa, qb, on(&b1, qa), on(&b2, qb)));
+    }
+    if d >= (r1 - r2).abs() && d > 0.0 {
+        // Crossing: a point of the circle where the shells meet (each solid holds it too).
+        let x = (d * d + r1 * r1 - r2 * r2) / (2.0 * d);
+        let h = (r1 * r1 - x * x).max(0.0).sqrt();
+        let q = c1 + dir * x + any_perpendicular(&dir).normalize() * h;
+        return Some(result(0.0, q, q, on(&b1, q), on(&b2, q)));
+    }
+    // One inside the other: the inner's shell against the outer's.
+    let (outer_is_a, (ro, so), (ri, ci)) = if r1 >= r2 {
+        (true, (r1, s1), (r2, c2))
+    } else {
+        (false, (r2, s2), (r1, c1))
+    };
+    let co = if outer_is_a { c1 } else { c2 };
+    let out = (ci - co).try_normalize(0.0).unwrap_or_else(V3::x);
+    if so {
+        // The outer one's solid holds the inner one: 0 at a point of the inner.
+        let q = ci + out * ri;
+        let at = DistanceLocation::Point;
+        let (la, lb) = if outer_is_a {
+            (at, on(&b2, q))
+        } else {
+            (on(&b1, q), at)
+        };
+        return Some(result(0.0, q, q, la, lb));
+    }
+    let (qi, qo) = (ci + out * ri, co + out * ro);
+    let gap = ro - (ci - co).norm() - ri;
+    Some(if outer_is_a {
+        result(gap, qo, qi, on(&b1, qo), on(&b2, qi))
+    } else {
+        result(gap, qi, qo, on(&b1, qi), on(&b2, qo))
+    })
+}
+
+/// The core of a face bulging out round a centre or an axis (a sphere's centre, a cylinder's
+/// axis), its radius: what [`held_between_cores`] probes between.
+fn round_core(f: &super::topo::Face) -> Option<(P3, Option<V3>, f64)> {
+    if super::classify::outward_sign(f) != Some(1.0) {
+        return None;
+    }
+    match &f.surf {
+        Surface::Sphere { f: fr, r } => Some((fr.o, None, *r)),
+        Surface::Cylinder { f: fr, r } => Some((fr.o, Some(fr.z), *r)),
+        _ => None,
+    }
+}
+
+/// How many pairs of round faces [`held_between_cores`] tries.
+const CORE_PAIRS: usize = 16;
+
+/// [`kernel_distance`]'s answer where two solids share a point between their round faces: two
+/// cylinders (or a sphere and a cylinder, two spheres) overlapping by a hair hold none of each
+/// other's vertices, but where their round faces overlap, the point on the shortest segment
+/// between their cores (centres, axes) at `(r₁ + D − r₂) / 2` from the first, `D` the segment's
+/// length, lies in both rounds. It is asked of both solids: distance 0 where both hold it.
+fn held_between_cores(
+    k: &super::NativeKernel,
+    a: &crate::DistanceTarget,
+    b: &crate::DistanceTarget,
+) -> crate::Result<Option<crate::DistanceResult>> {
+    use crate::{DistanceLocation, DistanceTarget, Kernel, PointClass};
+    let (DistanceTarget::Solid(ia), DistanceTarget::Solid(ib)) = (*a, *b) else {
+        return Ok(None);
+    };
+    let (ea, eb) = (k.entry(ia)?, k.entry(ib)?);
+    let cores = |b: &Body| -> Vec<(P3, Option<V3>, f64)> {
+        b.faces.iter().filter_map(round_core).collect()
+    };
+    let (ca, cb) = (cores(&ea.body), cores(&eb.body));
+    if ca.is_empty() || cb.is_empty() || ca.len() * cb.len() > CORE_PAIRS {
+        return Ok(None);
+    }
+    let (bba, bbb) = (ea.body.bbox(), eb.body.bbox());
+    // The nearest points of two cores, each a point or a line.
+    let nearest = |(p, u): (P3, Option<V3>), (q, v): (P3, Option<V3>)| -> (P3, P3) {
+        match (u, v) {
+            (None, None) => (p, q),
+            (Some(u), None) => (p + u * (q - p).dot(&u) / u.norm_squared(), q),
+            (None, Some(v)) => (p, q + v * (p - q).dot(&v) / v.norm_squared()),
+            (Some(u), Some(v)) => {
+                let w = p - q;
+                let (aa, bb, cc, dd, ee) = (u.dot(&u), u.dot(&v), v.dot(&v), u.dot(&w), v.dot(&w));
+                let den = aa * cc - bb * bb;
+                if den <= 1e-12 * aa * cc {
+                    // Parallel: any foot of one on the other; the middle of where both boxes
+                    // reach along them is asked below.
+                    (p, q + v * (p - q).dot(&v) / cc)
+                } else {
+                    let s = (bb * ee - cc * dd) / den;
+                    let t = (aa * ee - bb * dd) / den;
+                    (p + u * s, q + v * t)
+                }
+            }
+        }
+    };
+    let mut tried = Vec::new();
+    for &(pa, ua, ra) in &ca {
+        for &(pb, ub, rb) in &cb {
+            let (mut x, mut y) = nearest((pa, ua), (pb, ub));
+            // Parallel axes: their nearest points taken at the middle of the span the two
+            // boxes share along them.
+            if let (Some(u), Some(v)) = (ua, ub)
+                && u.normalize().cross(&v.normalize()).norm() <= 1e-9
+            {
+                let u = u.normalize();
+                let span = |bb: &super::math::Bbox| {
+                    // (The box's reach along u: its centre's place, give or take its half
+                    // extents' projections.)
+                    let c = (bb.min.coords + bb.max.coords) * 0.5;
+                    let h = (bb.max - bb.min) * 0.5;
+                    let t = (P3::from(c) - pa).dot(&u);
+                    let w = h.x * u.x.abs() + h.y * u.y.abs() + h.z * u.z.abs();
+                    (t - w, t + w)
+                };
+                let ((a0, a1), (b0, b1)) = (span(&bba), span(&bbb));
+                let (lo, hi) = (a0.max(b0), a1.min(b1));
+                if lo > hi {
+                    continue;
+                }
+                let m = 0.5 * (lo + hi);
+                x = pa + u * m;
+                y = x + (pb - x) - u * (pb - x).dot(&u);
+            }
+            let d = (y - x).norm();
+            if d >= ra + rb || d <= 0.0 {
+                continue;
+            }
+            let p = x + (y - x) * ((ra + d - rb) / (2.0 * d));
+            if bba.contains(&p) && bbb.contains(&p) {
+                tried.push(p);
+            }
+        }
+    }
+    for p in tried {
+        if k.classify(ia, p, super::tol::POINT)? == PointClass::Inside
+            && k.classify(ib, p, super::tol::POINT)? == PointClass::Inside
+        {
+            let at = DistanceLocation::Point;
+            return Ok(Some(crate::DistanceResult {
+                distance: 0.0,
+                a: p,
+                b: p,
+                a_at: at,
+                b_at: at,
+            }));
+        }
+    }
+    Ok(None)
+}
+
+/// How many of a body's vertices and edge middles [`held`] asks a solid about.
+const HELD_TRIES: usize = 16;
 
 /// [`kernel_distance`]'s answer where a [`crate::DistanceTarget::Solid`] holds a point of the
 /// other side inside it: distance 0 there. Where neither holds the other, the two are apart or
@@ -786,8 +1455,9 @@ fn held(
             DistanceTarget::Face(id, f) => face_point(id, f.0 as usize)?.into_iter().collect(),
             DistanceTarget::Body(id) | DistanceTarget::Solid(id) => {
                 let en = k.entry(id)?;
+                let b = &en.body;
                 let mut out = Vec::new();
-                for sh in &en.body.shells {
+                for sh in &b.shells {
                     if let Some(p) = sh
                         .faces
                         .iter()
@@ -796,6 +1466,24 @@ fn held(
                         out.push(p);
                     }
                 }
+                // Then its vertices and the middles of its edges, a few spread over them: solids
+                // sharing a fair part of their volume hold some of each other's (as springrep's
+                // distance asks first), and they cost nothing to find, where a face's point
+                // inside it is a polygon scan.
+                let corners: Vec<P3> = b
+                    .verts
+                    .iter()
+                    .map(|v| v.p)
+                    .chain(
+                        b.edges
+                            .iter()
+                            .filter(|e| !e.degenerate)
+                            .map(|e| e.curve.point(0.5 * (e.t[0] + e.t[1]))),
+                    )
+                    .collect();
+                let n = corners.len();
+                let tries = n.min(HELD_TRIES);
+                out.extend((0..tries).map(|i| corners[i * n / tries]));
                 out
             }
         })
@@ -825,11 +1513,78 @@ fn held(
 }
 
 /// [`kernel_distance`]'s nearest of a point and a body's (or one face's) boundary where every
-/// face involved is a plane, a sphere or a cylinder and every edge a line or a circle: on those
+/// face involved is a plane, a sphere, a cylinder, a ring torus or a cone (off their axes) and
+/// every edge a line or a circle: on those
 /// surfaces the point's distance has one minimum, the foot of its perpendicular, so the nearest
 /// point of a face is that foot when it lies inside the face's loops and on its edges otherwise,
 /// all in closed form. None where any of that does not hold, or a foot lies too near its face's
 /// loops to tell (the general measure then).
+/// The nearest point to a point of an edge on a line or a circle, in closed form: the
+/// curve's nearest parameter in the edge's range, or an end where that is nearer (the adapter
+/// of a test suite asks this of every edge for every point it picks an edge by). None for any
+/// other pair.
+fn point_line_or_circle(
+    k: &super::NativeKernel,
+    a: &crate::DistanceTarget,
+    b: &crate::DistanceTarget,
+) -> Option<crate::DistanceResult> {
+    use crate::{DistanceLocation, DistanceTarget};
+    let (p, id, edge, point_first) = match (*a, *b) {
+        (DistanceTarget::Point(p), DistanceTarget::Edge(id, e)) => (p, id, e, true),
+        (DistanceTarget::Edge(id, e), DistanceTarget::Point(p)) => (p, id, e, false),
+        _ => return None,
+    };
+    if !p.iter().all(|x| x.is_finite()) {
+        return None;
+    }
+    let body = &k.entry(id).ok()?.body;
+    let ei = edge.0 as usize;
+    let e = body.edges.get(ei)?;
+    if e.degenerate || !matches!(e.curve, Curve::Line { .. } | Curve::Circle { .. }) {
+        return None;
+    }
+    let t = e.curve.closest(&p, e.t[0], e.t[1]);
+    let q = e.curve.point(t);
+    let (v0, v1) = (body.verts[e.v[0]].p, body.verts[e.v[1]].p);
+    let ids = || super::kernel::vertex_ids(body);
+    let vertex = |v: usize| {
+        DistanceLocation::Vertex(crate::VertexId(
+            ids().get(v).copied().flatten().unwrap_or(v) as u64,
+        ))
+    };
+    let span = tol::REL * (e.t[1] - e.t[0]).abs();
+    let (d, at, on) = [
+        ((q - p).norm(), q, None),
+        ((v0 - p).norm(), v0, Some(e.v[0])),
+        ((v1 - p).norm(), v1, Some(e.v[1])),
+    ]
+    .into_iter()
+    .min_by(|x, y| x.0.total_cmp(&y.0))?;
+    let loc = match on {
+        Some(v) => vertex(v),
+        None if (t - e.t[0]).abs() <= span => vertex(e.v[0]),
+        None if (t - e.t[1]).abs() <= span => vertex(e.v[1]),
+        None => DistanceLocation::Edge(edge, t),
+    };
+    Some(if point_first {
+        crate::DistanceResult {
+            distance: d,
+            a: p,
+            b: at,
+            a_at: DistanceLocation::Point,
+            b_at: loc,
+        }
+    } else {
+        crate::DistanceResult {
+            distance: d,
+            a: at,
+            b: p,
+            a_at: loc,
+            b_at: DistanceLocation::Point,
+        }
+    })
+}
+
 fn analytic_nearest(
     k: &super::NativeKernel,
     a: &crate::DistanceTarget,
@@ -877,10 +1632,32 @@ fn analytic_nearest(
     let mut edges: Vec<usize> = Vec::new();
     for &fi in &faces {
         let f = &body.faces[fi];
-        if !matches!(
-            f.surf,
-            Surface::Plane { .. } | Surface::Sphere { .. } | Surface::Cylinder { .. }
-        ) {
+        // (A ring torus and a cone's face clear of its apex have one minimum of the distance
+        // too, the foot in the point's meridian half-plane, for a point off their axis: on it,
+        // a whole circle of feet, any of which the face may hold.)
+        let off_axis = |fr: &Frame| {
+            let l = fr.local(&p);
+            l.x.hypot(l.y) > tol::REL_POINT * (1.0 + p.coords.norm())
+        };
+        let apex_free = || {
+            f.loops
+                .iter()
+                .flatten()
+                .all(|c| !body.edges[c.edge].degenerate)
+        };
+        // On a torus's axis every meridian's foot is as near: one the face holds is the
+        // nearest point (else the general measure).
+        let mut any_foot = false;
+        let ok = match &f.surf {
+            Surface::Plane { .. } | Surface::Sphere { .. } | Surface::Cylinder { .. } => true,
+            Surface::Torus { f: fr, rmaj, rmin } => {
+                any_foot = !off_axis(fr);
+                rmin < rmaj
+            }
+            Surface::Cone { f: fr, .. } => off_axis(fr) && apex_free(),
+            _ => false,
+        };
+        if !ok {
             return None;
         }
         let (u, v) = f.surf.project(&p, None);
@@ -901,6 +1678,9 @@ fn analytic_nearest(
                 InFace::Outside => {}
                 _ => return None,
             }
+        }
+        if !inside && any_foot {
+            return None;
         }
         if !inside {
             for c in f.loops.iter().flatten() {

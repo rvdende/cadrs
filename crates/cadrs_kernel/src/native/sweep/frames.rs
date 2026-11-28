@@ -971,7 +971,19 @@ impl PathSweep {
                 kv = knots;
                 cols.push(cps);
             }
+            // (A helix's, not a spiral's: its screw rigid. v runs the turn from the screw's
+            // start angle.)
+            let screw = match (self.screw, self.helix) {
+                (Some((a, z)), Some(h)) if h.k == 0.0 => Some(crate::native::nurbs::ScrewSheet {
+                    o: h.o,
+                    z: h.a.normalize(),
+                    lift: h.c,
+                    rate: z - a,
+                }),
+                _ => None,
+            };
             return NurbsSurface {
+                screw,
                 du: n0.degree,
                 dv: 5,
                 ku: n0.knots.clone(),
@@ -998,6 +1010,7 @@ impl PathSweep {
             );
         }
         NurbsSurface {
+            screw: None,
             du: n0.degree,
             dv: q,
             ku: n0.knots.clone(),

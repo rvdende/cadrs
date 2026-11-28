@@ -114,6 +114,30 @@ pub struct Ssi {
     pub work: u64,
 }
 
+impl Ssi {
+    /// The intersection of the same two surfaces taken the other way round: each curve's two
+    /// p-curves swapped.
+    fn swapped(&self) -> Ssi {
+        let swap = |cs: &[IntCurve]| -> Vec<IntCurve> {
+            cs.iter()
+                .map(|c| IntCurve {
+                    pcs: c
+                        .pcs
+                        .as_ref()
+                        .map(|p| Arc::new([p[1].clone(), p[0].clone()])),
+                    ..c.clone()
+                })
+                .collect()
+        };
+        Ssi {
+            curves: swap(&self.curves),
+            tangent: swap(&self.tangent),
+            coincident: swap(&self.coincident),
+            ..self.clone()
+        }
+    }
+}
+
 /// How near two surfaces must be to coincide (within a part in 10⁹ of the problem's size,
 /// and at least [`super::tol::CONFUSION`]).
 fn coincidence_tol(bb: &Bbox) -> f64 {
@@ -183,6 +207,22 @@ pub fn surface_surface_tol(
     bb: &Bbox,
     tol: f64,
 ) -> Ssi {
+    if let Some(r) = closed_forms(a, ua, b, ub, bb, tol) {
+        return r;
+    }
+    traced(a, ua, b, ub, bb)
+}
+
+/// [`surface_surface_tol`] where the pair has a closed form (coincident surfaces' region, the
+/// extrusion and analytic pairs, a shared circle), else `None`.
+fn closed_forms(
+    a: &Surface,
+    ua: ((f64, f64), (f64, f64)),
+    b: &Surface,
+    ub: ((f64, f64), (f64, f64)),
+    bb: &Bbox,
+    tol: f64,
+) -> Option<Ssi> {
     let closed = |curves| Ssi {
         curves,
         work: 1,
@@ -190,40 +230,196 @@ pub fn surface_surface_tol(
     };
     let tc = coincidence_tol(bb);
     if coincide(a, b, tc, bb) {
-        return Ssi {
+        return Some(Ssi {
             coincident: super::ssi_coincident::region_boundary(a, ua, b, ub, tc),
             ..Ssi::default()
-        };
+        });
     }
     if let Some(r) = plane_extrusion(a, b, ub, bb) {
-        return closed(r);
+        return Some(closed(r));
     }
     if let Some(r) = plane_extrusion(b, a, ua, bb) {
-        return closed(r);
+        return Some(closed(r));
     }
     if let Some(r) = extrusion_along(a, ua, b, ub, bb) {
-        return closed(r);
+        return Some(closed(r));
     }
     if let Some(r) = extrusion_along(b, ub, a, ua, bb) {
-        return closed(r);
+        return Some(closed(r));
     }
     if let Some(r) =
         plane_nurbs_extrusion(a, b, ub, bb).or_else(|| plane_nurbs_extrusion(b, a, ua, bb))
     {
-        return r;
+        return Some(r);
     }
     if let Some(r) = ball_in_tube(a, b, tol).or_else(|| ball_in_tube(b, a, tol)) {
-        return r;
+        return Some(r);
     }
     if let Some(r) = analytic(a, b, bb, tol) {
-        return closed(r);
+        return Some(closed(r));
     }
     if let Some(r) = analytic(b, a, bb, tol) {
-        return closed(r);
+        return Some(closed(r));
     }
     if let Some(r) = shared_circle(a, ua, b, bb).or_else(|| shared_circle(b, ub, a, bb)) {
-        return closed(r);
+        return Some(closed(r));
     }
+    if let Some(r) = screw_cylinder(a, b, bb) {
+        return Some(closed(r));
+    }
+    if let Some(r) = screw_cylinder(b, a, bb) {
+        // (Its p-curves the other way round: a's first.)
+        let swapped = r
+            .into_iter()
+            .map(|mut c| {
+                c.pcs = c.pcs.map(|p| Arc::new([p[1].clone(), p[0].clone()]));
+                c
+            })
+            .collect();
+        return Some(closed(swapped));
+    }
+    None
+}
+
+/// A B-spline surface a steady screw swept ([`super::nurbs::ScrewSheet`]: v its turn) and a
+/// cylinder about the screw's axis, which the screw carries onto itself: a point the two share
+/// stays shared along the screw, so they meet in the screw's paths of the points where the
+/// sheet's first curve (at the start of its turn) meets the cylinder, each the sheet's whole
+/// turn long. Each path is the sheet's curve of constant u there, on the sheet a line of its
+/// parameters, and on the cylinder the helix of the screw, a line of its parameters too. (After
+/// springrep's orbits, MIT OR Apache-2.0, https://github.com/springcraft-ai/springrep.) `a`'s
+/// p-curve first. None for any other pair, or where the first curve lies on the cylinder or
+/// touches it (the pair is traced).
+fn screw_cylinder(a: &Surface, b: &Surface, bb: &Bbox) -> Option<Vec<IntCurve>> {
+    let (Surface::Nurbs(ns), Surface::Cylinder { f, r }) = (a, b) else {
+        return None;
+    };
+    let w = ns.screw?;
+    let size = bb.diagonal().max(*r).max(tol::POINT);
+    let z = f.z.normalize();
+    let off = f.o - w.o;
+    if z.cross(&w.z).norm() > tol::ANGULAR || (off - w.z * off.dot(&w.z)).norm() > 1e-9 * size {
+        return None;
+    }
+    let ((u0, u1), (v0, v1)) = ns.range();
+    let first = Curve::Nurbs(Arc::new(ns.iso_v_curve(v0)));
+    // (Off the cylinder by its radial distance, its sign the side.)
+    let gap = |t: f64| {
+        let q = first.point(t) - f.o;
+        (q - z * q.dot(&z)).norm() - r
+    };
+    // The first curve on the cylinder over a stretch: the pair is traced.
+    let near = 1e-7 * size;
+    if (0..=16)
+        .filter(|i| gap(u0 + (u1 - u0) * *i as f64 / 16.0).abs() <= near)
+        .count()
+        > 2
+    {
+        return None;
+    }
+    let roots = curve_surface(&first, u0, u1, b);
+    let sigma = if z.dot(&w.z) > 0.0 { 1.0 } else { -1.0 };
+    let line = |ox: f64, oy: f64, dx: f64, dy: f64| Curve::Line {
+        o: P3::new(ox, oy, 0.0),
+        d: V3::new(dx, dy, 0.0),
+    };
+    let mut out = Vec::new();
+    for &t in &roots {
+        // Crossing, not touching: the first curve's distance from the axis changes there.
+        let h = 1e-6 * (u1 - u0);
+        let (ga, gb) = (gap((t - h).max(u0)), gap((t + h).min(u1)));
+        if !(ga * gb < 0.0) {
+            return None;
+        }
+        let p0 = first.point(t) - f.o;
+        let (theta0, h0) = (p0.dot(&f.y).atan2(p0.dot(&f.x)), p0.dot(&z));
+        // (Turned `rate` a unit of v, and risen `lift` a radian of that.)
+        let (k, rise) = (sigma * w.rate, sigma * w.lift * w.rate);
+        let c = Curve::Nurbs(Arc::new(ns.iso_u_curve(t)));
+        out.push(IntCurve {
+            c,
+            t0: v0,
+            t1: v1,
+            closed: false,
+            pcs: Some(Arc::new([
+                Some(line(t, 0.0, 0.0, 1.0)),
+                Some(line(theta0 - k * v0, h0 - rise * v0, k, rise)),
+            ])),
+        });
+    }
+    Some(out)
+}
+
+/// [`surface_surface_tol`] for a pair without a closed form: a graph over one parameter of
+/// one of them, else the numeric engine's traced curves.
+fn traced(
+    a: &Surface,
+    ua: ((f64, f64), (f64, f64)),
+    b: &Surface,
+    ub: ((f64, f64), (f64, f64)),
+    bb: &Bbox,
+) -> Ssi {
+    // Kept by its inputs (two generations of at most this many): a split's two booleans, an
+    // operation asked again, trace the same pair over the same boxes.
+    const KEPT: usize = 256;
+    #[derive(Default)]
+    struct Kept {
+        new: rustc_hash::FxHashMap<u128, Ssi>,
+        old: rustc_hash::FxHashMap<u128, Ssi>,
+    }
+    static KEPT_SSI: std::sync::LazyLock<std::sync::Mutex<Kept>> = std::sync::LazyLock::new(|| {
+        // (Emptied by [`crate::native::clear_caches`].)
+        super::par::kept_cache(|| {
+            *KEPT_SSI.lock().unwrap_or_else(|e| e.into_inner()) = Default::default();
+        });
+        Default::default()
+    });
+    let key_of =
+        |a: &Surface, ua: &((f64, f64), (f64, f64)), b: &Surface, ub: &((f64, f64), (f64, f64))| {
+            let mut h = super::fingerprint::Key128::new();
+            h.surface(a);
+            h.surface(b);
+            h.f64s(&[
+                ua.0.0, ua.0.1, ua.1.0, ua.1.1, ub.0.0, ub.0.1, ub.1.0, ub.1.1,
+            ]);
+            h.f64s(&[bb.min.x, bb.min.y, bb.min.z, bb.max.x, bb.max.y, bb.max.z]);
+            h.key()
+        };
+    let key = key_of(a, &ua, b, &ub);
+    // The pair the other way round (b ∩ a after a ∩ b) is the same curves, each one's two
+    // p-curves swapped (which way a curve runs is the consumer's to settle either way).
+    let swapped = key_of(b, &ub, a, &ua);
+    {
+        let mut k = KEPT_SSI.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(r) = k.new.get(&key).cloned() {
+            return r;
+        }
+        if let Some(r) = k.old.remove(&key) {
+            k.new.insert(key, r.clone());
+            return r;
+        }
+        if let Some(r) = k.new.get(&swapped).or_else(|| k.old.get(&swapped)) {
+            return r.swapped();
+        }
+    }
+    let r = traced_anew(a, ua, b, ub, bb);
+    let mut k = KEPT_SSI.lock().unwrap_or_else(|e| e.into_inner());
+    if k.new.len() >= KEPT {
+        let new = std::mem::take(&mut k.new);
+        super::par::discard(std::mem::replace(&mut k.old, new));
+    }
+    k.new.insert(key, r.clone());
+    r
+}
+
+/// [`traced`] without its keeping.
+fn traced_anew(
+    a: &Surface,
+    ua: ((f64, f64), (f64, f64)),
+    b: &Surface,
+    ub: ((f64, f64), (f64, f64)),
+    bb: &Bbox,
+) -> Ssi {
     // A graph over one parameter of one of the two: exact points with nothing traced.
     for (p, up, q) in [(a, ua, b), (b, ub, a)] {
         if let Some(polys) = super::ssi_graph::graph(p, up, q, bb) {
@@ -2179,6 +2375,80 @@ fn may_meet(a: &Surface, b: &Surface, bb: &Bbox) -> bool {
     false
 }
 
+/// A face's (u, v) box for the numeric engine: one that isn't finite (a face without
+/// p-curves) falls back on the surface's own, and a B-spline's is kept within its range (one
+/// evaluated past its ends is a continuation the face isn't on).
+fn numeric_box(s: &Surface, x: ((f64, f64), (f64, f64))) -> super::ssi_numeric::UvBox {
+    let ok = [x.0.0, x.0.1, x.1.0, x.1.1].iter().all(|v| v.is_finite())
+        && x.0.1 > x.0.0
+        && x.1.1 > x.1.0;
+    let ((u0, u1), (v0, v1)) = if ok { x } else { s.param_box() };
+    let ((pu0, pu1), (pv0, pv1)) = s.param_box();
+    let clamp = |(a, b): (f64, f64), (lo, hi): (f64, f64), periodic: bool| {
+        if periodic {
+            (a.max(-1e4), b.min(1e4))
+        } else {
+            (a.max(lo).max(-1e4), b.min(hi).min(1e4))
+        }
+    };
+    let (u0, u1) = clamp((u0, u1), (pu0, pu1), s.u_periodic());
+    let (v0, v1) = clamp((v0, v1), (pv0, pv1), s.v_periodic());
+    super::ssi_numeric::UvBox::new((u0, u1), (v0, v1))
+}
+
+/// Points of the curves where two surfaces cross in the box (each traced curve's own points,
+/// a closed form's sampled), without fitting curves through them: for a check that only asks
+/// whether the faces cross somewhere. Touching points and coincident regions are not crossings
+/// and are left out.
+pub(crate) fn crossing_points(
+    a: &Surface,
+    ua: ((f64, f64), (f64, f64)),
+    b: &Surface,
+    ub: ((f64, f64), (f64, f64)),
+    bb: &Bbox,
+    per_curve: usize,
+) -> Vec<Vec<P3>> {
+    let sampled = |curves: Vec<IntCurve>| -> Vec<Vec<P3>> {
+        curves
+            .into_iter()
+            .filter(|c| c.t1 > c.t0)
+            .map(|c| {
+                (0..per_curve)
+                    .map(|k| {
+                        c.c.point(c.t0 + (c.t1 - c.t0) * (k as f64 + 0.5) / per_curve as f64)
+                    })
+                    .collect()
+            })
+            .collect()
+    };
+    if let Some(r) = closed_forms(a, ua, b, ub, bb, super::boolean::VTOL) {
+        return sampled(r.curves);
+    }
+    let tc = coincidence_tol(bb);
+    if super::ssi_coincident::lies_on(a, ua, b, tc) || super::ssi_coincident::lies_on(b, ub, a, tc)
+    {
+        return Vec::new();
+    }
+    for (p, up, q) in [(a, ua, b), (b, ub, a)] {
+        if let Some(polys) = super::ssi_graph::graph(p, up, q, bb) {
+            return polys
+                .into_iter()
+                .map(|(pts, _)| pts.iter().map(|x| x.p).collect())
+                .collect();
+        }
+    }
+    if !may_meet(a, b, bb) {
+        return Vec::new();
+    }
+    let (res, _) =
+        super::ssi_numeric::intersect_stats(a, numeric_box(a, ua), b, numeric_box(b, ub), bb);
+    res.curves
+        .into_iter()
+        .filter(|c| !c.tangent)
+        .map(|c| c.pts.iter().map(|x| x.p).collect())
+        .collect()
+}
+
 /// The intersection by the numeric engine ([`super::ssi_numeric`]): its traced curves fitted
 /// with B-splines through exact points (tangent curves through the touching points found).
 fn numeric(
@@ -2188,27 +2458,8 @@ fn numeric(
     ub: ((f64, f64), (f64, f64)),
     bb: &Bbox,
 ) -> Ssi {
-    use super::ssi_numeric::{UvBox, intersect_stats};
-    // A box that isn't finite (a face without p-curves) falls back on the surface's own.
-    let uvbox = |s: &Surface, x: ((f64, f64), (f64, f64))| {
-        let ok = [x.0.0, x.0.1, x.1.0, x.1.1].iter().all(|v| v.is_finite())
-            && x.0.1 > x.0.0
-            && x.1.1 > x.1.0;
-        let ((u0, u1), (v0, v1)) = if ok { x } else { s.param_box() };
-        // Within the surface's own range where it has one (a B-spline evaluated past its ends
-        // is a continuation the face isn't on).
-        let ((pu0, pu1), (pv0, pv1)) = s.param_box();
-        let clamp = |(a, b): (f64, f64), (lo, hi): (f64, f64), periodic: bool| {
-            if periodic {
-                (a.max(-1e4), b.min(1e4))
-            } else {
-                (a.max(lo).max(-1e4), b.min(hi).min(1e4))
-            }
-        };
-        let (u0, u1) = clamp((u0, u1), (pu0, pu1), s.u_periodic());
-        let (v0, v1) = clamp((v0, v1), (pv0, pv1), s.v_periodic());
-        UvBox::new((u0, u1), (v0, v1))
-    };
+    use super::ssi_numeric::intersect_stats;
+    let uvbox = numeric_box;
     // One surface lying all on the other (a copy with another domain, or another form of it):
     // no crossing to search for, only the shared region's boundary.
     let tc = coincidence_tol(bb);
@@ -3160,15 +3411,17 @@ pub fn curve_surface(c: &Curve, t0: f64, t1: f64, s: &Surface) -> Vec<f64> {
         }
         _ => None,
     };
-    let fh = |t: f64, hint: &mut Option<(f64, f64)>| -> f64 {
+    // (At the point already made where there is one.)
+    let fp = |p: &P3, hint: &mut Option<(f64, f64)>| -> f64 {
         if let Some(q) = &quadric {
-            q(&c.point(t))
+            q(p)
         } else if implicit {
-            sdist(s, &c.point(t))
+            sdist(s, p)
         } else {
-            sdist_hint(s, &c.point(t), hint)
+            sdist_hint(s, p, hint)
         }
     };
+    let fh = |t: f64, hint: &mut Option<(f64, f64)>| -> f64 { fp(&c.point(t), hint) };
     let mut out: Vec<f64> = Vec::new();
     let mut hints: Vec<Option<(f64, f64)>> = Vec::with_capacity(n + 1);
     let mut h: Option<(f64, f64)> = None;
@@ -3179,10 +3432,10 @@ pub fn curve_surface(c: &Curve, t0: f64, t1: f64, s: &Surface) -> Vec<f64> {
     let mut last: Option<P3> = None;
     for i in 0..=n {
         let t = t0 + (t1 - t0) * i as f64 / n as f64;
-        let v = fh(t, &mut h);
+        let p = c.point(t);
+        let v = fp(&p, &mut h);
         vals.push((t, v));
         hints.push(h);
-        let p = c.point(t);
         length += last.map_or(0.0, |q| (p - q).norm());
         last = Some(p);
     }
@@ -3194,20 +3447,23 @@ pub fn curve_surface(c: &Curve, t0: f64, t1: f64, s: &Surface) -> Vec<f64> {
     // crossings 1.4 apart, between samples 4.9 apart).
     if implicit {
         let mut refined: Vec<(f64, f64)> = Vec::with_capacity(vals.len());
-        // (Intervals to look into: their end samples (t, distance) and depth.)
-        type Sample = (f64, f64);
+        // (Intervals to look into: their end samples (t, distance, point) and depth.)
+        type Sample = (f64, f64, P3);
         let mut stack: Vec<(Sample, Sample, u32)> = Vec::new();
         // (A budget: a curve along the surface is near it everywhere, its stretches found below.)
         let mut budget = 4096usize;
+        let mut pa = c.point(vals[0].0);
         for w in vals.windows(2) {
             refined.push(w[0]);
-            stack.push((w[0], w[1], 0));
+            let pb = c.point(w[1].0);
+            stack.push(((w[0].0, w[0].1, pa), (w[1].0, w[1].1, pb), 0));
+            pa = pb;
             let mut extra: Vec<(f64, f64)> = Vec::new();
             while let Some((a, b, depth)) = stack.pop() {
-                let reach = (c.point(b.0) - c.point(a.0)).norm() * 1.1;
+                let reach = (b.2 - a.2).norm() * 1.1;
                 // (Not near a touch: both samples well off the surface; a midpoint that comes
                 // near it is the touching search's below.)
-                let near = 1e-6 * (1.0 + c.point(a.0).coords.norm());
+                let near = 1e-6 * (1.0 + a.2.coords.norm());
                 if budget == 0
                     || a.1.signum() != b.1.signum()
                     || a.1.abs() + b.1.abs() > reach
@@ -3219,8 +3475,9 @@ pub fn curve_surface(c: &Curve, t0: f64, t1: f64, s: &Surface) -> Vec<f64> {
                 }
                 budget -= 1;
                 let m = 0.5 * (a.0 + b.0);
-                let mid = (m, sdist(s, &c.point(m)));
-                extra.push(mid);
+                let pm = c.point(m);
+                let mid = (m, sdist(s, &pm), pm);
+                extra.push((mid.0, mid.1));
                 stack.push((a, mid, depth + 1));
                 stack.push((mid, b, depth + 1));
             }
@@ -3995,6 +4252,7 @@ mod tests {
         use crate::native::nurbs::{H, NurbsSurface};
         let pole = |x: f64, y: f64| H::new(x, y, 10.0 + x * y / 8.0, 1.0);
         let patch = NurbsSurface {
+            screw: None,
             du: 1,
             dv: 1,
             ku: vec![0.0, 0.0, 1.0, 1.0],

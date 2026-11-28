@@ -58,14 +58,26 @@ impl Rebuilder {
             start_angle: 0.0,
             clockwise: x.clockwise,
         };
-        let path: Vec<PathCurve> = helix
-            .beziers()
-            .into_iter()
-            .map(|(poles, weights)| PathCurve::Bezier3 {
-                poles: poles.iter().map(|q| Point3::from(*q)).collect(),
-                weights,
-            })
-            .collect();
+        // The section carried by the helix's screw (the kernel's exact sides of a screw: the
+        // thread's faces meet a cylinder about its axis in closed form), along the helix.
+        let v3 = |a: [f64; 3]| Vector3::new(a[0], a[1], a[2]);
+        let screw = cadrs_kernel::Helix {
+            axis: cadrs_kernel::Axis {
+                origin: Point3::from(helix.origin),
+                dir: Unit::new_normalize(v3(helix.axis)),
+            },
+            x: Unit::new_normalize(v3(helix.x)),
+            r0: helix.r0,
+            r1: helix.r1,
+            height: helix.height,
+            turns: if helix.clockwise {
+                -helix.turns
+            } else {
+                helix.turns
+            },
+            start_angle: helix.start_angle,
+        };
+        let path: Vec<PathCurve> = screw.path();
         // The section in the plane through the axis and the helix's start: x outward, y along
         // the axis (normal × x).
         let v = |a: [f64; 3]| Vector3::new(a[0], a[1], a[2]);
@@ -102,7 +114,7 @@ impl Rebuilder {
                 &SweepSpec {
                     body: BodyKind::Solid,
                     path,
-                    control: SweepControl::None,
+                    control: SweepControl::Helix(screw),
                     corners: Default::default(),
                     faces: Vec::new(),
                 },

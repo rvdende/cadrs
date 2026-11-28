@@ -275,3 +275,214 @@ fn a_prism_rounded_all_over_past_a_short_side() {
     let v = volume(&k, out);
     assert!((v - want).abs() < 1e-6 * want, "volume {v}, want {want}");
 }
+
+#[test]
+fn every_edge_of_a_box_rounded_is_its_inset_grown() {
+    // A box a × b × c with every edge rounded by r is the box moved in by r grown by a ball:
+    // V = a'b'c' + 2(a'b' + b'c' + c'a') r + π r² (a' + b' + c') + 4πr³/3 and
+    // A = 2(a'b' + b'c' + c'a') + 2π r (a' + b' + c') + 4πr², with a' = a − 2r and so on.
+    use cadrs_kernel::*;
+    use std::f64::consts::PI;
+    let mut k = DefaultKernel::default();
+    let (a, b, c, r) = (10.0, 20.0, 30.0, 2.0);
+    let cube = k
+        .primitive(&Primitive::Box {
+            min: nalgebra::Point3::new(1.0, 2.0, 3.0),
+            max: nalgebra::Point3::new(1.0 + a, 2.0 + b, 3.0 + c),
+        })
+        .unwrap()
+        .first()
+        .unwrap();
+    let edges: Vec<EdgeId> = k.edges(cube).unwrap().iter().map(|e| e.id).collect();
+    let round = k.fillet(cube, &edges, r).unwrap();
+    let id = round.first().unwrap();
+    let (x, y, z) = (a - 2.0 * r, b - 2.0 * r, c - 2.0 * r);
+    let m = k.mass_properties(id).unwrap();
+    let v = x * y * z
+        + 2.0 * (x * y + y * z + z * x) * r
+        + PI * r * r * (x + y + z)
+        + 4.0 / 3.0 * PI * r.powi(3);
+    let s = 2.0 * (x * y + y * z + z * x) + 2.0 * PI * r * (x + y + z) + 4.0 * PI * r * r;
+    assert!(
+        (m.volume - v).abs() <= 1e-10 * v,
+        "volume {} vs {v}",
+        m.volume
+    );
+    assert!(
+        (m.surface_area - s).abs() <= 1e-10 * s,
+        "area {} vs {s}",
+        m.surface_area
+    );
+    assert_eq!(k.faces(id).unwrap().len(), 6 + 12 + 8);
+    assert!(k.get(id).unwrap().check().is_empty());
+}
+
+#[test]
+fn a_rounded_prism_s_top_loop_rounds_in_closed_form() {
+    // A box W × L × H with its upright edges rounded by ρ, then its top loop by r: the rim
+    // takes r²(1 − π/4) along each line and, about each corner's axis, that area along the
+    // circle its centroid follows, of radius ρ − r(10 − 3π)/(3(4 − π)) (Pappus).
+    use cadrs_kernel::*;
+    use std::f64::consts::PI;
+    let (w, l, h, rho, r) = (6.8, 10.25, 3.67, 2.6, 0.5);
+    let mut k = DefaultKernel::default();
+    let bx = k
+        .primitive(&Primitive::Box {
+            min: nalgebra::Point3::new(0.0, 0.0, 0.0),
+            max: nalgebra::Point3::new(w, l, h),
+        })
+        .unwrap()
+        .first()
+        .unwrap();
+    let up: Vec<EdgeId> = k
+        .edges(bx)
+        .unwrap()
+        .iter()
+        .filter(|e| (e.end - e.start).normalize().z.abs() > 0.99)
+        .map(|e| e.id)
+        .collect();
+    let corners = k.fillet(bx, &up, rho).unwrap().first().unwrap();
+    let top: Vec<EdgeId> = k
+        .edges(corners)
+        .unwrap()
+        .iter()
+        .filter(|e| e.start.z > h - 1e-9 && e.end.z > h - 1e-9)
+        .map(|e| e.id)
+        .collect();
+    assert_eq!(top.len(), 8);
+    let rim = k.fillet(corners, &top, r).unwrap().first().unwrap();
+    let section = r * r * (1.0 - PI / 4.0);
+    let centroid = r * (10.0 - 3.0 * PI) / (3.0 * (4.0 - PI));
+    let lines = 2.0 * (w - 2.0 * rho) + 2.0 * (l - 2.0 * rho);
+    let base = (w * l - (4.0 - PI) * rho * rho) * h;
+    let want = base - section * (lines + 2.0 * PI * (rho - centroid));
+    let got = k.mass_properties(rim).unwrap().volume;
+    assert!((got - want).abs() <= 1e-9 * want, "volume {got} vs {want}");
+    assert_eq!(k.faces(rim).unwrap().len(), 10 + 8);
+    assert!(k.get(rim).unwrap().check().is_empty());
+}
+
+#[test]
+fn a_prism_s_upright_edges_round_in_closed_form() {
+    // A pentagonal prism of height h with its five upright edges rounded by r: each corner of
+    // interior angle φ takes r²(cot(φ/2) − (π − φ)/2) of the section.
+    let pts = [[0.0, 0.0], [6.0, -1.0], [8.0, 4.0], [3.0, 7.0], [-1.0, 4.0]];
+    let (h, r) = (3.5, 0.7);
+    let mut k = NativeKernel::new();
+    let tuples: Vec<(f64, f64)> = pts.iter().map(|p| (p[0], p[1])).collect();
+    let prism = prism(&mut k, polygon(&tuples), h);
+    let up: Vec<EdgeId> = k
+        .edges(prism)
+        .unwrap()
+        .iter()
+        .filter(|e| (e.end - e.start).normalize().z.abs() > 0.99)
+        .map(|e| e.id)
+        .collect();
+    assert_eq!(up.len(), 5);
+    let round = k.fillet(prism, &up, r).unwrap().first().unwrap();
+    let n = pts.len();
+    let mut area = 0.0;
+    let mut cut = 0.0;
+    for i in 0..n {
+        let (p, q, s) = (pts[(i + n - 1) % n], pts[i], pts[(i + 1) % n]);
+        area += 0.5 * (q[0] * s[1] - s[0] * q[1]);
+        let (u, v) = ([p[0] - q[0], p[1] - q[1]], [s[0] - q[0], s[1] - q[1]]);
+        let phi = ((u[0] * v[0] + u[1] * v[1]) / (u[0].hypot(u[1]) * v[0].hypot(v[1]))).acos();
+        cut += r * r * (1.0 / (phi / 2.0).tan() - (PI - phi) / 2.0);
+    }
+    let want = (area - cut) * h;
+    let got = k.mass_properties(round).unwrap().volume;
+    assert!((got - want).abs() <= 1e-9 * want, "volume {got} vs {want}");
+    assert_eq!(k.faces(round).unwrap().len(), 7 + 5);
+    assert!(k.get(round).unwrap().check().is_empty());
+}
+
+#[test]
+fn a_cylinder_s_top_rim_rounds_in_closed_form() {
+    // A cylinder of radius R and height h with its top rim rounded by r: it loses r²(1 − π/4)
+    // of section round the circle its centroid follows, of radius
+    // R − r(10 − 3π)/(3(4 − π)) (Pappus).
+    let (big, h, r) = (3.0, 4.0, 0.8);
+    let mut k = NativeKernel::new();
+    let c = k
+        .primitive(&Primitive::Cylinder {
+            base: Point3::new(1.0, -2.0, 0.5),
+            axis: nalgebra::Unit::new_normalize(nalgebra::Vector3::z()),
+            radius: big,
+            height: h,
+        })
+        .unwrap()
+        .bodies[0];
+    let top: Vec<EdgeId> = k
+        .edges(c)
+        .unwrap()
+        .iter()
+        .filter(|e| e.start.z > 0.5 + h - 1e-9 && e.end.z > 0.5 + h - 1e-9)
+        .map(|e| e.id)
+        .collect();
+    assert_eq!(top.len(), 1);
+    let round = k.fillet(c, &top, r).unwrap().bodies[0];
+    let centroid = r * (10.0 - 3.0 * PI) / (3.0 * (4.0 - PI));
+    let want = PI * big * big * h - r * r * (1.0 - PI / 4.0) * 2.0 * PI * (big - centroid);
+    let got = k.mass_properties(round).unwrap().volume;
+    assert!((got - want).abs() <= 1e-9 * want, "volume {got} vs {want}");
+    assert_eq!(k.faces(round).unwrap().len(), 4);
+    assert!(k.get(round).unwrap().check().is_empty());
+}
+
+#[test]
+fn a_frustum_s_top_rim_rounds_in_closed_form() {
+    // A frustum (radii 4 and 2, 3 high) with its top rim rounded by r: in the half plane
+    // through the axis the round cuts off the corner between the top and the slanted side
+    // (the kite of the tangent segments less the ball's sector), swept round the axis by its
+    // centroid (Pappus).
+    let (r0, r1, h, r) = (4.0f64, 2.0f64, 3.0f64, 0.5f64);
+    let mut k = NativeKernel::new();
+    let c = k
+        .primitive(&Primitive::Cone {
+            base: Point3::new(0.0, 0.0, 0.0),
+            axis: nalgebra::Unit::new_normalize(nalgebra::Vector3::z()),
+            base_radius: r0,
+            top_radius: r1,
+            height: h,
+        })
+        .unwrap()
+        .bodies[0];
+    let top: Vec<EdgeId> = k
+        .edges(c)
+        .unwrap()
+        .iter()
+        .filter(|e| e.start.z > h - 1e-9 && e.end.z > h - 1e-9)
+        .map(|e| e.id)
+        .collect();
+    assert_eq!(top.len(), 1);
+    let round = k.fillet(c, &top, r).unwrap().bodies[0];
+    // The corner in (ρ, z).
+    let l = (r0 - r1).hypot(h);
+    let (ma, mb) = ((-1.0, 0.0), ((r0 - r1) / l, -h / l));
+    let theta = (ma.0 * mb.0 + ma.1 * mb.1).acos();
+    let s = r / (theta / 2.0).tan();
+    let b = {
+        let (x, y) = (ma.0 + mb.0, ma.1 + mb.1);
+        let n = x.hypot(y);
+        (x / n, y / n)
+    };
+    let p = (r1, h);
+    let c = (
+        p.0 + b.0 * r / (theta / 2.0).sin(),
+        p.1 + b.1 * r / (theta / 2.0).sin(),
+    );
+    let (pa, pb) = ((p.0 + ma.0 * s, p.1), (p.0 + mb.0 * s, p.1 + mb.1 * s));
+    let kite = r * s;
+    let kite_rho = ((p.0 + pa.0 + c.0) / 3.0 + (p.0 + pb.0 + c.0) / 3.0) / 2.0;
+    let alpha = PI - theta;
+    let sector = alpha * r * r / 2.0;
+    let sector_rho = c.0 - b.0 * 4.0 * r * (alpha / 2.0).sin() / (3.0 * alpha);
+    let corner = kite - sector;
+    let rho = (kite * kite_rho - sector * sector_rho) / corner;
+    let frustum = PI * h / 3.0 * (r0 * r0 + r0 * r1 + r1 * r1);
+    let want = frustum - corner * 2.0 * PI * rho;
+    let got = k.mass_properties(round).unwrap().volume;
+    assert!((got - want).abs() <= 1e-9 * want, "volume {got} vs {want}");
+    assert!(k.get(round).unwrap().check().is_empty());
+}

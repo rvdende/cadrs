@@ -215,6 +215,7 @@ pub fn offset_surface(s: &Surface, sense: bool, d: f64) -> Option<Surface> {
                     .map(|j| surf.cps.iter().map(|r| r[j]).collect())
                     .collect();
                 let off = Surface::Nurbs(std::sync::Arc::new(crate::native::nurbs::NurbsSurface {
+                    screw: None,
                     du: surf.dv,
                     dv: surf.du,
                     ku: surf.kv.clone(),

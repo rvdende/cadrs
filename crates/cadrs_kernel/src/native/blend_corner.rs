@@ -286,6 +286,7 @@ fn fill_corner(mut t: Tracked, mark: &FaceSrc, vp: P3, out: V3) -> Result<Tracke
         })
         .collect();
     let patch = NurbsSurface {
+        screw: None,
         du: 3,
         dv: 3,
         ku: vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],

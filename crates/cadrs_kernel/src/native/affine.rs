@@ -14,7 +14,7 @@ use std::f64::consts::{PI, TAU};
 use std::sync::Arc;
 
 /// Whether `m` keeps angles: its linear part a scaled rotation or reflection.
-fn similarity(m: &Affine) -> bool {
+pub(crate) fn similarity(m: &Affine) -> bool {
     let k = m.scale();
     if k <= 0.0 {
         return false;

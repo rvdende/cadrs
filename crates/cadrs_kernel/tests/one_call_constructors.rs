@@ -221,6 +221,141 @@ fn slabs_that_cannot_be_are_refused() {
     assert!(k.slab(&unclamped).is_err());
 }
 
+/// Two bicubic slabs crossed square, their common part cut by a slanted plane
+/// (brep-conformance `slabs-8e6323004994e64d`): the section closes. A pair of a patch's face
+/// and the plane's sheet looked to leave a curve's end loose and was traced again over wider
+/// boxes, which found no curve at all; the first trace is kept where the second finds fewer.
+#[test]
+fn two_slabs_common_part_has_a_closed_section() {
+    let mut k = NativeKernel::new();
+    let cubic = |inner: &[f64]| {
+        let mut v = vec![0.0; 4];
+        v.extend_from_slice(inner);
+        v.extend([1.0; 4]);
+        v
+    };
+    let a = k
+        .slab(&SlabSpec {
+            origin: Point3::origin(),
+            x: Vector3::x_axis(),
+            y: Vector3::y_axis(),
+            size: [4.652457352639631, 6.418761585288305],
+            knots_u: cubic(&[0.5]),
+            knots_v: cubic(&[0.25, 0.5, 0.75]),
+            heights: vec![
+                vec![
+                    7.004578093367903,
+                    6.904709222925296,
+                    4.30819696886233,
+                    7.6663160065357925,
+                    5.008723928289747,
+                    7.149428218101325,
+                    7.905001828965269,
+                ],
+                vec![
+                    7.873128900224459,
+                    4.914211599587008,
+                    6.646265100105766,
+                    6.059267069843136,
+                    3.7170574649858907,
+                    4.096066826482392,
+                    6.53327873003202,
+                ],
+                vec![
+                    7.809843109919876,
+                    4.530921038262217,
+                    4.644750727348984,
+                    4.808933089455844,
+                    5.0335408732583495,
+                    7.116112857333141,
+                    5.127948157379857,
+                ],
+                vec![
+                    5.832559904237259,
+                    7.468372400286761,
+                    6.594964381384109,
+                    6.951358516989805,
+                    5.100078442877011,
+                    3.7682507733655557,
+                    7.713084847551488,
+                ],
+                vec![
+                    5.1293571374300395,
+                    4.628558858998163,
+                    7.1343913945028214,
+                    6.746111868689292,
+                    8.010299512096488,
+                    5.482153986385592,
+                    5.807827285929516,
+                ],
+            ],
+        })
+        .unwrap()
+        .bodies[0];
+    let b = k
+        .slab(&SlabSpec {
+            origin: Point3::new(4.273167858120837, -1.1325017095145813, -0.2211947378099397),
+            x: Vector3::y_axis(),
+            y: -Vector3::x_axis(),
+            size: [7.067046426130112, 5.9990238729918275],
+            knots_u: cubic(&[]),
+            knots_v: cubic(&[0.25, 0.5, 0.75]),
+            heights: vec![
+                vec![
+                    7.157894677002286,
+                    7.830176785600108,
+                    4.457826015539567,
+                    4.817447695310303,
+                    7.491275306486914,
+                    6.07857584932224,
+                    6.40772856931952,
+                ],
+                vec![
+                    4.834787231299248,
+                    7.208477014675593,
+                    8.057791251875717,
+                    5.580055523531385,
+                    8.041471692334502,
+                    4.786893789542063,
+                    6.186948689110716,
+                ],
+                vec![
+                    7.615508086662337,
+                    4.896025520337414,
+                    6.779312415841248,
+                    7.912705676388149,
+                    5.152184511737124,
+                    7.869899629632066,
+                    7.722873214333752,
+                ],
+                vec![
+                    7.095690134565823,
+                    5.895901388792211,
+                    3.9195995999465003,
+                    8.305282190490061,
+                    6.053581015969796,
+                    3.876923308672928,
+                    4.269817732507928,
+                ],
+            ],
+        })
+        .unwrap()
+        .bodies[0];
+    let common = k.boolean(BoolOp::Intersect, a, &[b]).unwrap().bodies[0];
+    let area = k
+        .section_area(
+            common,
+            Point3::new(2.1365839290604187, 2.967272358307765, 4.005149756048244),
+            Vector3::new(
+                -0.11593503738995992,
+                -0.7253496783540048,
+                0.6785476484500779,
+            ),
+        )
+        .unwrap();
+    assert!((area - 26.941682).abs() < 1e-5, "{area}");
+}
+
 /// A box's faces written loose to STEP (each its own surface, edges and corners; one shifted
 /// off by 1e-5, one inside out), sewn back into the box in one call.
 #[test]
@@ -342,4 +477,53 @@ fn three_chamfers_of_three_distances_meet_at_a_corner() {
     // One distance too wide for its faces is refused, the others notwithstanding.
     let too = k.chamfer_distances(b, &edges, &[1.0, 11.0, 1.0], false);
     assert!(too.is_err());
+}
+
+/// A square thread rising less a turn than it is tall, cut by a cylinder through it
+/// (brep-conformance `helices-905391a1d3e41797`), meshed to 0.01 with no angle bound: in
+/// milliseconds, and the triangles bound the solid's volume. Its helicoids are fitted patches
+/// straight along their rulings to rounding (S_vv·n 10⁻¹²), whose step that way, 10⁵ across a
+/// face 1 wide, stood for a row's length in the twist's step: 10⁻⁶ along, a grid at its limit,
+/// and minutes of refinement.
+#[test]
+fn a_thread_cut_by_a_cylinder_meshes_in_milliseconds() {
+    let mut k = NativeKernel::new();
+    let (r0, r1, h) = (7.08559283118267, 8.422332008494148, 1.4750553374306028);
+    let s = screw(
+        &mut k,
+        rect((r0 + r1) / 2.0, h / 2.0, r1 - r0, h),
+        0.6309272329891976,
+        5.958131805117148,
+    )
+    .unwrap();
+    let c = k
+        .primitive(&Primitive::Cylinder {
+            base: Point3::new(0.0, 0.0, -1.0),
+            axis: Vector3::z_axis(),
+            radius: 7.500693513908281,
+            height: 7.234202951018098,
+        })
+        .unwrap()
+        .bodies[0];
+    let i = k.boolean(BoolOp::Intersect, s, &[c]).unwrap().bodies[0];
+    let t = std::time::Instant::now();
+    let m = k
+        .tessellate(
+            i,
+            Tessellation {
+                deflection: 0.01,
+                angle: PI,
+            },
+        )
+        .unwrap();
+    let took = t.elapsed().as_secs_f64();
+    assert!(took < 2.0, "{took} s");
+    let p = |j: u32| m.positions[j as usize].coords;
+    let meshed: f64 = m
+        .indices
+        .iter()
+        .map(|t| p(t[0]).dot(&p(t[1]).cross(&p(t[2]))) / 6.0)
+        .sum();
+    let v = volume(&k, i);
+    assert!((meshed - v).abs() < 0.01 * v, "{meshed} vs {v}");
 }

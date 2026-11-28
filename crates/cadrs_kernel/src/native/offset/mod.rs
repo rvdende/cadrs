@@ -244,6 +244,28 @@ pub fn offset(k: &mut NativeKernel, body: BodyId, spec: &OffsetSpec) -> Result<O
     {
         return Err(too_far("a face would shrink to nothing"));
     }
+    // A body with closed cavities, every face moved alike: each shell offset alone, its cavities
+    // the other way ([`by_shells`]).
+    if !moving
+        && !spec.sharp
+        && spec.faces.is_empty()
+        && spec.distance != 0.0
+        && b.shells.len() > 1
+        && let Some(out) = by_shells(&b, spec.distance)
+    {
+        let src: Vec<Vec<super::blend::FaceSrc>> = vec![Vec::new(); out.faces.len()];
+        return Ok(super::blend::Tracked { body: out, src }.into_result(k, body));
+    }
+    // A prism of a closed convex curve grown: its band swept round it, capped.
+    if !moving
+        && !spec.sharp
+        && spec.faces.is_empty()
+        && spec.distance > 0.0
+        && let Some(out) = grown_prism(k, &b, spec.distance)
+    {
+        let src: Vec<Vec<super::blend::FaceSrc>> = vec![Vec::new(); out.faces.len()];
+        return Ok(super::blend::Tracked { body: out, src }.into_result(k, body));
+    }
     let first = (|| -> Result<crate::native::topo::Body> {
         Ok(if spec.sharp || dist.iter().all(|d| *d == 0.0) {
             let out = sharp::offset_sharp(&b, &dist)?;
@@ -296,7 +318,13 @@ pub fn offset(k: &mut NativeKernel, body: BodyId, spec: &OffsetSpec) -> Result<O
             (std::sync::Arc::new(b2), d2, out, Some((from, n)))
         }
     };
-    let v0 = crate::native::mass::body_volume(&b);
+    // (The input's own volume, kept where it has been measured; not that of the body without
+    // its vanishing faces.)
+    let v0 = back
+        .is_none()
+        .then(|| k.known_volume(body))
+        .flatten()
+        .unwrap_or_else(|| crate::native::mass::body_volume(&b));
     let v1 = crate::native::mass::body_volume(&out);
     let grow = dist.iter().any(|d| *d > 0.0);
     let shrink = dist.iter().any(|d| *d < 0.0);
@@ -359,4 +387,296 @@ pub fn offset(k: &mut NativeKernel, body: BodyId, spec: &OffsetSpec) -> Result<O
         bodies: vec![id],
         history,
     })
+}
+
+/// A solid with closed cavities (one outer shell, the rest voids inside it) offset by `d` with
+/// rounded joins, a shell at a time: the outer shell's solid offset by `d`, less each cavity's
+/// solid offset by −d (a cavity shrinks as the body grows, and grows as it shrinks), where each
+/// offset cavity lies clear inside the offset outside (their boxes a margin apart: else they
+/// may meet, and None). A cavity of revolution of any meridian (a spheroid's) by its section's
+/// parallel curve ([`crate::native::sweep_solid::offset_meridian`]), any other as the offset
+/// makes it.
+fn by_shells(b: &crate::native::topo::Body, d: f64) -> Option<crate::native::topo::Body> {
+    use crate::native::topo::Body;
+    if b.solids.len() != 1 || b.solids[0].shells.len() != b.shells.len() {
+        return None;
+    }
+    // The outer shell: the one whose box holds the others'.
+    let boxes: Vec<_> = b
+        .shells
+        .iter()
+        .map(|sh| {
+            let mut bb = crate::native::math::Bbox::empty();
+            for &f in &sh.faces {
+                let fb = b.face_bbox(f);
+                bb.add(&fb.min);
+                bb.add(&fb.max);
+            }
+            bb
+        })
+        .collect();
+    let outer =
+        (0..b.shells.len()).max_by(|&i, &j| boxes[i].diagonal().total_cmp(&boxes[j].diagonal()))?;
+    let shell_solid = |i: usize, reverse: bool| -> Body {
+        let mut s = crate::native::kernel::subset(b, &b.shells[i].faces, true);
+        if reverse {
+            for f in &mut s.faces {
+                Body::reverse_face(f);
+            }
+        }
+        s
+    };
+    let offset_one = |s: &Body, d: f64| -> Option<Body> {
+        if let Some(m) = crate::native::sweep_solid::offset_meridian(s, d) {
+            return Some(m);
+        }
+        let dist = vec![d; s.faces.len()];
+        if d > 0.0 {
+            round::offset_rounded(s, &dist).ok()
+        } else {
+            round::inset_rounded(s, &dist).ok()
+        }
+    };
+    let mut out = offset_one(&shell_solid(outer, false), d)?;
+    let ob = out.bbox();
+    for i in (0..b.shells.len()).filter(|&i| i != outer) {
+        let cavity = offset_one(&shell_solid(i, true), -d)?;
+        let cb = cavity.bbox();
+        let margin = 1e-6 * ob.diagonal();
+        if (0..3).any(|k| cb.min[k] <= ob.min[k] + margin || cb.max[k] >= ob.max[k] - margin) {
+            return None;
+        }
+        out = crate::native::boolean::boolean_bodies(&out, &cavity, crate::BoolOp::Subtract)
+            .ok()?
+            .body;
+    }
+    (out.shells.len() == b.shells.len() && out.check().is_empty()).then_some(out)
+}
+
+/// A prism of a closed convex curve (its side the curve extruded, two flat caps square to the
+/// extrusion) grown by a ball of radius `d`: its side moved out along its normals, each rim the
+/// outer quarter of the tube of radius `d` about it, its caps moved `d` out. Made as the band
+/// those make round the prism (the section of a quarter circle, the side moved out and a quarter
+/// circle, swept round the bottom rim upright, [`crate::Kernel::sweep_with`]) without its inner
+/// face, capped where that face ended: no boolean of the band with the prism, whose side the
+/// band's inner face (fitted) only nearly is. Its volume is held to Steiner's,
+/// V + S·d + (πH + πP/2)·d² + 4πd³/3, to a millionth (the band's faces fitted by the sweep).
+/// None for any other body.
+fn grown_prism(
+    k: &mut NativeKernel,
+    b: &crate::native::topo::Body,
+    d: f64,
+) -> Option<crate::native::topo::Body> {
+    use crate::native::curve::Curve;
+    use crate::native::math::*;
+    use crate::native::surface::Surface;
+    use crate::native::topo::{Coedge, Face, Shell, Solid};
+    if b.faces.len() != 3 || b.solids.len() != 1 || b.shells.len() != 1 {
+        return None;
+    }
+    let side = b
+        .faces
+        .iter()
+        .position(|f| matches!(f.surf, Surface::Extrusion { .. }))?;
+    let Surface::Extrusion { c, d: dir } = &b.faces[side].surf else {
+        return None;
+    };
+    if !c.is_periodic() && !matches!(c, Curve::Ellipse { .. }) {
+        return None;
+    }
+    let e = dir.try_normalize(tol::TINY)?;
+    // The caps: planes square to the extrusion, their heights along it.
+    let mut caps: Vec<(usize, f64)> = Vec::new();
+    for (fi, f) in b.faces.iter().enumerate() {
+        if fi == side {
+            continue;
+        }
+        let Surface::Plane { f: pf } = &f.surf else {
+            return None;
+        };
+        let n = pf.x.cross(&pf.y).normalize() * if f.sense { 1.0 } else { -1.0 };
+        if n.cross(&e).norm() > 1e-12 {
+            return None;
+        }
+        caps.push((fi, pf.o.coords.dot(&e)));
+    }
+    caps.sort_by(|a, c| a.1.total_cmp(&c.1));
+    let [(bottom, z0), (_, z1)] = caps[..] else {
+        return None;
+    };
+    let height = z1 - z0;
+    if !(height > 0.0) {
+        return None;
+    }
+    // The bottom rim: the side's edge shared with the bottom cap, one closed edge.
+    let uses =
+        |fi: usize| -> Vec<usize> { b.faces[fi].loops.iter().flatten().map(|c| c.edge).collect() };
+    let (su, bu) = (uses(side), uses(bottom));
+    let rims: Vec<usize> = bu.iter().copied().filter(|x| su.contains(x)).collect();
+    let [rim] = rims[..] else {
+        return None;
+    };
+    let edge = &b.edges[rim];
+    if !edge.closed() {
+        return None;
+    }
+    // Convex: the curve turns one way all round (its tangents' cross products along e agree).
+    let n = 64;
+    let turns: Vec<f64> = (0..n)
+        .map(|i| {
+            let t = edge.t[0] + (edge.t[1] - edge.t[0]) * i as f64 / n as f64;
+            let (_, d1, d2) = edge.curve.d2(t);
+            d1.cross(&d2).dot(&e)
+        })
+        .collect();
+    if !(turns.iter().all(|&x| x > 0.0) || turns.iter().all(|&x| x < 0.0)) {
+        return None;
+    }
+    // The outward normal of the side at the rim's start, square to e.
+    let p0 = edge.curve.point(edge.t[0]);
+    let sf = &b.faces[side];
+    let (u, v) = sf.surf.project(&p0, None);
+    let nrm =
+        (sf.surf.normal(u, v) * if sf.sense { 1.0 } else { -1.0 }).try_normalize(tol::TINY)?;
+    let w = (nrm - e * nrm.dot(&e)).try_normalize(tol::TINY)?;
+    let base = p0 + e * (z0 - p0.coords.dot(&e));
+    // The band's section at the rim's start: out along w, up along e.
+    let plane = crate::Plane {
+        origin: base,
+        x_dir: nalgebra::Unit::new_normalize(w),
+        normal: nalgebra::Unit::new_normalize(w.cross(&e)),
+    };
+    let p2 = |x: f64, y: f64| nalgebra::Point2::new(x, y);
+    let arc = |c: (f64, f64), a0: f64| crate::Curve2::Arc {
+        center: p2(c.0, c.1),
+        radius: d,
+        start_angle: a0,
+        sweep: std::f64::consts::FRAC_PI_2,
+        source: None,
+    };
+    let line = |a: (f64, f64), c: (f64, f64)| crate::Curve2::Line {
+        a: p2(a.0, a.1),
+        b: p2(c.0, c.1),
+        source: None,
+    };
+    use std::f64::consts::FRAC_PI_2;
+    let section = crate::Region {
+        outer: crate::Loop {
+            curves: vec![
+                arc((0.0, 0.0), -FRAC_PI_2),
+                line((d, 0.0), (d, height)),
+                arc((0.0, height), 0.0),
+                line((0.0, height + d), (0.0, -d)),
+            ],
+        },
+        holes: vec![],
+        source: None,
+    };
+    let id = k.insert(b.clone());
+    let spec = crate::SweepSpec {
+        body: crate::BodyKind::Solid,
+        path: vec![crate::PathCurve::Edge {
+            body: id,
+            edge: crate::EdgeId(rim as u64),
+        }],
+        control: crate::SweepControl::LockDirection(nalgebra::Unit::new_normalize(e)),
+        corners: Default::default(),
+        faces: vec![],
+    };
+    let swept = crate::Kernel::sweep_with(k, &crate::Profile::new(plane, vec![section]), &spec);
+    k.release(id);
+    let swept = swept.ok()?;
+    let band = (**k.get(*swept.bodies.first()?).ok()?).clone();
+    for x in &swept.bodies {
+        k.release(*x);
+    }
+    // The band's inner face: the one on the prism's side.
+    let on_side = |f: &Face| -> bool {
+        let Some(((u0, u1), (v0, v1))) = crate::native::heal_split::face_uv_box(&band, 0) else {
+            return false;
+        };
+        let _ = (u0, u1, v0, v1);
+        let samples = [(0.3, 0.4), (0.7, 0.6)];
+        samples.iter().all(|&(a, bb)| {
+            let Some(((fu0, fu1), (fv0, fv1))) = band
+                .faces
+                .iter()
+                .position(|g| std::ptr::eq(g, f))
+                .and_then(|i| crate::native::heal_split::face_uv_box(&band, i))
+            else {
+                return false;
+            };
+            let q = f.surf.eval(fu0 + (fu1 - fu0) * a, fv0 + (fv1 - fv0) * bb);
+            let (su, sv) = sf.surf.project(&q, None);
+            (sf.surf.eval(su, sv) - q).norm() <= 1e-6 * (1.0 + d)
+        })
+    };
+    let inner = band.faces.iter().position(on_side)?;
+    // Its loops' closed edges (the rims of the caps-to-be), its seams dropped.
+    let used_elsewhere = |ei: usize| {
+        band.faces
+            .iter()
+            .enumerate()
+            .any(|(fi, f)| fi != inner && f.loops.iter().flatten().any(|c| c.edge == ei))
+    };
+    let mut out = band.clone();
+    let mut cap_edges: Vec<(usize, bool)> = Vec::new();
+    for c in band.faces[inner].loops.iter().flatten() {
+        if used_elsewhere(c.edge) && band.edges[c.edge].closed() {
+            cap_edges.push((c.edge, c.fwd));
+        }
+    }
+    if cap_edges.len() != 2 {
+        return None;
+    }
+    out.faces.remove(inner);
+    for (ei, fwd) in cap_edges {
+        let ed = &out.edges[ei];
+        let h = ed.curve.point(ed.t[0]).coords.dot(&e);
+        // The cap's normal: the way its loop (run as the inner face ran it) turns about e, so
+        // the loop runs counter-clockwise about it.
+        let turn = integrate(ed.t[0], ed.t[1], 32, &GAUSS16, |t| {
+            let (p, d1, _) = ed.curve.d2(t);
+            (p - base).cross(&d1).dot(&e)
+        }) * if fwd { 1.0 } else { -1.0 };
+        let normal = if turn > 0.0 { e } else { -e };
+        let fr = Frame::from_z(base + e * (h - base.coords.dot(&e)), normal);
+        let surf = Surface::Plane { f: fr };
+        let pc = crate::native::pcurve::pcurve(&surf, &ed.curve, ed.t[0], ed.t[1], None);
+        out.faces.push(Face {
+            surf,
+            sense: true,
+            loops: vec![vec![Coedge { edge: ei, fwd, pc }]],
+        });
+    }
+    crate::native::unify::compact(&mut out);
+    out.shells = vec![Shell {
+        faces: (0..out.faces.len()).collect(),
+        closed: true,
+    }];
+    out.solids = vec![Solid { shells: vec![0] }];
+    if !out.check().is_empty() {
+        return None;
+    }
+    // Steiner's volume: the section's area and perimeter by Gauss.
+    let o = edge.curve.point(edge.t[0]);
+    let gx = (o - base).try_normalize(tol::TINY).unwrap_or(w);
+    let gy = e.cross(&gx);
+    let area = integrate(edge.t[0], edge.t[1], 64, &GAUSS16, |t| {
+        let (p, d1, _) = edge.curve.d2(t);
+        let q = p - base;
+        0.5 * (q.dot(&gx) * d1.dot(&gy) - q.dot(&gy) * d1.dot(&gx))
+    })
+    .abs();
+    let perim = integrate(edge.t[0], edge.t[1], 64, &GAUSS16, |t| {
+        edge.curve.d2(t).1.norm()
+    });
+    let pi = std::f64::consts::PI;
+    let want = area * height
+        + (2.0 * area + perim * height) * d
+        + (pi * height + pi * perim / 2.0) * d * d
+        + 4.0 * pi * d.powi(3) / 3.0;
+    let got = crate::native::mass::body_volume(&out);
+    // (The band's faces are fitted by the sweep: within a millionth.)
+    ((got - want).abs() <= 1e-6 * want).then_some(out)
 }

@@ -746,14 +746,77 @@ impl Body {
     /// The body moved by an affine map (a reflection flips every face's sense and loops).
     pub fn transformed(&self, m: &Affine) -> Body {
         let mut b = self.clone();
+        let k = m.scale();
+        // (Tolerances are lengths: scaled with the body, never below the least.)
+        let scaled_tol = |t: f64| {
+            if (k - 1.0).abs() > 1e-15 && k > 0.0 && k.is_finite() {
+                (t * k).max(TOL_MIN)
+            } else {
+                t
+            }
+        };
         for v in &mut b.verts {
             v.p = m.point(&v.p);
+            v.tol = scaled_tol(v.tol);
         }
-        for e in &mut b.edges {
+        // A line's parameter is its length ([`Curve::Line`]): scaled, the line keeps a unit
+        // direction and its range grows by k, its p-curves taking t/k for t. (Where a p-curve
+        // can't be so re-parametrized, the line is left as the map makes it.)
+        let speed = |c: &Curve, k: f64| -> Option<Curve> {
+            match c {
+                Curve::Line { o, d } => Some(Curve::Line { o: *o, d: d / k }),
+                Curve::Nurbs(n) => {
+                    let (a, b) = n.range();
+                    Some(Curve::nurbs(n.reparam(a * k, b * k)))
+                }
+                _ => None,
+            }
+        };
+        let mut lengthened = vec![false; b.edges.len()];
+        if (k - 1.0).abs() > 1e-15 && k > 0.0 && k.is_finite() {
+            let uses = self.edge_faces();
+            for (ei, e) in self.edges.iter().enumerate() {
+                let Curve::Line { d, .. } = &e.curve else {
+                    continue;
+                };
+                if e.degenerate || (d.norm() - 1.0).abs() > 1e-9 {
+                    continue;
+                }
+                let all = uses.get(ei).is_none_or(|fs| {
+                    fs.iter().all(|&f| {
+                        self.faces[f]
+                            .loops
+                            .iter()
+                            .flatten()
+                            .filter(|c| c.edge == ei)
+                            .all(|c| speed(&c.pc, k).is_some())
+                    })
+                });
+                lengthened[ei] = all;
+            }
+        }
+        for (ei, e) in b.edges.iter_mut().enumerate() {
             e.curve = e.curve.transformed(m);
+            e.tol = scaled_tol(e.tol);
+            if lengthened[ei]
+                && let Curve::Line { o, d } = e.curve
+            {
+                e.curve = Curve::Line { o, d: d / k };
+                e.t = [e.t[0] * k, e.t[1] * k];
+            }
+        }
+        if lengthened.iter().any(|&x| x) {
+            for f in &mut b.faces {
+                for c in f.loops.iter_mut().flatten() {
+                    if lengthened[c.edge]
+                        && let Some(pc) = speed(&c.pc, k)
+                    {
+                        c.pc = pc;
+                    }
+                }
+            }
         }
         let mirror = m.det() < 0.0;
-        let k = m.scale();
         for f in &mut b.faces {
             // Lengths in the surface's parameters scale with the body.
             if (k - 1.0).abs() > 1e-15 {
@@ -1071,7 +1134,16 @@ impl Body {
                         .get(self.co_end(a))
                         .map_or(0.0, |v| v.tol)
                         .max(super::tol::LOOP_GAP);
-                    if du * mu > gap_tol || dv * mv > gap_tol {
+                    // (The metric bounds the gap by the surface's most stretched part; where
+                    // a spline is squeezed, a step in v covers far less: the points themselves,
+                    // and the step's middle, so a jump of a period round a closed one counts.)
+                    let squeezed = || {
+                        let q = f.surf.eval(pa.x, pa.y);
+                        let mid = f.surf.eval((pa.x + pb.x) / 2.0, (pa.y + pb.y) / 2.0);
+                        (q - f.surf.eval(pb.x, pb.y)).norm() <= gap_tol
+                            && (q - mid).norm() <= gap_tol
+                    };
+                    if (du * mu > gap_tol || dv * mv > gap_tol) && !squeezed() {
                         errs.push(format!(
                             "face {fi} loop {li}: p-curve gap after coedge {k}: ({:.3e}, {:.3e})",
                             pa.x - pb.x,
@@ -1839,7 +1911,11 @@ impl Body {
             return errs;
         }
         let (su, sv) = uv_scale(&f.surf, ubox, vbox);
-        let flat = 0.5 * super::tol::LOOP_GAP;
+        // Flat to half the loop gap, or a part in 10⁷ of the face's size where that is more (a
+        // face metres across flattened to microns is tens of thousands of points a loop); each
+        // point carries how far its segment strays.
+        let size = ((ubox.1 - ubox.0) * su).hypot((vbox.1 - vbox.0) * sv);
+        let flat = (0.5 * super::tol::LOOP_GAP).max(1e-7 * size);
         let rings: Vec<Ring> = f
             .loops
             .iter()
@@ -2055,7 +2131,13 @@ struct Passed {
 const PASSED: usize = 1 << 19;
 
 static PASSED_FACES: std::sync::LazyLock<std::sync::Mutex<Passed>> =
-    std::sync::LazyLock::new(Default::default);
+    std::sync::LazyLock::new(|| {
+        // (Emptied by [`crate::native::clear_caches`].)
+        super::par::kept_cache(|| {
+            *PASSED_FACES.lock().unwrap_or_else(|e| e.into_inner()) = Default::default();
+        });
+        Default::default()
+    });
 
 /// Which of the faces of these keys passed before.
 fn passed_faces(keys: &[u128]) -> Vec<bool> {
@@ -2085,7 +2167,8 @@ fn pass_faces(keys: &[u128]) {
     let mut p = PASSED_FACES.lock().unwrap_or_else(|e| e.into_inner());
     for k in keys {
         if p.new.len() >= PASSED {
-            p.old = std::mem::take(&mut p.new);
+            let new = std::mem::take(&mut p.new);
+            super::par::discard(std::mem::replace(&mut p.old, new));
         }
         p.new.insert(*k);
     }
@@ -2143,7 +2226,13 @@ pub(super) fn pcurve_kept(
         old: rustc_hash::FxHashMap<u128, KeptGap>,
     }
     static KEPT_GAPS: std::sync::LazyLock<std::sync::Mutex<Kept>> =
-        std::sync::LazyLock::new(Default::default);
+        std::sync::LazyLock::new(|| {
+            // (Emptied by [`crate::native::clear_caches`].)
+            super::par::kept_cache(|| {
+                *KEPT_GAPS.lock().unwrap_or_else(|e| e.into_inner()) = Default::default();
+            });
+            Default::default()
+        });
     if matches!(
         (&e.curve, pc, surf),
         (
@@ -2196,7 +2285,8 @@ pub(super) fn pcurve_kept(
     };
     let mut k = KEPT_GAPS.lock().unwrap_or_else(|e| e.into_inner());
     if k.new.len() >= KEPT {
-        k.old = std::mem::take(&mut k.new);
+        let new = std::mem::take(&mut k.new);
+        super::par::discard(std::mem::replace(&mut k.old, new));
     }
     k.new.insert(key, made);
     Some(made)
@@ -2245,6 +2335,11 @@ pub(super) fn pcurve_gap(e: &Edge, pc: &Curve, surf: &Surface) -> f64 {
         }
     }
     if worst.is_infinite() {
+        return worst;
+    }
+    // Every sample a tenth of the least tolerance or less (exact geometry, a fit to 1e-9): the
+    // largest between them can't reach the tolerance it would set, so it isn't searched for.
+    if worst <= 0.1 * TOL_MIN {
         return worst;
     }
     // The gap is smooth along the edge: its largest value lies within a sample of the worst.
@@ -2418,7 +2513,13 @@ fn flatten_kept(
         old: rustc_hash::FxHashMap<u128, Points>,
     }
     static KEPT_POINTS: std::sync::LazyLock<std::sync::Mutex<Kept>> =
-        std::sync::LazyLock::new(Default::default);
+        std::sync::LazyLock::new(|| {
+            // (Emptied by [`crate::native::clear_caches`].)
+            super::par::kept_cache(|| {
+                *KEPT_POINTS.lock().unwrap_or_else(|e| e.into_inner()) = Default::default();
+            });
+            Default::default()
+        });
     if matches!(pc, Curve::Line { .. }) {
         flatten(pc, t0, t1, scale, flat, tol, r);
         return;
@@ -2443,7 +2544,8 @@ fn flatten_kept(
         let p: Points = std::sync::Arc::new((own.pts, own.tol));
         let mut k = KEPT_POINTS.lock().unwrap_or_else(|e| e.into_inner());
         if k.new_points + p.0.len() > KEPT {
-            k.old = std::mem::take(&mut k.new);
+            let new = std::mem::take(&mut k.new);
+            super::par::discard(std::mem::replace(&mut k.old, new));
             k.new_points = 0;
         }
         k.new_points += p.0.len();
@@ -2463,6 +2565,22 @@ fn flatten(pc: &Curve, t0: f64, t1: f64, scale: (f64, f64), flat: f64, tol: f64,
         r.pts.push(at(t0));
         r.tol.push(tol);
         return;
+    }
+    // A circle scaled alike both ways: even steps of the angle whose sagitta is `flat`
+    // (the split below comes to the same points, four evaluations a split).
+    if let Curve::Circle { r: rc, .. } = pc
+        && (scale.0 - scale.1).abs() <= 1e-12 * scale.0.abs().max(scale.1.abs())
+    {
+        let big = rc * scale.0.abs();
+        if big > flat {
+            let step = 2.0 * (1.0 - flat / big).clamp(-1.0, 1.0).acos();
+            let n = ((t1 - t0).abs() / step).ceil().clamp(4.0, 1e6) as usize;
+            for i in 0..n {
+                r.pts.push(at(t0 + (t1 - t0) * i as f64 / n as f64));
+                r.tol.push(tol + flat);
+            }
+            return;
+        }
     }
     // Each span's three samples (at a quarter, the middle and three quarters) are its halves'
     // middles and its split point, so a split evaluates the curve four times, not eight.

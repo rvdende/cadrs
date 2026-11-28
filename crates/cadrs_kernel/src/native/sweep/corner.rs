@@ -94,9 +94,38 @@ pub(crate) fn join(
             )?);
             let a = glue(acc, &ea)
                 .map_or_else(|| crate::native::features::tagged_union(acc, &ea), Ok)?;
+            // (What lies past the mitre plane is the end of the last piece and its extension:
+            // the end cap moved up to `ext` either way along the path. The box takes that
+            // much, across the plane (along the turn's axis and square to it) and past it, and
+            // no more: the sweep so far may come back near the corner beyond, a closed path's
+            // first piece at its last corners.)
+            let x =
+                c.d1.cross(&c.d2)
+                    .try_normalize(tol::DEGENERATE)
+                    .unwrap_or_else(|| Frame::from_z(c.v, m).x);
+            let y = m.cross(&x);
+            let (mut hx, mut hy, mut deep) = (0.0f64, 0.0f64, 0.0f64);
+            for &f in &ends {
+                for p in boundary_points(&acc.body, f) {
+                    for t in [-ext, 0.0, ext] {
+                        let q = p + c.d1 * t - c.v;
+                        hx = hx.max(q.dot(&x).abs());
+                        hy = hy.max(q.dot(&y).abs());
+                        deep = deep.max(q.dot(&m));
+                    }
+                }
+            }
+            let pad = |h: f64| h * 1.05 + reach * 1e-3 + tol::POINT;
             let a = tagged_bool(
                 &a,
-                &local_box(&c.v, &m, size, Origin::EndCap { region })?,
+                &local_box_sized(
+                    &c.v,
+                    &m,
+                    &x,
+                    (pad(hx), pad(hy)),
+                    pad(deep),
+                    Origin::EndCap { region },
+                )?,
                 BoolOp::Subtract,
             )?;
             // The piece after: extended back along −d2 (its far cap a start cap), cut too.
@@ -252,20 +281,27 @@ fn side_tags(t: &Tagged, ends: &[usize], p: &P3, reach: f64) -> Vec<Origin> {
 /// A box on the `n` side of the plane through `o` square to `n`, `size` deep and `2 size`
 /// wide, every face named `tag` (the face on the plane is what a cut by it leaves).
 fn local_box(o: &P3, n: &V3, size: f64, tag: Origin) -> Result<Tagged> {
-    let f = Frame::from_z(*o, *n);
+    local_box_sized(o, n, &Frame::from_z(*o, *n).x, (size, size), size, tag)
+}
+
+/// [`local_box`] with its own sizes: `2 hx` along `x` (square to `n`), `2 hy` along n × x, and
+/// `deep` deep.
+fn local_box_sized(
+    o: &P3,
+    n: &V3,
+    x: &V3,
+    (hx, hy): (f64, f64),
+    deep: f64,
+    tag: Origin,
+) -> Result<Tagged> {
     let plane = Plane {
         origin: *o,
-        x_dir: nalgebra::Unit::new_normalize(f.x),
+        x_dir: nalgebra::Unit::new_normalize(*x),
         normal: nalgebra::Unit::new_normalize(*n),
     };
     let p2 = nalgebra::Point2::new;
     let l = |a, b| crate::Curve2::Line { a, b, source: None };
-    let c = [
-        p2(-size, -size),
-        p2(size, -size),
-        p2(size, size),
-        p2(-size, size),
-    ];
+    let c = [p2(-hx, -hy), p2(hx, -hy), p2(hx, hy), p2(-hx, hy)];
     let sq = Region {
         outer: Loop {
             curves: (0..4).map(|i| l(c[i], c[(i + 1) % 4])).collect(),
@@ -275,7 +311,7 @@ fn local_box(o: &P3, n: &V3, size: f64, tag: Origin) -> Result<Tagged> {
     };
     let regions = crate::native::profile::regions(&Profile::new(plane, vec![sq]))?;
     let mf = crate::native::profile::merge_regions(&regions)?;
-    let built = sweep_full(&mf, &[], &Prism { plane, dir: *n }, 0.0, size, false, true)?;
+    let built = sweep_full(&mf, &[], &Prism { plane, dir: *n }, 0.0, deep, false, true)?;
     let tags = vec![vec![tag]; built.body.faces.len()];
     Ok(Tagged {
         body: built.body,

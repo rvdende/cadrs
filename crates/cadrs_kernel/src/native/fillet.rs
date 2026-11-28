@@ -7393,6 +7393,11 @@ fn face_pcurve(s: &Surface, c: &Curve, t0: f64, t1: f64, near: Option<P2>) -> Cu
 /// many-span curves); a circle on a B-spline surface the same, as eight spans. `None`
 /// otherwise or for other curves.
 fn quick_pcurve(s: &Surface, c: &Curve, t0: f64, t1: f64) -> Option<Curve> {
+    // (On a plane the p-curve is the curve's own, mapped affinely: [`super::pcurve::pcurve`]
+    // has it exactly, without projecting.)
+    if matches!(s, Surface::Plane { .. }) {
+        return None;
+    }
     let pieces = match c {
         Curve::Nurbs(_) => c.pieces(t0, t1),
         // A circle on a B-spline surface (its p-curve a fitted one anyway): as eight spans.
@@ -12069,6 +12074,109 @@ pub(crate) fn fully_checked(b: &Body) -> bool {
     FULLY_CHECKED.with(|c| c.borrow().as_ref().is_some_and(|x| x == b))
 }
 
+/// The one radius of `edges`' laws, each a constant fillet (ratio 1); None where they vary.
+fn uniform_radius(edges: &[RadiusLaw], ratios: &[Ratio]) -> Option<f64> {
+    let r = edges.first()?.1.first()?.1;
+    let same = edges.iter().all(|(_, law)| {
+        law.iter()
+            .all(|x| (x.1 - r).abs() <= tol::REL_POINT * (1.0 + r))
+    });
+    let plain = ratios
+        .iter()
+        .all(|q| q.1.is_none() && (q.0 - 1.0).abs() <= tol::REL_POINT);
+    (same && plain && r > 0.0).then_some(r)
+}
+
+/// Every edge of convex polyhedron `b` (planes, one loop each, convex straight edges)
+/// filleted at one constant radius r: the set of points within r of `b` moved in by r, which is
+/// its sharp inset by r grown by a ball of radius r ([`grown_convex`]: each face moved back
+/// out, a cylinder about each edge, a ball at each corner). The ball rolling along an edge
+/// touches both faces with its centre on the inset's edge, so the round is that tube; at a
+/// corner the ball about the inset's vertex. None unless the inset keeps every face, edge and
+/// vertex in place (a face narrower than 2r vanishes).
+///
+/// [`grown_convex`]: super::offset::round::grown_convex
+fn convex_all_edges(
+    b: &Body,
+    input: BodyId,
+    edges: &[RadiusLaw],
+    ratios: &[Ratio],
+) -> Option<(Body, Vec<Vec<FaceSrc>>)> {
+    let r = edges.first()?.1.first()?.1;
+    let mut chosen = vec![false; b.edges.len()];
+    for (e, law) in edges {
+        if law
+            .iter()
+            .any(|x| (x.1 - r).abs() > tol::REL_POINT * (1.0 + r))
+        {
+            return None;
+        }
+        *chosen.get_mut(*e)? = true;
+    }
+    if !(r > 0.0)
+        || ratios
+            .iter()
+            .any(|q| q.1.is_some() || (q.0 - 1.0).abs() > tol::REL_POINT)
+        || b.edges.iter().zip(&chosen).any(|(e, c)| !c || e.degenerate)
+        || b.faces
+            .iter()
+            .any(|f| !matches!(f.surf, Surface::Plane { .. }) || f.loops.len() != 1)
+    {
+        return None;
+    }
+    let inset = super::offset::sharp::offset_sharp(b, &vec![-r; b.faces.len()]).ok()?;
+    if inset.faces.len() != b.faces.len()
+        || inset.edges.len() != b.edges.len()
+        || inset.verts.len() != b.verts.len()
+    {
+        return None;
+    }
+    // Face for face and edge for edge: the same normals and directions.
+    let normal = |b: &Body, f: usize| match &b.faces[f].surf {
+        Surface::Plane { f: fr } => {
+            Some(fr.x.cross(&fr.y).normalize() * if b.faces[f].sense { 1.0 } else { -1.0 })
+        }
+        _ => None,
+    };
+    for f in 0..b.faces.len() {
+        if (normal(b, f)? - normal(&inset, f)?).norm() > tol::ANGULAR {
+            return None;
+        }
+    }
+    for (e, ei) in b.edges.iter().zip(&inset.edges) {
+        let (a, c) = (e.curve.tangent(e.mid_t()), ei.curve.tangent(ei.mid_t()));
+        if a.normalize().cross(&c.normalize()).norm() > tol::ANGULAR || a.dot(&c) <= 0.0 {
+            return None;
+        }
+    }
+    if !inset.check().is_empty() {
+        return None;
+    }
+    let grown = super::offset::round::grown_convex_with(&inset, r, false)?;
+    let corners: Vec<usize> = (0..inset.verts.len())
+        .filter(|&v| inset.edges.iter().any(|e| e.v.contains(&v)))
+        .collect();
+    if grown.faces.len() != b.faces.len() + b.edges.len() + corners.len() {
+        return None;
+    }
+    let mut src: Vec<Vec<FaceSrc>> = (0..b.faces.len())
+        .map(|i| vec![FaceSrc::Input(i)])
+        .collect();
+    src.extend((0..b.edges.len()).map(|e| {
+        vec![FaceSrc::New(Origin::FromEdge {
+            body: input,
+            edge: EdgeId(e as u64),
+        })]
+    }));
+    src.extend(corners.into_iter().map(|v| {
+        vec![FaceSrc::New(Origin::FromVertex {
+            body: input,
+            vertex: VertexId(super::blend::vertex_index(b, v) as u64),
+        })]
+    }));
+    Some((grown, src))
+}
+
 /// [`fillet_edges_laws`] with each edge's [`EdgeFillet::ratio`].
 /// A blend's second offset over its first along one edge: the ratio (1 for a fillet), and
 /// where it varies along the edge its law, (fraction of the edge, ratio), linear between.
@@ -12116,6 +12224,29 @@ fn local_blend(
         debug(|| "the rim's chamfer in closed form".to_string());
         // (Sound as it is made: each face cut back along its own surface to a circle inside
         // it, the cone between the two circles; and checked there.)
+        FULLY_CHECKED.with(|c| *c.borrow_mut() = Some(made.0.clone()));
+        return Ok(made);
+    }
+    // Every edge of a convex polyhedron rounded by one radius: the polyhedron moved in by it
+    // and grown back by a ball, built directly ([`convex_all_edges`]).
+    if !flat && let Some(made) = convex_all_edges(b, input, edges, ratios) {
+        debug(|| "a convex polyhedron's every edge, built as its inset grown".to_string());
+        FULLY_CHECKED.with(|c| *c.borrow_mut() = Some(made.0.clone()));
+        return Ok(made);
+    }
+    // Every edge of a prism's smooth top loop, upright edges of a prism of planes, or rims
+    // (circles between a plane and a cylinder about one axis) rounded by one radius: in closed
+    // form.
+    if !flat
+        && let Some(r) = uniform_radius(edges, ratios)
+        && let Some(made) = {
+            let es: Vec<usize> = edges.iter().map(|x| x.0).collect();
+            super::fillet_prism::prism_rim(b, input, &es, r)
+                .or_else(|| super::fillet_prism::prism_uprights(b, input, &es, r))
+                .or_else(|| super::fillet_prism::rims(b, input, &es, r))
+        }
+    {
+        debug(|| "a prism's rim or uprights, in closed form".to_string());
         FULLY_CHECKED.with(|c| *c.borrow_mut() = Some(made.0.clone()));
         return Ok(made);
     }

@@ -45,6 +45,16 @@ pub struct Entry {
     /// The faces that are copies of others, as the operation that made the body knows them
     /// (a pattern's: [`super::pattern`]): their mass properties and meshes are the others' moved.
     pub(crate) copies: OnceLock<Arc<super::copies::FaceCopies>>,
+    /// [`crate::Kernel::mass_properties`], worked out once (asked for its volume, area,
+    /// centroid and inertia one at a time).
+    mass: OnceLock<MassProperties>,
+    /// Each parametric face's grid for rays ([`classify::ray_hits_kept`]), made at the first
+    /// ray that reaches the face.
+    ray_grids: OnceLock<Vec<OnceLock<classify::RayGrid>>>,
+    /// The body this one is an affine map of ([`crate::Kernel::transform_affine`]), with the
+    /// map back and how far it stretches at most: a point is inside this one where its image
+    /// back is inside that one, whose surfaces are still analytic (this one's are NURBS).
+    affine_of: OnceLock<(Arc<Entry>, Affine, f64)>,
 }
 
 impl Entry {
@@ -63,6 +73,9 @@ impl Entry {
             oriented: OnceLock::new(),
             made_of: OnceLock::new(),
             copies: OnceLock::new(),
+            mass: OnceLock::new(),
+            ray_grids: OnceLock::new(),
+            affine_of: OnceLock::new(),
         }
     }
     /// [`Body::boxes`], made once.
@@ -165,6 +178,21 @@ impl NativeKernel {
     }
 
     /// The session's record of a body.
+    /// The volume of `id`'s solids where its mass properties are worked out already (a caller
+    /// measuring a body before an operation on it), else None: what an operation that checks
+    /// its result against its input's volume needn't integrate again.
+    pub(crate) fn known_volume(&self, id: BodyId) -> Option<f64> {
+        self.bodies.get(&id.0)?.mass.get().map(|m| m.volume)
+    }
+
+    /// [`Self::entry`] shared (kept by another body that refers to it).
+    pub(crate) fn entry_arc(&self, id: BodyId) -> Result<Arc<Entry>> {
+        self.bodies
+            .get(&id.0)
+            .cloned()
+            .ok_or(KernelError::UnknownBody(id))
+    }
+
     pub(crate) fn entry(&self, id: BodyId) -> Result<&Entry> {
         self.bodies
             .get(&id.0)
@@ -398,14 +426,153 @@ impl NativeKernel {
     /// scaled as much (`op`'s last argument), and the result is scaled back, its history
     /// naming the body given. The kernel's merge distances and many of its guards are lengths
     /// in mm: on a part a few microns across they are the part's own size, as in a boolean.
+    /// `op` on the body turned into the frame of its first analytic surface (where a model
+    /// moved by a rigid motion was likely drawn, its faces along the axes), the results turned
+    /// back: an operation that commutes with rigid motions, whose searches bound geometry by
+    /// axis-aligned boxes (loose round a tilted face). As given where that frame is already
+    /// along the axes.
+    fn in_own_frame(
+        &mut self,
+        body: BodyId,
+        op: impl FnOnce(&mut Self, BodyId) -> Result<OpResult>,
+    ) -> Result<OpResult> {
+        let b = Arc::clone(self.get(body)?);
+        let Some(f) = b.faces.iter().find_map(|f| f.surf.frame().copied()) else {
+            return op(self, body);
+        };
+        let aligned = |v: &V3| v.amax() > 1.0 - 1e-12;
+        if aligned(&f.x) && aligned(&f.y) && aligned(&f.z) {
+            return op(self, body);
+        }
+        let turn = Affine {
+            m: nalgebra::Matrix3::from_rows(&[f.x.transpose(), f.y.transpose(), f.z.transpose()]),
+            t: V3::zeros(),
+        };
+        let back = Affine {
+            m: turn.m.transpose(),
+            t: V3::zeros(),
+        };
+        let turned = self.insert(b.transformed(&turn));
+        if let Some(c) = self.colors.get(&body.0).cloned() {
+            self.colors.insert(turned.0, c);
+        }
+        let r = op(self, turned);
+        self.bodies.remove(&turned.0);
+        self.colors.remove(&turned.0);
+        let mut r = r?;
+        for id in &mut r.bodies {
+            let moved = self.get(*id)?.transformed(&back);
+            let colors = self.colors.remove(&id.0);
+            self.bodies.remove(&id.0);
+            *id = self.insert(moved);
+            if let Some(c) = colors {
+                self.colors.insert(id.0, c);
+            }
+        }
+        let given = |x: &mut BodyId| {
+            if *x == turned {
+                *x = body;
+            }
+        };
+        for (_, o) in &mut r.history.generated {
+            match o {
+                Origin::FromEdge { body, .. } | Origin::FromVertex { body, .. } => given(body),
+                _ => {}
+            }
+        }
+        for (_, from) in &mut r.history.modified {
+            given(&mut from.body);
+        }
+        for from in &mut r.history.deleted {
+            given(&mut from.body);
+        }
+        Ok(r)
+    }
+
+    /// `op` on copies of `bodies` mapped by `m` (a rotation scaled by a power of two, and a
+    /// shift), its results mapped back, its history naming the bodies given.
+    fn in_frame(
+        &mut self,
+        bodies: &[BodyId],
+        m: Affine,
+        op: impl FnOnce(&mut Self, &[BodyId]) -> Result<OpResult>,
+    ) -> Result<OpResult> {
+        let back = {
+            let inv =
+                m.m.try_inverse()
+                    .unwrap_or_else(nalgebra::Matrix3::identity);
+            Affine {
+                m: inv,
+                t: -(inv * m.t),
+            }
+        };
+        let mut copies = Vec::with_capacity(bodies.len());
+        for &b in bodies {
+            let moved = self.get(b)?.transformed(&m);
+            let id = self.insert(moved);
+            if let Some(c) = self.colors.get(&b.0).cloned() {
+                self.colors.insert(id.0, c);
+            }
+            copies.push(id);
+        }
+        let r = op(self, &copies);
+        for id in &copies {
+            self.bodies.remove(&id.0);
+            self.colors.remove(&id.0);
+        }
+        let mut r = r?;
+        for id in &mut r.bodies {
+            let mapped = self.get(*id)?.transformed(&back);
+            let colors = self.colors.remove(&id.0);
+            self.bodies.remove(&id.0);
+            *id = self.insert(mapped);
+            if let Some(c) = colors {
+                self.colors.insert(id.0, c);
+            }
+        }
+        let given = |x: &mut BodyId| {
+            if let Some(i) = copies.iter().position(|c| c == x) {
+                *x = bodies[i];
+            }
+        };
+        for (_, o) in &mut r.history.generated {
+            match o {
+                Origin::FromEdge { body, .. } | Origin::FromVertex { body, .. } => given(body),
+                _ => {}
+            }
+        }
+        for (_, from) in &mut r.history.modified {
+            given(&mut from.body);
+        }
+        for from in &mut r.history.deleted {
+            given(&mut from.body);
+        }
+        Ok(r)
+    }
+
     fn at_working_size(
         &mut self,
         body: BodyId,
         op: impl FnOnce(&mut Self, BodyId, f64) -> Result<OpResult>,
     ) -> Result<OpResult> {
+        self.at_size(body, false, op)
+    }
+
+    /// [`Self::at_working_size`], and with `large` a body larger than [`WORKED_LARGE`] scaled
+    /// down too (an offset's: a fillet's tuned on parts of a hundred millimetres and more are
+    /// left as they are).
+    fn at_size(
+        &mut self,
+        body: BodyId,
+        large: bool,
+        op: impl FnOnce(&mut Self, BodyId, f64) -> Result<OpResult>,
+    ) -> Result<OpResult> {
         let b = Arc::clone(self.get(body)?);
         let size = b.bbox().diagonal();
-        if !(size > 0.0 && size < super::boolean::SMALL_MODEL) {
+        if !(size > 0.0
+            && size.is_finite()
+            && (size < super::boolean::SMALL_MODEL || (large && size > WORKED_LARGE)))
+        {
             return op(self, body, 1.0);
         }
         let k = (super::boolean::WORKING_SIZE / size).log2().floor().exp2();
@@ -1164,6 +1331,11 @@ impl Kernel for NativeKernel {
 
     fn sweep_solid(&mut self, body: BodyId, motion: &SolidMotion) -> Result<OpResult> {
         super::sweep_solid::clear_declined();
+        if let Some((m, moved)) = canonical_motion(self, &[body], motion) {
+            return self.in_frame(&[body], m, |k, ids| {
+                super::sweep_cache::sweep_solid(k, ids[0], &moved)
+            });
+        }
         super::sweep_cache::sweep_solid(self, body, motion)
     }
 
@@ -1174,6 +1346,11 @@ impl Kernel for NativeKernel {
         motion: &SolidMotion,
     ) -> Result<OpResult> {
         super::sweep_solid::clear_declined();
+        if let Some((m, moved)) = canonical_motion(self, &[target, tool], motion) {
+            return self.in_frame(&[target, tool], m, |k, ids| {
+                super::sweep_solid::cut_swept(k, ids[0], ids[1], &moved)
+            });
+        }
         super::sweep_solid::cut_swept(self, target, tool, motion)
     }
 
@@ -1728,14 +1905,16 @@ impl Kernel for NativeKernel {
     }
 
     fn offset(&mut self, body: BodyId, spec: &OffsetSpec) -> Result<OpResult> {
-        self.at_working_size(body, |k, body, by| {
-            let spec = OffsetSpec {
-                distance: spec.distance * by,
-                faces: spec.faces.iter().map(|&(f, d)| (f, d * by)).collect(),
-                sharp: spec.sharp,
-            };
-            let r = super::offset::offset(k, body, &spec);
-            k.colored(r)
+        self.in_own_frame(body, |k, body| {
+            k.at_size(body, true, |k, body, by| {
+                let spec = OffsetSpec {
+                    distance: spec.distance * by,
+                    faces: spec.faces.iter().map(|&(f, d)| (f, d * by)).collect(),
+                    sharp: spec.sharp,
+                };
+                let r = super::offset::offset(k, body, &spec);
+                k.colored(r)
+            })
         })
     }
 
@@ -1840,6 +2019,25 @@ impl Kernel for NativeKernel {
         })
     }
 
+    fn chamfer_variable(&mut self, body: BodyId, laws: &[ChamferLaw]) -> Result<OpResult> {
+        dump("chamfer_variable", self.get(body)?, &format!("{laws:?}"));
+        self.at_working_size(body, |k, body, by| {
+            let scaled = |law: &[(f64, f64)]| law.iter().map(|&(t, d)| (t, d * by)).collect();
+            let laws: Vec<ChamferLaw> = laws
+                .iter()
+                .map(|l| ChamferLaw {
+                    edge: l.edge,
+                    face: l.face,
+                    first: scaled(&l.first),
+                    second: scaled(&l.second),
+                })
+                .collect();
+            let r = super::blend::chamfer_variable(k, body, &laws);
+            let r = k.dumped(&r);
+            k.colored(r)
+        })
+    }
+
     fn full_round(
         &mut self,
         body: BodyId,
@@ -1909,17 +2107,14 @@ impl Kernel for NativeKernel {
                 }
                 super::blend::chamfers_fit(&b, &sized)?;
             }
-            // A convex polyhedron's equal chamfers: its planes' polytope, built at once.
-            if let (ChamferSpec::EqualDistance(d), ChamferMeasure::Offset) =
-                (opts.spec, opts.measurement)
-            {
+            // A convex polyhedron's chamfers by distances: its planes' polytope, built at once.
+            if opts.measurement == ChamferMeasure::Offset {
                 let b = k.get(body)?.clone();
-                let ids: Vec<usize> = super::blend::real_edges(&b, edges)?
-                    .iter()
-                    .map(|e| e.0 as usize)
-                    .collect();
+                let real = super::blend::real_edges(&b, edges)?;
                 let flat = opts.corners == ChamferCorners::Flat;
-                if let Some(r) = super::convex_chamfer::chamfer(k, body, &ids, d, flat) {
+                if let Some(sized) = super::blend::chamfer_distances(&b, &real, opts)
+                    && let Some(r) = super::convex_chamfer::chamfer(k, body, &sized, flat)
+                {
                     let r = k.dumped(&r);
                     return k.colored(r);
                 }
@@ -2127,9 +2322,35 @@ impl Kernel for NativeKernel {
         m: nalgebra::Matrix3<f64>,
         t: nalgebra::Vector3<f64>,
     ) -> Result<OpResult> {
-        let b = super::affine::affine_body(self.get(body)?, &Affine { m, t })?;
+        let map = Affine { m, t };
+        let b = super::affine::affine_body(self.get(body)?, &map)?;
         let nf = b.faces.len();
+        let from = self.entry_arc(body)?;
         let id = self.insert(b);
+        // (A similarity keeps every surface's kind: nothing to gain by going back.)
+        if !super::affine::similarity(&map)
+            && let Some(inv) = m.try_inverse()
+        {
+            let back = Affine {
+                m: inv,
+                t: -(inv * t),
+            };
+            // (A map of a map goes back to the first body, the two maps back composed.)
+            let (from, back) = match from.affine_of.get() {
+                Some((first, b0, _)) => (
+                    first.clone(),
+                    Affine {
+                        m: b0.m * back.m,
+                        t: b0.m * back.t + b0.t,
+                    },
+                ),
+                None => (from, back),
+            };
+            let stretch = back.m.svd(false, false).singular_values.max();
+            if let Some(e) = self.bodies.get(&id.0) {
+                let _ = e.affine_of.set((from, back, stretch));
+            }
+        }
         let history = History {
             modified: (0..nf)
                 .map(|i| {
@@ -2259,6 +2480,14 @@ impl Kernel for NativeKernel {
 
     fn classify(&self, body: BodyId, point: Point3<f64>, tol: f64) -> Result<PointClass> {
         let e = self.entry(body)?;
+        if let Some((from, back, stretch)) = e.affine_of.get() {
+            return Ok(classify::classify_point(
+                &from.body,
+                from.polys(),
+                &back.point(&point),
+                tol * stretch,
+            ));
+        }
         Ok(classify::classify_point(&e.body, e.polys(), &point, tol))
     }
 
@@ -2270,6 +2499,18 @@ impl Kernel for NativeKernel {
     ) -> Result<Vec<PointClass>> {
         use rayon::prelude::*;
         let e = self.entry(body)?;
+        // An affine map of another body: the points mapped back, classified against it (its
+        // boundary's tolerance the map's most stretched back).
+        if let Some((from, back, stretch)) = e.affine_of.get() {
+            let back: Vec<Point3<f64>> = points.iter().map(|p| back.point(p)).collect();
+            let c = classify::Classifier::new(&from.body, from.polys());
+            let tol = tol * stretch;
+            return Ok(if super::par::threads_for(back.len(), false) {
+                back.par_iter().map(|p| c.classify(p, tol)).collect()
+            } else {
+                back.iter().map(|p| c.classify(p, tol)).collect()
+            });
+        }
         let c = classify::Classifier::new(&e.body, e.polys());
         Ok(if super::par::threads_for(points.len(), false) {
             points.par_iter().map(|p| c.classify(p, tol)).collect()
@@ -2623,7 +2864,11 @@ impl Kernel for NativeKernel {
     fn mass_properties(&self, body: BodyId) -> Result<MassProperties> {
         let t = web_time::Instant::now();
         let e = self.entry(body)?;
+        if let Some(m) = e.mass.get() {
+            return Ok(*m);
+        }
         let m = super::mass::body_mass_with(&e.body, e.copies.get().map(|c| c.as_slice()));
+        let _ = e.mass.set(m);
         slow("mass_properties", t, self.get(body)?);
         if t.elapsed().as_millis() > 500 {
             dump("slow-mass", self.get(body)?, &format!("{:?}", t.elapsed()));
@@ -2632,8 +2877,18 @@ impl Kernel for NativeKernel {
     }
 
     fn tessellate(&self, body: BodyId, quality: Tessellation) -> Result<TriMesh> {
+        self.tessellate_quality(body, quality, TessQuality::Accurate)
+    }
+
+    fn tessellate_quality(
+        &self,
+        body: BodyId,
+        quality: Tessellation,
+        mode: TessQuality,
+    ) -> Result<TriMesh> {
         let t = web_time::Instant::now();
-        let m = self.tessellate_with(body, &tess::TessParams::try_from(quality)?)?;
+        let p = tess::TessParams::try_from(quality)?.with_quality(mode);
+        let m = self.tessellate_with(body, &p)?;
         slow("tessellate", t, self.get(body)?);
         Ok(m)
     }
@@ -2770,7 +3025,19 @@ impl Kernel for NativeKernel {
     ) -> Result<Vec<RayHit>> {
         let e = self.entry(body)?;
         let d = dir.normalize();
-        let mut hits = classify::ray_hits(&e.body, e.polys(), &origin, &d);
+        let all: Vec<usize> = (0..e.body.faces.len()).collect();
+        let grids = e
+            .ray_grids
+            .get_or_init(|| (0..e.body.faces.len()).map(|_| OnceLock::new()).collect());
+        let mut hits = classify::ray_hits_kept(
+            &e.body,
+            e.polys(),
+            &all,
+            Some(e.face_boxes()),
+            Some(grids),
+            &origin,
+            &d,
+        );
         // A line through an edge (or a vertex) meets each face there: one crossing, not one per
         // face (springrep's tests/rays.rs, a ray through an edge crosses there once).
         hits.dedup_by(|a, b| (a.0 - b.0).abs() <= super::tol::POINT);
@@ -2944,6 +3211,11 @@ fn fillet_scaled(spec: &FilletSpec, by: f64) -> FilletSpec {
         profile: match spec.profile {
             FilletProfile::Thumbweight { center } => FilletProfile::Thumbweight {
                 center: center.map(|c| c * by),
+            },
+            // (The second distance is a length too.)
+            FilletProfile::Asymmetric { second, flip } => FilletProfile::Asymmetric {
+                second: second * by,
+                flip,
             },
             p => p,
         },
@@ -3127,6 +3399,168 @@ fn cylinder_turned(b: &Body) -> Option<(P3, nalgebra::Unit<V3>, f64, f64, V3)> {
         return None;
     }
     Some((base, axis, *r, height, -out.normalize()))
+}
+
+/// Bodies larger than this (mm, their box's diagonal) are offset scaled down by a power of two,
+/// as small ones are scaled up ([`NativeKernel::at_size`]): an offset's tolerances are
+/// absolute, and were tuned on parts of tens of millimetres.
+const WORKED_LARGE: f64 = 128.0;
+
+/// Bodies larger than this (mm, their boxes' longest diagonal) are swept about an axis scaled
+/// down by a power of two to under it ([`canonical_motion`]).
+const SWEPT_SIZE: f64 = 4.0;
+
+/// For a motion about one axis (a turn, a screw, a climb, or rigid turns about one axis with
+/// slides along it) whose axis isn't the z axis or whose bodies are larger than [`SWEPT_SIZE`]:
+/// the map that puts the axis on the z axis through the origin and scales them by a power of
+/// two to under that size, and the motion so mapped. The exact sweeps of a solid are made in
+/// the axis's own frame, and are sound where their parts are of an ordinary size: a ball
+/// screwed about a tilted axis, or ten times larger, was meshed where the same ball screwed
+/// about z at its own size was exact. None where the motion is already so placed.
+fn canonical_motion(
+    k: &NativeKernel,
+    bodies: &[BodyId],
+    motion: &SolidMotion,
+) -> Option<(Affine, SolidMotion)> {
+    let axis = match motion {
+        SolidMotion::Turn { axis }
+        | SolidMotion::Screw { axis, .. }
+        | SolidMotion::Climb { axis, .. } => *axis,
+        SolidMotion::Rigid { steps } => {
+            let mut axis: Option<Axis> = None;
+            for st in steps {
+                if let RigidStep::Turn { axis: a, .. } = st {
+                    match axis {
+                        None => axis = Some(*a),
+                        Some(b) => {
+                            let w = b.dir.into_inner();
+                            let off = a.origin - b.origin;
+                            if a.dir.cross(&b.dir).norm() > 1e-12
+                                || (off - w * off.dot(&w)).norm() > 1e-9 * (1.0 + off.norm())
+                            {
+                                return None;
+                            }
+                        }
+                    }
+                }
+            }
+            let axis = axis?;
+            let w = axis.dir.into_inner();
+            for st in steps {
+                if let RigidStep::Slide { from, to } = st {
+                    for v in [from, to] {
+                        if (v - w * v.dot(&w)).norm() > 1e-12 * (1.0 + v.norm()) {
+                            return None;
+                        }
+                    }
+                }
+            }
+            axis
+        }
+        _ => return None,
+    };
+    let size = bodies
+        .iter()
+        .filter_map(|b| k.get(*b).ok().map(|x| x.bbox().diagonal()))
+        .fold(0.0, f64::max);
+    if !(size > 0.0 && size.is_finite()) {
+        return None;
+    }
+    let z = V3::z();
+    let w = axis.dir.into_inner();
+    // (Turned onto z only where the motion slides along its axis, a screw's: a turn alone is
+    // exact about any axis, and a body turned onto z by a rotation in floating point loses the
+    // symmetries a turn about its own diagonal finds, a cube's spun to three faces.)
+    let slides = match motion {
+        SolidMotion::Screw { .. } | SolidMotion::Climb { .. } => true,
+        SolidMotion::Rigid { steps } => steps.iter().any(|s| matches!(s, RigidStep::Slide { .. })),
+        _ => false,
+    };
+    let tilted = slides && (w - z).norm() > 1e-15;
+    let scale = if size > SWEPT_SIZE {
+        (SWEPT_SIZE / size).log2().floor().exp2()
+    } else {
+        1.0
+    };
+    if !tilted && scale == 1.0 {
+        return None;
+    }
+    let q = if tilted {
+        nalgebra::Rotation3::rotation_between(&w, &z)
+            .unwrap_or_else(|| {
+                nalgebra::Rotation3::from_axis_angle(&V3::x_axis(), std::f64::consts::PI)
+            })
+            .into_inner()
+    } else {
+        nalgebra::Matrix3::identity()
+    };
+    // The axis's point nearest the origin goes to the origin (turned onto z), or the origin
+    // stays where it is (scaled about it).
+    let o = if tilted {
+        axis.origin - w * axis.origin.coords.dot(&w)
+    } else {
+        P3::origin()
+    };
+    let lin = q * scale;
+    let m = Affine {
+        m: lin,
+        t: -(lin * o.coords),
+    };
+    let along = |d: f64| d * scale;
+    // (A distance along the axis from its origin, mapped: the origin moved to `o`.)
+    let shift = if tilted {
+        axis.origin.coords.dot(&w)
+    } else {
+        0.0
+    };
+    let zaxis = if tilted {
+        Axis {
+            origin: P3::origin(),
+            dir: nalgebra::Unit::new_unchecked(z),
+        }
+    } else {
+        Axis {
+            origin: P3::from(axis.origin.coords * scale),
+            dir: axis.dir,
+        }
+    };
+    let moved = match motion {
+        SolidMotion::Turn { .. } => SolidMotion::Turn { axis: zaxis },
+        SolidMotion::Screw { rise, from, to, .. } => SolidMotion::Screw {
+            axis: zaxis,
+            rise: along(*rise),
+            from: along(from + shift),
+            to: along(to + shift),
+        },
+        SolidMotion::Climb { from, to, rise, .. } => {
+            // (Its rise is how far the body has moved along the axis: no position on it.)
+            let rise: Vec<f64> = rise.iter().map(|c| along(*c)).collect();
+            SolidMotion::Climb {
+                axis: zaxis,
+                from: *from,
+                to: *to,
+                rise,
+            }
+        }
+        SolidMotion::Rigid { steps } => SolidMotion::Rigid {
+            steps: steps
+                .iter()
+                .map(|st| match st {
+                    RigidStep::Turn { from, to, .. } => RigidStep::Turn {
+                        axis: zaxis,
+                        from: *from,
+                        to: *to,
+                    },
+                    RigidStep::Slide { from, to } => RigidStep::Slide {
+                        from: lin * from,
+                        to: lin * to,
+                    },
+                })
+                .collect(),
+        },
+        _ => return None,
+    };
+    Some((m, moved))
 }
 
 #[cfg(test)]

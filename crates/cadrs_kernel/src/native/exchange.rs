@@ -533,6 +533,7 @@ mod tests {
             .unwrap();
         let c = |x: f64, y: f64| hom(&Point3::new(x, y, 30.0), 1.0);
         let n = NurbsSurface {
+            screw: None,
             du: 1,
             dv: 1,
             ku: vec![0., 0., 1., 1.],
