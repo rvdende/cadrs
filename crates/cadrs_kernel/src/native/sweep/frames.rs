@@ -220,10 +220,180 @@ impl Helix {
     }
 }
 
+/// The conical spiral points lie on within `tol` (radius and height both linear in the angle
+/// about an axis): its axis first guessed from the tangents (square to their differences), then
+/// every parameter (the axis's direction and place, the radius at the start and its growth a
+/// radian, the rise a radian) refined by Gauss–Newton over the points, and the result checked
+/// at every point.
+pub(crate) fn spiral_through(pts: &[P3], tans: &[V3], tol: f64) -> Option<crate::Helix> {
+    use nalgebra::{DMatrix, DVector, SymmetricEigen};
+    let n = pts.len();
+    if n < 16 {
+        return None;
+    }
+    let mean = tans.iter().sum::<V3>() / n as f64;
+    let mut m = nalgebra::Matrix3::zeros();
+    for t in tans {
+        let d = t - mean;
+        m += d * d.transpose();
+    }
+    let e = SymmetricEigen::new(m);
+    let (imin, _) = e
+        .eigenvalues
+        .iter()
+        .enumerate()
+        .min_by(|a, b| a.1.total_cmp(b.1))?;
+    let mut a0 = e.eigenvectors.column(imin).into_owned().normalize();
+    if mean.dot(&a0) < 0.0 {
+        a0 = -a0;
+    }
+    let ex = gp_x(&a0);
+    let ey = a0.cross(&ex);
+    // The centre: the points' mean across the axis (whole turns balance about it).
+    let c0 = pts.iter().map(|p| p.coords).sum::<V3>() / n as f64;
+    let c0 = c0 - a0 * c0.dot(&a0);
+    // Parameters: tilt of the axis (two), its point across it (two), r0, k, rise c, z0.
+    let model = |q: &[f64]| -> Option<(V3, V3, V3, V3)> {
+        let a = (a0 + ex * q[0] + ey * q[1]).normalize();
+        let x = (ex - a * ex.dot(&a)).normalize();
+        let y = a.cross(&x);
+        let c = c0 + ex * q[2] + ey * q[3];
+        Some((a, x, y, c))
+    };
+    let angles = |a: V3, x: V3, y: V3, c: V3| -> Vec<f64> {
+        let mut out = Vec::with_capacity(n);
+        let mut prev: Option<f64> = None;
+        for p in pts {
+            let w = p.coords - c;
+            let mut t = w.dot(&y).atan2(w.dot(&x));
+            if let Some(pv) = prev {
+                t += ((pv - t) / std::f64::consts::TAU).round() * std::f64::consts::TAU;
+            }
+            out.push(t);
+            prev = Some(t);
+        }
+        let _ = a;
+        out
+    };
+    // Residuals at q: each point against the spiral at its own angle.
+    let resid = |q: &[f64], th: &[f64]| -> Option<DVector<f64>> {
+        let (a, x, y, c) = model(q)?;
+        let mut r = DVector::zeros(3 * n);
+        for (i, p) in pts.iter().enumerate() {
+            let t = th[i] - th[0];
+            let rho = q[4] + q[5] * t;
+            let want = c + a * (q[7] + q[6] * t) + (x * th[i].cos() + y * th[i].sin()) * rho;
+            let d = p.coords - want;
+            r[3 * i] = d.x;
+            r[3 * i + 1] = d.y;
+            r[3 * i + 2] = d.z;
+        }
+        Some(r)
+    };
+    // A start: radius and height linear in the angle about the guessed axis.
+    let (a, x, y, c) = model(&[0.0; 8])?;
+    let th = angles(a, x, y, c);
+    let span = th[n - 1] - th[0];
+    if span.abs() < 1.0 {
+        return None;
+    }
+    let rho0 = {
+        let w = pts[0].coords - c;
+        (w - a * w.dot(&a)).norm()
+    };
+    let rho1 = {
+        let w = pts[n - 1].coords - c;
+        (w - a * w.dot(&a)).norm()
+    };
+    let z0 = (pts[0].coords - c).dot(&a);
+    let z1 = (pts[n - 1].coords - c).dot(&a);
+    let mut q = vec![
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        rho0,
+        (rho1 - rho0) / span,
+        (z1 - z0) / span,
+        z0,
+    ];
+    for _ in 0..30 {
+        let (a, x, y, c) = model(&q)?;
+        let th = angles(a, x, y, c);
+        let r = resid(&q, &th)?;
+        let mut jac = DMatrix::zeros(3 * n, 8);
+        for j in 0..8 {
+            let h = 1e-7 * (1.0 + q[j].abs());
+            let mut qp = q.clone();
+            qp[j] += h;
+            let rp = resid(&qp, &th)?;
+            jac.set_column(j, &((rp - &r) / h));
+        }
+        let step = (jac.transpose() * &jac)
+            .lu()
+            .solve(&(-(jac.transpose() * &r)))?;
+        for j in 0..8 {
+            q[j] += step[j];
+        }
+        if step.norm() < 1e-14 * (1.0 + q.iter().map(|v| v.abs()).fold(0.0, f64::max)) {
+            break;
+        }
+    }
+    let (a, x, y, c) = model(&q)?;
+    let th = angles(a, x, y, c);
+    let r = resid(&q, &th)?;
+    if (0..n).any(|i| V3::new(r[3 * i], r[3 * i + 1], r[3 * i + 2]).norm() > tol) {
+        return None;
+    }
+    let span = th[n - 1] - th[0];
+    let rise = q[6] * span;
+    if rise.abs() <= tol {
+        return None;
+    }
+    let up = rise > 0.0;
+    let dir = if up { a } else { -a };
+    let start_out = x * th[0].cos() + y * th[0].sin();
+    Some(crate::Helix {
+        axis: crate::Axis {
+            origin: P3::from(c + a * q[7]),
+            dir: nalgebra::Unit::new_normalize(dir),
+        },
+        x: nalgebra::Unit::new_normalize(start_out),
+        r0: q[4],
+        r1: q[4] + q[5] * span,
+        height: rise.abs(),
+        turns: span / std::f64::consts::TAU * if up { 1.0 } else { -1.0 },
+        start_angle: 0.0,
+    })
+}
+
+/// A unit direction square to `n` (as OCCT's gp_Ax3 picks one: the spiral fit's first frame).
+fn gp_x(n: &V3) -> V3 {
+    let (a, b, c) = (n.x, n.y, n.z);
+    let (aa, ba, ca) = (a.abs(), b.abs(), c.abs());
+    let x = if ba <= aa && ba <= ca {
+        if aa > ca {
+            V3::new(-c, 0.0, a)
+        } else {
+            V3::new(c, 0.0, -a)
+        }
+    } else if aa <= ba && aa <= ca {
+        if ba > ca {
+            V3::new(0.0, -c, b)
+        } else {
+            V3::new(0.0, c, -b)
+        }
+    } else if aa > ba {
+        V3::new(-b, a, 0.0)
+    } else {
+        V3::new(b, -a, 0.0)
+    };
+    x.normalize()
+}
+
 /// The helix or conical spiral points (with their unit tangents) lie on within `tol`, as the
 /// public kind running from the first point to the last (its axis pointing the way it rises):
-/// for callers outside sweeps, a CadQuery sweep along a sampled helix. None when they don't
-/// lie on one, or it doesn't rise.
+/// [`crate::Helix::through`]. None when they don't lie on one, or it doesn't rise.
 pub(crate) fn helix_through(pts: &[P3], tans: &[V3], tol: f64) -> Option<crate::Helix> {
     let h = fit_helix(pts, tans, None, tol)?;
     let t0 = h.angle_of(&pts[0], h.th0);
