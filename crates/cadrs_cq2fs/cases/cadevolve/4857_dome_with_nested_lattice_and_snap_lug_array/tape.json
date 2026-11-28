@@ -1,0 +1,4867 @@
+{
+  "entries": [
+    {
+      "line": 56,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 1
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        20.0
+      ],
+      "kwargs": {},
+      "line": 57,
+      "op": "sphere",
+      "out": {
+        "wp": 2
+      },
+      "self": {
+        "wp": 1
+      }
+    },
+    {
+      "line": 59,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 3
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": 1.0
+      },
+      "line": 60,
+      "op": "workplane",
+      "out": {
+        "wp": 4
+      },
+      "self": {
+        "wp": 3
+      }
+    },
+    {
+      "args": [
+        40.0,
+        40.0
+      ],
+      "kwargs": {},
+      "line": 61,
+      "op": "rect",
+      "out": {
+        "wp": 5
+      },
+      "self": {
+        "wp": 4
+      }
+    },
+    {
+      "args": [
+        -21.0
+      ],
+      "kwargs": {},
+      "line": 62,
+      "op": "extrude",
+      "out": {
+        "wp": 6
+      },
+      "self": {
+        "wp": 5
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 6
+        }
+      ],
+      "kwargs": {},
+      "line": 58,
+      "op": "cut",
+      "out": {
+        "wp": 7
+      },
+      "self": {
+        "wp": 2
+      }
+    },
+    {
+      "line": 67,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 8
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        19.0
+      ],
+      "kwargs": {},
+      "line": 68,
+      "op": "sphere",
+      "out": {
+        "wp": 9
+      },
+      "self": {
+        "wp": 8
+      }
+    },
+    {
+      "line": 70,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 10
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": 1.0
+      },
+      "line": 71,
+      "op": "workplane",
+      "out": {
+        "wp": 11
+      },
+      "self": {
+        "wp": 10
+      }
+    },
+    {
+      "args": [
+        38.0,
+        38.0
+      ],
+      "kwargs": {},
+      "line": 72,
+      "op": "rect",
+      "out": {
+        "wp": 12
+      },
+      "self": {
+        "wp": 11
+      }
+    },
+    {
+      "args": [
+        -20.0
+      ],
+      "kwargs": {},
+      "line": 73,
+      "op": "extrude",
+      "out": {
+        "wp": 13
+      },
+      "self": {
+        "wp": 12
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 13
+        }
+      ],
+      "kwargs": {},
+      "line": 69,
+      "op": "cut",
+      "out": {
+        "wp": 14
+      },
+      "self": {
+        "wp": 9
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 14
+        }
+      ],
+      "kwargs": {},
+      "line": 76,
+      "op": "cut",
+      "out": {
+        "wp": 15
+      },
+      "self": {
+        "wp": 7
+      }
+    },
+    {
+      "line": 79,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 16
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        20.0
+      ],
+      "kwargs": {},
+      "line": 79,
+      "op": "circle",
+      "out": {
+        "wp": 17
+      },
+      "self": {
+        "wp": 16
+      }
+    },
+    {
+      "args": [
+        1.0
+      ],
+      "kwargs": {},
+      "line": 79,
+      "op": "extrude",
+      "out": {
+        "wp": 18
+      },
+      "self": {
+        "wp": 17
+      }
+    },
+    {
+      "line": 80,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 19
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        19.0
+      ],
+      "kwargs": {},
+      "line": 80,
+      "op": "circle",
+      "out": {
+        "wp": 20
+      },
+      "self": {
+        "wp": 19
+      }
+    },
+    {
+      "args": [
+        1.0
+      ],
+      "kwargs": {},
+      "line": 80,
+      "op": "extrude",
+      "out": {
+        "wp": 21
+      },
+      "self": {
+        "wp": 20
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 21
+        }
+      ],
+      "kwargs": {},
+      "line": 81,
+      "op": "cut",
+      "out": {
+        "wp": 22
+      },
+      "self": {
+        "wp": 18
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 22
+        }
+      ],
+      "kwargs": {},
+      "line": 83,
+      "op": "union",
+      "out": {
+        "wp": 23
+      },
+      "self": {
+        "wp": 15
+      }
+    },
+    {
+      "line": 95,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 24
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": 1.0
+      },
+      "line": 95,
+      "op": "workplane",
+      "out": {
+        "wp": 25
+      },
+      "self": {
+        "wp": 24
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          0,
+          -15.0,
+          0
+        ]
+      },
+      "line": 102,
+      "op": "transformed",
+      "out": {
+        "wp": 26
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        38.0,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 102,
+      "op": "rect",
+      "out": {
+        "wp": 27
+      },
+      "self": {
+        "wp": 26
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 102,
+      "op": "extrude",
+      "out": {
+        "wp": 28
+      },
+      "self": {
+        "wp": 27
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          0,
+          -10.0,
+          0
+        ]
+      },
+      "line": 102,
+      "op": "transformed",
+      "out": {
+        "wp": 29
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        38.0,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 102,
+      "op": "rect",
+      "out": {
+        "wp": 30
+      },
+      "self": {
+        "wp": 29
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 102,
+      "op": "extrude",
+      "out": {
+        "wp": 31
+      },
+      "self": {
+        "wp": 30
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 31
+        }
+      ],
+      "kwargs": {},
+      "line": 103,
+      "op": "union",
+      "out": {
+        "wp": 32
+      },
+      "self": {
+        "wp": 28
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          0,
+          -5.0,
+          0
+        ]
+      },
+      "line": 102,
+      "op": "transformed",
+      "out": {
+        "wp": 33
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        38.0,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 102,
+      "op": "rect",
+      "out": {
+        "wp": 34
+      },
+      "self": {
+        "wp": 33
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 102,
+      "op": "extrude",
+      "out": {
+        "wp": 35
+      },
+      "self": {
+        "wp": 34
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 35
+        }
+      ],
+      "kwargs": {},
+      "line": 103,
+      "op": "union",
+      "out": {
+        "wp": 36
+      },
+      "self": {
+        "wp": 32
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          0,
+          0.0,
+          0
+        ]
+      },
+      "line": 102,
+      "op": "transformed",
+      "out": {
+        "wp": 37
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        38.0,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 102,
+      "op": "rect",
+      "out": {
+        "wp": 38
+      },
+      "self": {
+        "wp": 37
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 102,
+      "op": "extrude",
+      "out": {
+        "wp": 39
+      },
+      "self": {
+        "wp": 38
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 39
+        }
+      ],
+      "kwargs": {},
+      "line": 103,
+      "op": "union",
+      "out": {
+        "wp": 40
+      },
+      "self": {
+        "wp": 36
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          0,
+          5.0,
+          0
+        ]
+      },
+      "line": 102,
+      "op": "transformed",
+      "out": {
+        "wp": 41
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        38.0,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 102,
+      "op": "rect",
+      "out": {
+        "wp": 42
+      },
+      "self": {
+        "wp": 41
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 102,
+      "op": "extrude",
+      "out": {
+        "wp": 43
+      },
+      "self": {
+        "wp": 42
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 43
+        }
+      ],
+      "kwargs": {},
+      "line": 103,
+      "op": "union",
+      "out": {
+        "wp": 44
+      },
+      "self": {
+        "wp": 40
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          0,
+          10.0,
+          0
+        ]
+      },
+      "line": 102,
+      "op": "transformed",
+      "out": {
+        "wp": 45
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        38.0,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 102,
+      "op": "rect",
+      "out": {
+        "wp": 46
+      },
+      "self": {
+        "wp": 45
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 102,
+      "op": "extrude",
+      "out": {
+        "wp": 47
+      },
+      "self": {
+        "wp": 46
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 47
+        }
+      ],
+      "kwargs": {},
+      "line": 103,
+      "op": "union",
+      "out": {
+        "wp": 48
+      },
+      "self": {
+        "wp": 44
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          0,
+          15.0,
+          0
+        ]
+      },
+      "line": 102,
+      "op": "transformed",
+      "out": {
+        "wp": 49
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        38.0,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 102,
+      "op": "rect",
+      "out": {
+        "wp": 50
+      },
+      "self": {
+        "wp": 49
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 102,
+      "op": "extrude",
+      "out": {
+        "wp": 51
+      },
+      "self": {
+        "wp": 50
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 51
+        }
+      ],
+      "kwargs": {},
+      "line": 103,
+      "op": "union",
+      "out": {
+        "wp": 52
+      },
+      "self": {
+        "wp": 48
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          -15.0,
+          0,
+          0
+        ]
+      },
+      "line": 110,
+      "op": "transformed",
+      "out": {
+        "wp": 53
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        38.0
+      ],
+      "kwargs": {},
+      "line": 110,
+      "op": "rect",
+      "out": {
+        "wp": 54
+      },
+      "self": {
+        "wp": 53
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 110,
+      "op": "extrude",
+      "out": {
+        "wp": 55
+      },
+      "self": {
+        "wp": 54
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          -10.0,
+          0,
+          0
+        ]
+      },
+      "line": 110,
+      "op": "transformed",
+      "out": {
+        "wp": 56
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        38.0
+      ],
+      "kwargs": {},
+      "line": 110,
+      "op": "rect",
+      "out": {
+        "wp": 57
+      },
+      "self": {
+        "wp": 56
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 110,
+      "op": "extrude",
+      "out": {
+        "wp": 58
+      },
+      "self": {
+        "wp": 57
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 58
+        }
+      ],
+      "kwargs": {},
+      "line": 111,
+      "op": "union",
+      "out": {
+        "wp": 59
+      },
+      "self": {
+        "wp": 55
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          -5.0,
+          0,
+          0
+        ]
+      },
+      "line": 110,
+      "op": "transformed",
+      "out": {
+        "wp": 60
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        38.0
+      ],
+      "kwargs": {},
+      "line": 110,
+      "op": "rect",
+      "out": {
+        "wp": 61
+      },
+      "self": {
+        "wp": 60
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 110,
+      "op": "extrude",
+      "out": {
+        "wp": 62
+      },
+      "self": {
+        "wp": 61
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 62
+        }
+      ],
+      "kwargs": {},
+      "line": 111,
+      "op": "union",
+      "out": {
+        "wp": 63
+      },
+      "self": {
+        "wp": 59
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          0.0,
+          0,
+          0
+        ]
+      },
+      "line": 110,
+      "op": "transformed",
+      "out": {
+        "wp": 64
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        38.0
+      ],
+      "kwargs": {},
+      "line": 110,
+      "op": "rect",
+      "out": {
+        "wp": 65
+      },
+      "self": {
+        "wp": 64
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 110,
+      "op": "extrude",
+      "out": {
+        "wp": 66
+      },
+      "self": {
+        "wp": 65
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 66
+        }
+      ],
+      "kwargs": {},
+      "line": 111,
+      "op": "union",
+      "out": {
+        "wp": 67
+      },
+      "self": {
+        "wp": 63
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          5.0,
+          0,
+          0
+        ]
+      },
+      "line": 110,
+      "op": "transformed",
+      "out": {
+        "wp": 68
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        38.0
+      ],
+      "kwargs": {},
+      "line": 110,
+      "op": "rect",
+      "out": {
+        "wp": 69
+      },
+      "self": {
+        "wp": 68
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 110,
+      "op": "extrude",
+      "out": {
+        "wp": 70
+      },
+      "self": {
+        "wp": 69
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 70
+        }
+      ],
+      "kwargs": {},
+      "line": 111,
+      "op": "union",
+      "out": {
+        "wp": 71
+      },
+      "self": {
+        "wp": 67
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          10.0,
+          0,
+          0
+        ]
+      },
+      "line": 110,
+      "op": "transformed",
+      "out": {
+        "wp": 72
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        38.0
+      ],
+      "kwargs": {},
+      "line": 110,
+      "op": "rect",
+      "out": {
+        "wp": 73
+      },
+      "self": {
+        "wp": 72
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 110,
+      "op": "extrude",
+      "out": {
+        "wp": 74
+      },
+      "self": {
+        "wp": 73
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 74
+        }
+      ],
+      "kwargs": {},
+      "line": 111,
+      "op": "union",
+      "out": {
+        "wp": 75
+      },
+      "self": {
+        "wp": 71
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          15.0,
+          0,
+          0
+        ]
+      },
+      "line": 110,
+      "op": "transformed",
+      "out": {
+        "wp": 76
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        38.0
+      ],
+      "kwargs": {},
+      "line": 110,
+      "op": "rect",
+      "out": {
+        "wp": 77
+      },
+      "self": {
+        "wp": 76
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 110,
+      "op": "extrude",
+      "out": {
+        "wp": 78
+      },
+      "self": {
+        "wp": 77
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 78
+        }
+      ],
+      "kwargs": {},
+      "line": 111,
+      "op": "union",
+      "out": {
+        "wp": 79
+      },
+      "self": {
+        "wp": 75
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          -15.0,
+          -10.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 80
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 81
+      },
+      "self": {
+        "wp": 80
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 82
+      },
+      "self": {
+        "wp": 81
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          -15.0,
+          -5.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 83
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 84
+      },
+      "self": {
+        "wp": 83
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 85
+      },
+      "self": {
+        "wp": 84
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 85
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 86
+      },
+      "self": {
+        "wp": 82
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          -15.0,
+          0.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 87
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 88
+      },
+      "self": {
+        "wp": 87
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 89
+      },
+      "self": {
+        "wp": 88
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 89
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 90
+      },
+      "self": {
+        "wp": 86
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          -15.0,
+          5.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 91
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 92
+      },
+      "self": {
+        "wp": 91
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 93
+      },
+      "self": {
+        "wp": 92
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 93
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 94
+      },
+      "self": {
+        "wp": 90
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          -15.0,
+          10.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 95
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 96
+      },
+      "self": {
+        "wp": 95
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 97
+      },
+      "self": {
+        "wp": 96
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 97
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 98
+      },
+      "self": {
+        "wp": 94
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          -10.0,
+          -15.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 99
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 100
+      },
+      "self": {
+        "wp": 99
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 101
+      },
+      "self": {
+        "wp": 100
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 101
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 102
+      },
+      "self": {
+        "wp": 98
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          -10.0,
+          -10.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 103
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 104
+      },
+      "self": {
+        "wp": 103
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 105
+      },
+      "self": {
+        "wp": 104
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 105
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 106
+      },
+      "self": {
+        "wp": 102
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          -10.0,
+          -5.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 107
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 108
+      },
+      "self": {
+        "wp": 107
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 109
+      },
+      "self": {
+        "wp": 108
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 109
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 110
+      },
+      "self": {
+        "wp": 106
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          -10.0,
+          0.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 111
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 112
+      },
+      "self": {
+        "wp": 111
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 113
+      },
+      "self": {
+        "wp": 112
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 113
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 114
+      },
+      "self": {
+        "wp": 110
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          -10.0,
+          5.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 115
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 116
+      },
+      "self": {
+        "wp": 115
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 117
+      },
+      "self": {
+        "wp": 116
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 117
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 118
+      },
+      "self": {
+        "wp": 114
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          -10.0,
+          10.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 119
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 120
+      },
+      "self": {
+        "wp": 119
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 121
+      },
+      "self": {
+        "wp": 120
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 121
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 122
+      },
+      "self": {
+        "wp": 118
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          -10.0,
+          15.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 123
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 124
+      },
+      "self": {
+        "wp": 123
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 125
+      },
+      "self": {
+        "wp": 124
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 125
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 126
+      },
+      "self": {
+        "wp": 122
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          -5.0,
+          -15.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 127
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 128
+      },
+      "self": {
+        "wp": 127
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 129
+      },
+      "self": {
+        "wp": 128
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 129
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 130
+      },
+      "self": {
+        "wp": 126
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          -5.0,
+          -10.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 131
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 132
+      },
+      "self": {
+        "wp": 131
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 133
+      },
+      "self": {
+        "wp": 132
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 133
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 134
+      },
+      "self": {
+        "wp": 130
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          -5.0,
+          -5.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 135
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 136
+      },
+      "self": {
+        "wp": 135
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 137
+      },
+      "self": {
+        "wp": 136
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 137
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 138
+      },
+      "self": {
+        "wp": 134
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          -5.0,
+          0.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 139
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 140
+      },
+      "self": {
+        "wp": 139
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 141
+      },
+      "self": {
+        "wp": 140
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 141
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 142
+      },
+      "self": {
+        "wp": 138
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          -5.0,
+          5.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 143
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 144
+      },
+      "self": {
+        "wp": 143
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 145
+      },
+      "self": {
+        "wp": 144
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 145
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 146
+      },
+      "self": {
+        "wp": 142
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          -5.0,
+          10.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 147
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 148
+      },
+      "self": {
+        "wp": 147
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 149
+      },
+      "self": {
+        "wp": 148
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 149
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 150
+      },
+      "self": {
+        "wp": 146
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          -5.0,
+          15.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 151
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 152
+      },
+      "self": {
+        "wp": 151
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 153
+      },
+      "self": {
+        "wp": 152
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 153
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 154
+      },
+      "self": {
+        "wp": 150
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          0.0,
+          -15.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 155
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 156
+      },
+      "self": {
+        "wp": 155
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 157
+      },
+      "self": {
+        "wp": 156
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 157
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 158
+      },
+      "self": {
+        "wp": 154
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          0.0,
+          -10.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 159
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 160
+      },
+      "self": {
+        "wp": 159
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 161
+      },
+      "self": {
+        "wp": 160
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 161
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 162
+      },
+      "self": {
+        "wp": 158
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          0.0,
+          -5.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 163
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 164
+      },
+      "self": {
+        "wp": 163
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 165
+      },
+      "self": {
+        "wp": 164
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 165
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 166
+      },
+      "self": {
+        "wp": 162
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          0.0,
+          0.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 167
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 168
+      },
+      "self": {
+        "wp": 167
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 169
+      },
+      "self": {
+        "wp": 168
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 169
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 170
+      },
+      "self": {
+        "wp": 166
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          0.0,
+          5.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 171
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 172
+      },
+      "self": {
+        "wp": 171
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 173
+      },
+      "self": {
+        "wp": 172
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 173
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 174
+      },
+      "self": {
+        "wp": 170
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          0.0,
+          10.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 175
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 176
+      },
+      "self": {
+        "wp": 175
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 177
+      },
+      "self": {
+        "wp": 176
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 177
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 178
+      },
+      "self": {
+        "wp": 174
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          0.0,
+          15.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 179
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 180
+      },
+      "self": {
+        "wp": 179
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 181
+      },
+      "self": {
+        "wp": 180
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 181
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 182
+      },
+      "self": {
+        "wp": 178
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          5.0,
+          -15.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 183
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 184
+      },
+      "self": {
+        "wp": 183
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 185
+      },
+      "self": {
+        "wp": 184
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 185
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 186
+      },
+      "self": {
+        "wp": 182
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          5.0,
+          -10.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 187
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 188
+      },
+      "self": {
+        "wp": 187
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 189
+      },
+      "self": {
+        "wp": 188
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 189
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 190
+      },
+      "self": {
+        "wp": 186
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          5.0,
+          -5.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 191
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 192
+      },
+      "self": {
+        "wp": 191
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 193
+      },
+      "self": {
+        "wp": 192
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 193
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 194
+      },
+      "self": {
+        "wp": 190
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          5.0,
+          0.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 195
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 196
+      },
+      "self": {
+        "wp": 195
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 197
+      },
+      "self": {
+        "wp": 196
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 197
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 198
+      },
+      "self": {
+        "wp": 194
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          5.0,
+          5.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 199
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 200
+      },
+      "self": {
+        "wp": 199
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 201
+      },
+      "self": {
+        "wp": 200
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 201
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 202
+      },
+      "self": {
+        "wp": 198
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          5.0,
+          10.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 203
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 204
+      },
+      "self": {
+        "wp": 203
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 205
+      },
+      "self": {
+        "wp": 204
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 205
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 206
+      },
+      "self": {
+        "wp": 202
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          5.0,
+          15.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 207
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 208
+      },
+      "self": {
+        "wp": 207
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 209
+      },
+      "self": {
+        "wp": 208
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 209
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 210
+      },
+      "self": {
+        "wp": 206
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          10.0,
+          -15.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 211
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 212
+      },
+      "self": {
+        "wp": 211
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 213
+      },
+      "self": {
+        "wp": 212
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 213
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 214
+      },
+      "self": {
+        "wp": 210
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          10.0,
+          -10.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 215
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 216
+      },
+      "self": {
+        "wp": 215
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 217
+      },
+      "self": {
+        "wp": 216
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 217
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 218
+      },
+      "self": {
+        "wp": 214
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          10.0,
+          -5.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 219
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 220
+      },
+      "self": {
+        "wp": 219
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 221
+      },
+      "self": {
+        "wp": 220
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 221
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 222
+      },
+      "self": {
+        "wp": 218
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          10.0,
+          0.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 223
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 224
+      },
+      "self": {
+        "wp": 223
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 225
+      },
+      "self": {
+        "wp": 224
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 225
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 226
+      },
+      "self": {
+        "wp": 222
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          10.0,
+          5.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 227
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 228
+      },
+      "self": {
+        "wp": 227
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 229
+      },
+      "self": {
+        "wp": 228
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 229
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 230
+      },
+      "self": {
+        "wp": 226
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          10.0,
+          10.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 231
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 232
+      },
+      "self": {
+        "wp": 231
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 233
+      },
+      "self": {
+        "wp": 232
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 233
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 234
+      },
+      "self": {
+        "wp": 230
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          10.0,
+          15.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 235
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 236
+      },
+      "self": {
+        "wp": 235
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 237
+      },
+      "self": {
+        "wp": 236
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 237
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 238
+      },
+      "self": {
+        "wp": 234
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          15.0,
+          -10.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 239
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 240
+      },
+      "self": {
+        "wp": 239
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 241
+      },
+      "self": {
+        "wp": 240
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 241
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 242
+      },
+      "self": {
+        "wp": 238
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          15.0,
+          -5.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 243
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 244
+      },
+      "self": {
+        "wp": 243
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 245
+      },
+      "self": {
+        "wp": 244
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 245
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 246
+      },
+      "self": {
+        "wp": 242
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          15.0,
+          0.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 247
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 248
+      },
+      "self": {
+        "wp": 247
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 249
+      },
+      "self": {
+        "wp": 248
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 249
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 250
+      },
+      "self": {
+        "wp": 246
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          15.0,
+          5.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 251
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 252
+      },
+      "self": {
+        "wp": 251
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 253
+      },
+      "self": {
+        "wp": 252
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 253
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 254
+      },
+      "self": {
+        "wp": 250
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          15.0,
+          10.0,
+          0
+        ]
+      },
+      "line": 122,
+      "op": "transformed",
+      "out": {
+        "wp": 255
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.5,
+        0.5
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "rect",
+      "out": {
+        "wp": 256
+      },
+      "self": {
+        "wp": 255
+      }
+    },
+    {
+      "args": [
+        18.0
+      ],
+      "kwargs": {},
+      "line": 122,
+      "op": "extrude",
+      "out": {
+        "wp": 257
+      },
+      "self": {
+        "wp": 256
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 257
+        }
+      ],
+      "kwargs": {},
+      "line": 123,
+      "op": "union",
+      "out": {
+        "wp": 258
+      },
+      "self": {
+        "wp": 254
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 79
+        }
+      ],
+      "kwargs": {},
+      "line": 130,
+      "op": "union",
+      "out": {
+        "wp": 259
+      },
+      "self": {
+        "wp": 52
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 258
+        }
+      ],
+      "kwargs": {},
+      "line": 132,
+      "op": "union",
+      "out": {
+        "wp": 260
+      },
+      "self": {
+        "wp": 259
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 14
+        }
+      ],
+      "kwargs": {},
+      "line": 136,
+      "op": "intersect",
+      "out": {
+        "wp": 261
+      },
+      "self": {
+        "wp": 260
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 261
+        }
+      ],
+      "kwargs": {},
+      "line": 137,
+      "op": "union",
+      "out": {
+        "wp": 262
+      },
+      "self": {
+        "wp": 23
+      }
+    },
+    {
+      "line": 145,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 263
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          20.0,
+          0,
+          0.0
+        ],
+        "rotate": [
+          0,
+          0,
+          0.0
+        ]
+      },
+      "line": 146,
+      "op": "transformed",
+      "out": {
+        "wp": 264
+      },
+      "self": {
+        "wp": 263
+      }
+    },
+    {
+      "args": [
+        2.0,
+        1.0,
+        1.0
+      ],
+      "kwargs": {
+        "centered": [
+          false,
+          true,
+          false
+        ]
+      },
+      "line": 147,
+      "op": "box",
+      "out": {
+        "wp": 265
+      },
+      "self": {
+        "wp": 264
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {},
+      "line": 150,
+      "op": "edges",
+      "out": {
+        "wp": 266
+      },
+      "self": {
+        "wp": 265
+      }
+    },
+    {
+      "args": [
+        0.2
+      ],
+      "kwargs": {},
+      "line": 150,
+      "op": "fillet",
+      "out": {
+        "wp": 267
+      },
+      "self": {
+        "wp": 266
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 267
+        }
+      ],
+      "kwargs": {},
+      "line": 151,
+      "op": "union",
+      "out": {
+        "wp": 268
+      },
+      "self": {
+        "wp": 262
+      }
+    },
+    {
+      "line": 145,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 269
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          20.0,
+          0,
+          0.0
+        ],
+        "rotate": [
+          0,
+          0,
+          60.0
+        ]
+      },
+      "line": 146,
+      "op": "transformed",
+      "out": {
+        "wp": 270
+      },
+      "self": {
+        "wp": 269
+      }
+    },
+    {
+      "args": [
+        2.0,
+        1.0,
+        1.0
+      ],
+      "kwargs": {
+        "centered": [
+          false,
+          true,
+          false
+        ]
+      },
+      "line": 147,
+      "op": "box",
+      "out": {
+        "wp": 271
+      },
+      "self": {
+        "wp": 270
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {},
+      "line": 150,
+      "op": "edges",
+      "out": {
+        "wp": 272
+      },
+      "self": {
+        "wp": 271
+      }
+    },
+    {
+      "args": [
+        0.2
+      ],
+      "kwargs": {},
+      "line": 150,
+      "op": "fillet",
+      "out": {
+        "wp": 273
+      },
+      "self": {
+        "wp": 272
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 273
+        }
+      ],
+      "kwargs": {},
+      "line": 151,
+      "op": "union",
+      "out": {
+        "wp": 274
+      },
+      "self": {
+        "wp": 268
+      }
+    },
+    {
+      "line": 145,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 275
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          20.0,
+          0,
+          0.0
+        ],
+        "rotate": [
+          0,
+          0,
+          120.0
+        ]
+      },
+      "line": 146,
+      "op": "transformed",
+      "out": {
+        "wp": 276
+      },
+      "self": {
+        "wp": 275
+      }
+    },
+    {
+      "args": [
+        2.0,
+        1.0,
+        1.0
+      ],
+      "kwargs": {
+        "centered": [
+          false,
+          true,
+          false
+        ]
+      },
+      "line": 147,
+      "op": "box",
+      "out": {
+        "wp": 277
+      },
+      "self": {
+        "wp": 276
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {},
+      "line": 150,
+      "op": "edges",
+      "out": {
+        "wp": 278
+      },
+      "self": {
+        "wp": 277
+      }
+    },
+    {
+      "args": [
+        0.2
+      ],
+      "kwargs": {},
+      "line": 150,
+      "op": "fillet",
+      "out": {
+        "wp": 279
+      },
+      "self": {
+        "wp": 278
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 279
+        }
+      ],
+      "kwargs": {},
+      "line": 151,
+      "op": "union",
+      "out": {
+        "wp": 280
+      },
+      "self": {
+        "wp": 274
+      }
+    },
+    {
+      "line": 145,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 281
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          20.0,
+          0,
+          0.0
+        ],
+        "rotate": [
+          0,
+          0,
+          180.0
+        ]
+      },
+      "line": 146,
+      "op": "transformed",
+      "out": {
+        "wp": 282
+      },
+      "self": {
+        "wp": 281
+      }
+    },
+    {
+      "args": [
+        2.0,
+        1.0,
+        1.0
+      ],
+      "kwargs": {
+        "centered": [
+          false,
+          true,
+          false
+        ]
+      },
+      "line": 147,
+      "op": "box",
+      "out": {
+        "wp": 283
+      },
+      "self": {
+        "wp": 282
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {},
+      "line": 150,
+      "op": "edges",
+      "out": {
+        "wp": 284
+      },
+      "self": {
+        "wp": 283
+      }
+    },
+    {
+      "args": [
+        0.2
+      ],
+      "kwargs": {},
+      "line": 150,
+      "op": "fillet",
+      "out": {
+        "wp": 285
+      },
+      "self": {
+        "wp": 284
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 285
+        }
+      ],
+      "kwargs": {},
+      "line": 151,
+      "op": "union",
+      "out": {
+        "wp": 286
+      },
+      "self": {
+        "wp": 280
+      }
+    },
+    {
+      "line": 145,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 287
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          20.0,
+          0,
+          0.0
+        ],
+        "rotate": [
+          0,
+          0,
+          240.0
+        ]
+      },
+      "line": 146,
+      "op": "transformed",
+      "out": {
+        "wp": 288
+      },
+      "self": {
+        "wp": 287
+      }
+    },
+    {
+      "args": [
+        2.0,
+        1.0,
+        1.0
+      ],
+      "kwargs": {
+        "centered": [
+          false,
+          true,
+          false
+        ]
+      },
+      "line": 147,
+      "op": "box",
+      "out": {
+        "wp": 289
+      },
+      "self": {
+        "wp": 288
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {},
+      "line": 150,
+      "op": "edges",
+      "out": {
+        "wp": 290
+      },
+      "self": {
+        "wp": 289
+      }
+    },
+    {
+      "args": [
+        0.2
+      ],
+      "kwargs": {},
+      "line": 150,
+      "op": "fillet",
+      "out": {
+        "wp": 291
+      },
+      "self": {
+        "wp": 290
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 291
+        }
+      ],
+      "kwargs": {},
+      "line": 151,
+      "op": "union",
+      "out": {
+        "wp": 292
+      },
+      "self": {
+        "wp": 286
+      }
+    },
+    {
+      "line": 145,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 293
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          20.0,
+          0,
+          0.0
+        ],
+        "rotate": [
+          0,
+          0,
+          300.0
+        ]
+      },
+      "line": 146,
+      "op": "transformed",
+      "out": {
+        "wp": 294
+      },
+      "self": {
+        "wp": 293
+      }
+    },
+    {
+      "args": [
+        2.0,
+        1.0,
+        1.0
+      ],
+      "kwargs": {
+        "centered": [
+          false,
+          true,
+          false
+        ]
+      },
+      "line": 147,
+      "op": "box",
+      "out": {
+        "wp": 295
+      },
+      "self": {
+        "wp": 294
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {},
+      "line": 150,
+      "op": "edges",
+      "out": {
+        "wp": 296
+      },
+      "self": {
+        "wp": 295
+      }
+    },
+    {
+      "args": [
+        0.2
+      ],
+      "kwargs": {},
+      "line": 150,
+      "op": "fillet",
+      "out": {
+        "wp": 297
+      },
+      "self": {
+        "wp": 296
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 297
+        }
+      ],
+      "kwargs": {},
+      "line": 151,
+      "op": "union",
+      "out": {
+        "wp": 298
+      },
+      "self": {
+        "wp": 292
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {},
+      "line": 154,
+      "op": "combine",
+      "out": {
+        "wp": 299
+      },
+      "self": {
+        "wp": 298
+      }
+    }
+  ],
+  "guarded": false,
+  "i": 4857,
+  "name": "dome_with_nested_lattice_and_snap_lug_array",
+  "result": {
+    "wp": 299
+  },
+  "status": "ok"
+}

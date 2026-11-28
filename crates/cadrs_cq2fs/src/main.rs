@@ -10,7 +10,8 @@
 //! cq2fs emit <set.json> <i>                     one case's FeatureScript, as a lambda running it
 //! cq2fs serve <set.json> [--batch 4] [--rerun] [--only i,j] [--host test_shell] [--port 8766]
 //!                                               job server for the Onshape tab: writes parasolid.json
-//! cq2fs cadrs <set.json> [--out <results.jsonl>] run the set on cadrs's CadQuery (crates/cadrs_py)
+//! cq2fs cadrs <set.json> [--out f] [--tolerance parasolid|<mm>]
+//!                                               run the set on cadrs's CadQuery (crates/cadrs_py)
 //! cq2fs compare <set.json> [--cadrs <results.jsonl>] [--out report.json]
 //! cq2fs steps <set.json> <i>                    each Workplane call's solids and volume, Parasolid
 //!                                               beside cadrs, and where they first differ

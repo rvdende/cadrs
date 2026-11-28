@@ -1,0 +1,41 @@
+{
+  "adopted": true,
+  "at": 11,
+  "err": "{ customMessage : cq: Cannot build face(s): wires not planar , message : CUSTOM_ERROR }",
+  "evaluated": 1795850430,
+  "guarded_steps": [
+    89,
+    90
+  ],
+  "i": 2142,
+  "log": [
+    {
+      "id": 3,
+      "msg": {
+        "solids": 1,
+        "vol": 21991.14857512855
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 6,
+      "msg": {
+        "solids": 1,
+        "vol": 16210.618092523338
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 7,
+      "msg": {
+        "solids": 1,
+        "vol": 5780.530482605214
+      },
+      "op": "cut"
+    }
+  ],
+  "script": "07fbd76f4b96c525",
+  "source": "Onshape evalFeatureScript (Parasolid), case.fs",
+  "status": "error",
+  "warn": []
+}

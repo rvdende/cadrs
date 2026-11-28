@@ -2135,6 +2135,11 @@ fn check_overlaps(b: &Body, edges: &[EdgeBlend]) -> Result<()> {
                                 .iter()
                                 .any(|p| in_strip(ei, fi, fwd_i, ai, p)))
                     {
+                        if crate::native::env_flag!("CADRS_BLEND_DEBUG") {
+                            eprintln!(
+                                "blend: edges {ei} and {ej} overlap on face {fi}: {d} apart, setbacks {ai} + {aj}"
+                            );
+                        }
                         return Err(KernelError::TooLarge { op: "blend", why: "the blends of two edges overlap: the size is too large for the face between them".into() });
                     }
                 }

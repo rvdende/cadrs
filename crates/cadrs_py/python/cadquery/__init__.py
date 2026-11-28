@@ -18,6 +18,8 @@ from ._cadrs import (
     wiresToFaces,
     sortWiresByBuildOrder,
     edgesToWires,
+    set_tolerance,
+    tolerance,
 )
 from ._extra import Matrix, Assembly, Sketch, Color
 from . import selectors, occ_impl, exporters, importers

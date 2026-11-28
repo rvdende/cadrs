@@ -1,0 +1,1067 @@
+{
+  "adopted": true,
+  "area": 2464.0313282208317,
+  "bbox": [
+    -7.5,
+    -7.5,
+    0,
+    7.5,
+    7.5,
+    20.000000000000004
+  ],
+  "edges": 837,
+  "evaluated": 1795850834,
+  "faces": 284,
+  "guarded_steps": [],
+  "i": 5080,
+  "log": [
+    {
+      "id": 3,
+      "msg": {
+        "solids": 1,
+        "vol": 3078.760800517997
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 7,
+      "msg": {
+        "solids": 1,
+        "vol": 1507.9644737231
+      },
+      "op": "cutThruAll"
+    },
+    {
+      "id": 10,
+      "msg": {
+        "solids": 1,
+        "vol": 9.999999999999998
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 12,
+      "msg": {
+        "solids": 1,
+        "vol": 9.90133333333333
+      },
+      "op": "chamfer"
+    },
+    {
+      "id": 14,
+      "msg": {
+        "solids": 1,
+        "vol": 8.388386011405501
+      },
+      "op": "fillet"
+    },
+    {
+      "id": 15,
+      "msg": {
+        "solids": 1,
+        "vol": 8.38838601140552
+      },
+      "op": "translate"
+    },
+    {
+      "id": 16,
+      "msg": {
+        "solids": 1,
+        "vol": 8.388386011405519
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 17,
+      "msg": {
+        "solids": 1,
+        "vol": 1516.360135124899
+      },
+      "op": "union"
+    },
+    {
+      "id": 20,
+      "msg": {
+        "solids": 1,
+        "vol": 9.999999999999998
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 22,
+      "msg": {
+        "solids": 1,
+        "vol": 9.901333333333334
+      },
+      "op": "chamfer"
+    },
+    {
+      "id": 24,
+      "msg": {
+        "solids": 1,
+        "vol": 8.388386011405501
+      },
+      "op": "fillet"
+    },
+    {
+      "id": 25,
+      "msg": {
+        "solids": 1,
+        "vol": 8.38838601140552
+      },
+      "op": "translate"
+    },
+    {
+      "id": 26,
+      "msg": {
+        "solids": 1,
+        "vol": 8.388386011405432
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 27,
+      "msg": {
+        "solids": 1,
+        "vol": 1524.7532502606616
+      },
+      "op": "union"
+    },
+    {
+      "id": 30,
+      "msg": {
+        "solids": 1,
+        "vol": 9.999999999999998
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 32,
+      "msg": {
+        "solids": 1,
+        "vol": 9.901333333333332
+      },
+      "op": "chamfer"
+    },
+    {
+      "id": 34,
+      "msg": {
+        "solids": 1,
+        "vol": 8.3883860114055
+      },
+      "op": "fillet"
+    },
+    {
+      "id": 35,
+      "msg": {
+        "solids": 1,
+        "vol": 8.38838601140552
+      },
+      "op": "translate"
+    },
+    {
+      "id": 36,
+      "msg": {
+        "solids": 1,
+        "vol": 8.3883860114055
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 37,
+      "msg": {
+        "solids": 1,
+        "vol": 1533.1464231671396
+      },
+      "op": "union"
+    },
+    {
+      "id": 40,
+      "msg": {
+        "solids": 1,
+        "vol": 9.999999999999998
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 42,
+      "msg": {
+        "solids": 1,
+        "vol": 9.901333333333332
+      },
+      "op": "chamfer"
+    },
+    {
+      "id": 44,
+      "msg": {
+        "solids": 1,
+        "vol": 8.388386011405501
+      },
+      "op": "fillet"
+    },
+    {
+      "id": 45,
+      "msg": {
+        "solids": 1,
+        "vol": 8.38838601140552
+      },
+      "op": "translate"
+    },
+    {
+      "id": 46,
+      "msg": {
+        "solids": 1,
+        "vol": 8.388386011405524
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 47,
+      "msg": {
+        "solids": 1,
+        "vol": 1541.53965197747
+      },
+      "op": "union"
+    },
+    {
+      "id": 50,
+      "msg": {
+        "solids": 1,
+        "vol": 9.999999999999998
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 52,
+      "msg": {
+        "solids": 1,
+        "vol": 9.901333333333335
+      },
+      "op": "chamfer"
+    },
+    {
+      "id": 54,
+      "msg": {
+        "solids": 1,
+        "vol": 8.3883860114055
+      },
+      "op": "fillet"
+    },
+    {
+      "id": 55,
+      "msg": {
+        "solids": 1,
+        "vol": 8.38838601140552
+      },
+      "op": "translate"
+    },
+    {
+      "id": 56,
+      "msg": {
+        "solids": 1,
+        "vol": 8.388386011405546
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 57,
+      "msg": {
+        "solids": 1,
+        "vol": 1549.9322407327788
+      },
+      "op": "union"
+    },
+    {
+      "id": 60,
+      "msg": {
+        "solids": 1,
+        "vol": 9.999999999999998
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 62,
+      "msg": {
+        "solids": 1,
+        "vol": 9.901333333333332
+      },
+      "op": "chamfer"
+    },
+    {
+      "id": 64,
+      "msg": {
+        "solids": 1,
+        "vol": 8.3883860114055
+      },
+      "op": "fillet"
+    },
+    {
+      "id": 65,
+      "msg": {
+        "solids": 1,
+        "vol": 8.38838601140552
+      },
+      "op": "translate"
+    },
+    {
+      "id": 66,
+      "msg": {
+        "solids": 1,
+        "vol": 8.38838601140544
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 67,
+      "msg": {
+        "solids": 1,
+        "vol": 1558.3254578550489
+      },
+      "op": "union"
+    },
+    {
+      "id": 70,
+      "msg": {
+        "solids": 1,
+        "vol": 9.999999999999998
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 72,
+      "msg": {
+        "solids": 1,
+        "vol": 9.901333333333332
+      },
+      "op": "chamfer"
+    },
+    {
+      "id": 74,
+      "msg": {
+        "solids": 1,
+        "vol": 8.388386011405501
+      },
+      "op": "fillet"
+    },
+    {
+      "id": 75,
+      "msg": {
+        "solids": 1,
+        "vol": 8.38838601140552
+      },
+      "op": "translate"
+    },
+    {
+      "id": 76,
+      "msg": {
+        "solids": 1,
+        "vol": 8.3883860114055
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 77,
+      "msg": {
+        "solids": 1,
+        "vol": 1566.718819208019
+      },
+      "op": "union"
+    },
+    {
+      "id": 80,
+      "msg": {
+        "solids": 1,
+        "vol": 9.999999999999998
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 82,
+      "msg": {
+        "solids": 1,
+        "vol": 9.901333333333332
+      },
+      "op": "chamfer"
+    },
+    {
+      "id": 84,
+      "msg": {
+        "solids": 1,
+        "vol": 8.388386011405501
+      },
+      "op": "fillet"
+    },
+    {
+      "id": 85,
+      "msg": {
+        "solids": 1,
+        "vol": 8.38838601140552
+      },
+      "op": "translate"
+    },
+    {
+      "id": 86,
+      "msg": {
+        "solids": 1,
+        "vol": 8.388386011405533
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 87,
+      "msg": {
+        "solids": 1,
+        "vol": 1575.112345377722
+      },
+      "op": "union"
+    },
+    {
+      "id": 90,
+      "msg": {
+        "solids": 1,
+        "vol": 9.999999999999998
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 92,
+      "msg": {
+        "solids": 1,
+        "vol": 9.901333333333335
+      },
+      "op": "chamfer"
+    },
+    {
+      "id": 94,
+      "msg": {
+        "solids": 1,
+        "vol": 8.3883860114055
+      },
+      "op": "fillet"
+    },
+    {
+      "id": 95,
+      "msg": {
+        "solids": 1,
+        "vol": 8.38838601140552
+      },
+      "op": "translate"
+    },
+    {
+      "id": 96,
+      "msg": {
+        "solids": 1,
+        "vol": 8.388386011405519
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 97,
+      "msg": {
+        "solids": 1,
+        "vol": 1583.5060476922915
+      },
+      "op": "union"
+    },
+    {
+      "id": 100,
+      "msg": {
+        "solids": 1,
+        "vol": 9.999999999999998
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 102,
+      "msg": {
+        "solids": 1,
+        "vol": 9.901333333333332
+      },
+      "op": "chamfer"
+    },
+    {
+      "id": 104,
+      "msg": {
+        "solids": 1,
+        "vol": 8.388386011405501
+      },
+      "op": "fillet"
+    },
+    {
+      "id": 105,
+      "msg": {
+        "solids": 1,
+        "vol": 8.388386011405522
+      },
+      "op": "translate"
+    },
+    {
+      "id": 106,
+      "msg": {
+        "solids": 1,
+        "vol": 8.388386011405448
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 107,
+      "msg": {
+        "solids": 1,
+        "vol": 1591.8995110317703
+      },
+      "op": "union"
+    },
+    {
+      "id": 110,
+      "msg": {
+        "solids": 1,
+        "vol": 9.999999999999998
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 112,
+      "msg": {
+        "solids": 1,
+        "vol": 9.901333333333332
+      },
+      "op": "chamfer"
+    },
+    {
+      "id": 114,
+      "msg": {
+        "solids": 1,
+        "vol": 8.3883860114055
+      },
+      "op": "fillet"
+    },
+    {
+      "id": 115,
+      "msg": {
+        "solids": 1,
+        "vol": 8.38838601140552
+      },
+      "op": "translate"
+    },
+    {
+      "id": 116,
+      "msg": {
+        "solids": 1,
+        "vol": 8.388386011405542
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 117,
+      "msg": {
+        "solids": 1,
+        "vol": 1600.2930608312354
+      },
+      "op": "union"
+    },
+    {
+      "id": 120,
+      "msg": {
+        "solids": 1,
+        "vol": 9.999999999999998
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 122,
+      "msg": {
+        "solids": 1,
+        "vol": 9.901333333333332
+      },
+      "op": "chamfer"
+    },
+    {
+      "id": 124,
+      "msg": {
+        "solids": 1,
+        "vol": 8.388386011405501
+      },
+      "op": "fillet"
+    },
+    {
+      "id": 125,
+      "msg": {
+        "solids": 1,
+        "vol": 8.38838601140552
+      },
+      "op": "translate"
+    },
+    {
+      "id": 126,
+      "msg": {
+        "solids": 1,
+        "vol": 8.388386011405562
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 127,
+      "msg": {
+        "solids": 1,
+        "vol": 1608.686714131902
+      },
+      "op": "union"
+    },
+    {
+      "id": 130,
+      "msg": {
+        "solids": 1,
+        "vol": 9.999999999999998
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 132,
+      "msg": {
+        "solids": 1,
+        "vol": 9.901333333333332
+      },
+      "op": "chamfer"
+    },
+    {
+      "id": 134,
+      "msg": {
+        "solids": 1,
+        "vol": 8.3883860114055
+      },
+      "op": "fillet"
+    },
+    {
+      "id": 135,
+      "msg": {
+        "solids": 1,
+        "vol": 8.38838601140552
+      },
+      "op": "translate"
+    },
+    {
+      "id": 136,
+      "msg": {
+        "solids": 1,
+        "vol": 8.388386011405542
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 137,
+      "msg": {
+        "solids": 1,
+        "vol": 1617.0808329081824
+      },
+      "op": "union"
+    },
+    {
+      "id": 140,
+      "msg": {
+        "solids": 1,
+        "vol": 9.999999999999998
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 142,
+      "msg": {
+        "solids": 1,
+        "vol": 9.901333333333332
+      },
+      "op": "chamfer"
+    },
+    {
+      "id": 144,
+      "msg": {
+        "solids": 1,
+        "vol": 8.388386011405501
+      },
+      "op": "fillet"
+    },
+    {
+      "id": 145,
+      "msg": {
+        "solids": 1,
+        "vol": 8.38838601140552
+      },
+      "op": "translate"
+    },
+    {
+      "id": 146,
+      "msg": {
+        "solids": 1,
+        "vol": 8.388386011405432
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 147,
+      "msg": {
+        "solids": 1,
+        "vol": 1625.4741942611545
+      },
+      "op": "union"
+    },
+    {
+      "id": 150,
+      "msg": {
+        "solids": 1,
+        "vol": 9.999999999999998
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 152,
+      "msg": {
+        "solids": 1,
+        "vol": 9.901333333333332
+      },
+      "op": "chamfer"
+    },
+    {
+      "id": 154,
+      "msg": {
+        "solids": 1,
+        "vol": 8.3883860114055
+      },
+      "op": "fillet"
+    },
+    {
+      "id": 155,
+      "msg": {
+        "solids": 1,
+        "vol": 8.38838601140552
+      },
+      "op": "translate"
+    },
+    {
+      "id": 156,
+      "msg": {
+        "solids": 1,
+        "vol": 8.388386011405498
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 157,
+      "msg": {
+        "solids": 1,
+        "vol": 1633.8675556141247
+      },
+      "op": "union"
+    },
+    {
+      "id": 160,
+      "msg": {
+        "solids": 1,
+        "vol": 9.999999999999998
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 162,
+      "msg": {
+        "solids": 1,
+        "vol": 9.901333333333332
+      },
+      "op": "chamfer"
+    },
+    {
+      "id": 164,
+      "msg": {
+        "solids": 1,
+        "vol": 8.3883860114055
+      },
+      "op": "fillet"
+    },
+    {
+      "id": 165,
+      "msg": {
+        "solids": 1,
+        "vol": 8.388386011405522
+      },
+      "op": "translate"
+    },
+    {
+      "id": 166,
+      "msg": {
+        "solids": 1,
+        "vol": 8.388386011405538
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 167,
+      "msg": {
+        "solids": 1,
+        "vol": 1642.263444908403
+      },
+      "op": "union"
+    },
+    {
+      "id": 170,
+      "msg": {
+        "solids": 1,
+        "vol": 30
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 171,
+      "msg": {
+        "solids": 1,
+        "vol": 30
+      },
+      "op": "translate"
+    },
+    {
+      "id": 172,
+      "msg": {
+        "solids": 1,
+        "vol": 29.999999999999993
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 173,
+      "msg": {
+        "solids": 1,
+        "vol": 1622.2357484965005
+      },
+      "op": "cut"
+    },
+    {
+      "id": 176,
+      "msg": {
+        "solids": 1,
+        "vol": 30
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 177,
+      "msg": {
+        "solids": 1,
+        "vol": 29.999999999999993
+      },
+      "op": "translate"
+    },
+    {
+      "id": 178,
+      "msg": {
+        "solids": 1,
+        "vol": 29.999999999999993
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 179,
+      "msg": {
+        "solids": 1,
+        "vol": 1602.2080520845975
+      },
+      "op": "cut"
+    },
+    {
+      "id": 182,
+      "msg": {
+        "solids": 1,
+        "vol": 30
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 183,
+      "msg": {
+        "solids": 1,
+        "vol": 29.999999999999993
+      },
+      "op": "translate"
+    },
+    {
+      "id": 184,
+      "msg": {
+        "solids": 1,
+        "vol": 29.999999999999993
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 185,
+      "msg": {
+        "solids": 1,
+        "vol": 1582.1803556726952
+      },
+      "op": "cut"
+    },
+    {
+      "id": 188,
+      "msg": {
+        "solids": 1,
+        "vol": 30
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 189,
+      "msg": {
+        "solids": 1,
+        "vol": 29.999999999999993
+      },
+      "op": "translate"
+    },
+    {
+      "id": 190,
+      "msg": {
+        "solids": 1,
+        "vol": 29.999999999999993
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 191,
+      "msg": {
+        "solids": 1,
+        "vol": 1562.1526592607925
+      },
+      "op": "cut"
+    },
+    {
+      "id": 194,
+      "msg": {
+        "solids": 1,
+        "vol": 30
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 195,
+      "msg": {
+        "solids": 1,
+        "vol": 29.999999999999993
+      },
+      "op": "translate"
+    },
+    {
+      "id": 196,
+      "msg": {
+        "solids": 1,
+        "vol": 29.999999999999993
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 197,
+      "msg": {
+        "solids": 1,
+        "vol": 1542.12496284889
+      },
+      "op": "cut"
+    },
+    {
+      "id": 200,
+      "msg": {
+        "solids": 1,
+        "vol": 30
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 201,
+      "msg": {
+        "solids": 1,
+        "vol": 29.999999999999993
+      },
+      "op": "translate"
+    },
+    {
+      "id": 202,
+      "msg": {
+        "solids": 1,
+        "vol": 30.000000000000007
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 203,
+      "msg": {
+        "solids": 1,
+        "vol": 1522.0972664369876
+      },
+      "op": "cut"
+    },
+    {
+      "id": 206,
+      "msg": {
+        "solids": 1,
+        "vol": 30
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 207,
+      "msg": {
+        "solids": 1,
+        "vol": 29.999999999999993
+      },
+      "op": "translate"
+    },
+    {
+      "id": 208,
+      "msg": {
+        "solids": 1,
+        "vol": 30
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 209,
+      "msg": {
+        "solids": 1,
+        "vol": 1502.0695700250849
+      },
+      "op": "cut"
+    },
+    {
+      "id": 212,
+      "msg": {
+        "solids": 1,
+        "vol": 30
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 213,
+      "msg": {
+        "solids": 1,
+        "vol": 30
+      },
+      "op": "translate"
+    },
+    {
+      "id": 214,
+      "msg": {
+        "solids": 1,
+        "vol": 29.999999999999993
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 215,
+      "msg": {
+        "solids": 1,
+        "vol": 1482.0418736131835
+      },
+      "op": "cut"
+    }
+  ],
+  "other": [],
+  "script": "0ed9d4f1a3f31cdf",
+  "solids": 1,
+  "source": "Onshape evalFeatureScript (Parasolid), case.fs",
+  "status": "ok",
+  "vertices": 545,
+  "vol": 1482.0419647412305,
+  "warn": []
+}

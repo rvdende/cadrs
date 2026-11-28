@@ -1,4 +1,5 @@
 {
+  "adopted": true,
   "area": 536.4575391021078,
   "bbox": [
     -8.603246797557787,
@@ -56,6 +57,7 @@
     }
   ],
   "other": [],
+  "script": "261b878069958aa1",
   "solids": 1,
   "source": "Onshape evalFeatureScript (Parasolid), case.fs",
   "status": "ok",

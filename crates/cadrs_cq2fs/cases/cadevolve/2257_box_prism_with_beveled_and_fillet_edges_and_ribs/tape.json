@@ -1,0 +1,2518 @@
+{
+  "entries": [
+    {
+      "line": 12,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 1
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        100.0,
+        60.0,
+        40.0
+      ],
+      "kwargs": {},
+      "line": 12,
+      "op": "box",
+      "out": {
+        "wp": 2
+      },
+      "self": {
+        "wp": 1
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {},
+      "line": 14,
+      "op": "edges",
+      "out": {
+        "wp": 3
+      },
+      "self": {
+        "wp": 2
+      }
+    },
+    {
+      "args": [
+        2.0
+      ],
+      "kwargs": {},
+      "line": 14,
+      "op": "chamfer",
+      "out": {
+        "wp": 4
+      },
+      "self": {
+        "wp": 3
+      }
+    },
+    {
+      "line": 31,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 5
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        5.0,
+        2.0,
+        40.0
+      ],
+      "kwargs": {},
+      "line": 31,
+      "op": "box",
+      "out": {
+        "wp": 6
+      },
+      "self": {
+        "wp": 5
+      }
+    },
+    {
+      "args": [
+        [
+          52.5,
+          -18.0,
+          0
+        ]
+      ],
+      "kwargs": {},
+      "line": 32,
+      "op": "translate",
+      "out": {
+        "wp": 7
+      },
+      "self": {
+        "wp": 6
+      }
+    },
+    {
+      "before": {
+        "wp": 7
+      },
+      "block": 1,
+      "g": 1,
+      "op": "guard_begin",
+      "skippable": true
+    },
+    {
+      "args": [
+        "|Z"
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 35,
+      "op": "edges",
+      "out": {
+        "wp": 8
+      },
+      "self": {
+        "wp": 7
+      }
+    },
+    {
+      "args": [
+        0.999999
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 35,
+      "op": "fillet",
+      "out": {
+        "wp": 9
+      },
+      "self": {
+        "wp": 8
+      }
+    },
+    {
+      "after": {
+        "wp": 9
+      },
+      "block": 1,
+      "g": 1,
+      "op": "guard_end"
+    },
+    {
+      "args": [
+        {
+          "wp": 9
+        }
+      ],
+      "kwargs": {},
+      "line": 38,
+      "op": "union",
+      "out": {
+        "wp": 10
+      },
+      "self": {
+        "wp": 4
+      }
+    },
+    {
+      "line": 31,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 11
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        5.0,
+        2.0,
+        40.0
+      ],
+      "kwargs": {},
+      "line": 31,
+      "op": "box",
+      "out": {
+        "wp": 12
+      },
+      "self": {
+        "wp": 11
+      }
+    },
+    {
+      "args": [
+        [
+          -52.5,
+          -18.0,
+          0
+        ]
+      ],
+      "kwargs": {},
+      "line": 32,
+      "op": "translate",
+      "out": {
+        "wp": 13
+      },
+      "self": {
+        "wp": 12
+      }
+    },
+    {
+      "before": {
+        "wp": 13
+      },
+      "block": 1,
+      "g": 2,
+      "op": "guard_begin",
+      "skippable": true
+    },
+    {
+      "args": [
+        "|Z"
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 35,
+      "op": "edges",
+      "out": {
+        "wp": 14
+      },
+      "self": {
+        "wp": 13
+      }
+    },
+    {
+      "args": [
+        0.999999
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 35,
+      "op": "fillet",
+      "out": {
+        "wp": 15
+      },
+      "self": {
+        "wp": 14
+      }
+    },
+    {
+      "after": {
+        "wp": 15
+      },
+      "block": 1,
+      "g": 2,
+      "op": "guard_end"
+    },
+    {
+      "args": [
+        {
+          "wp": 15
+        }
+      ],
+      "kwargs": {},
+      "line": 38,
+      "op": "union",
+      "out": {
+        "wp": 16
+      },
+      "self": {
+        "wp": 10
+      }
+    },
+    {
+      "line": 31,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 17
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        5.0,
+        2.0,
+        40.0
+      ],
+      "kwargs": {},
+      "line": 31,
+      "op": "box",
+      "out": {
+        "wp": 18
+      },
+      "self": {
+        "wp": 17
+      }
+    },
+    {
+      "args": [
+        [
+          52.5,
+          -6.0,
+          0
+        ]
+      ],
+      "kwargs": {},
+      "line": 32,
+      "op": "translate",
+      "out": {
+        "wp": 19
+      },
+      "self": {
+        "wp": 18
+      }
+    },
+    {
+      "before": {
+        "wp": 19
+      },
+      "block": 1,
+      "g": 3,
+      "op": "guard_begin",
+      "skippable": true
+    },
+    {
+      "args": [
+        "|Z"
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 35,
+      "op": "edges",
+      "out": {
+        "wp": 20
+      },
+      "self": {
+        "wp": 19
+      }
+    },
+    {
+      "args": [
+        0.999999
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 35,
+      "op": "fillet",
+      "out": {
+        "wp": 21
+      },
+      "self": {
+        "wp": 20
+      }
+    },
+    {
+      "after": {
+        "wp": 21
+      },
+      "block": 1,
+      "g": 3,
+      "op": "guard_end"
+    },
+    {
+      "args": [
+        {
+          "wp": 21
+        }
+      ],
+      "kwargs": {},
+      "line": 38,
+      "op": "union",
+      "out": {
+        "wp": 22
+      },
+      "self": {
+        "wp": 16
+      }
+    },
+    {
+      "line": 31,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 23
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        5.0,
+        2.0,
+        40.0
+      ],
+      "kwargs": {},
+      "line": 31,
+      "op": "box",
+      "out": {
+        "wp": 24
+      },
+      "self": {
+        "wp": 23
+      }
+    },
+    {
+      "args": [
+        [
+          -52.5,
+          -6.0,
+          0
+        ]
+      ],
+      "kwargs": {},
+      "line": 32,
+      "op": "translate",
+      "out": {
+        "wp": 25
+      },
+      "self": {
+        "wp": 24
+      }
+    },
+    {
+      "before": {
+        "wp": 25
+      },
+      "block": 1,
+      "g": 4,
+      "op": "guard_begin",
+      "skippable": true
+    },
+    {
+      "args": [
+        "|Z"
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 35,
+      "op": "edges",
+      "out": {
+        "wp": 26
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        0.999999
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 35,
+      "op": "fillet",
+      "out": {
+        "wp": 27
+      },
+      "self": {
+        "wp": 26
+      }
+    },
+    {
+      "after": {
+        "wp": 27
+      },
+      "block": 1,
+      "g": 4,
+      "op": "guard_end"
+    },
+    {
+      "args": [
+        {
+          "wp": 27
+        }
+      ],
+      "kwargs": {},
+      "line": 38,
+      "op": "union",
+      "out": {
+        "wp": 28
+      },
+      "self": {
+        "wp": 22
+      }
+    },
+    {
+      "line": 31,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 29
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        5.0,
+        2.0,
+        40.0
+      ],
+      "kwargs": {},
+      "line": 31,
+      "op": "box",
+      "out": {
+        "wp": 30
+      },
+      "self": {
+        "wp": 29
+      }
+    },
+    {
+      "args": [
+        [
+          52.5,
+          6.0,
+          0
+        ]
+      ],
+      "kwargs": {},
+      "line": 32,
+      "op": "translate",
+      "out": {
+        "wp": 31
+      },
+      "self": {
+        "wp": 30
+      }
+    },
+    {
+      "before": {
+        "wp": 31
+      },
+      "block": 1,
+      "g": 5,
+      "op": "guard_begin",
+      "skippable": true
+    },
+    {
+      "args": [
+        "|Z"
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 35,
+      "op": "edges",
+      "out": {
+        "wp": 32
+      },
+      "self": {
+        "wp": 31
+      }
+    },
+    {
+      "args": [
+        0.999999
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 35,
+      "op": "fillet",
+      "out": {
+        "wp": 33
+      },
+      "self": {
+        "wp": 32
+      }
+    },
+    {
+      "after": {
+        "wp": 33
+      },
+      "block": 1,
+      "g": 5,
+      "op": "guard_end"
+    },
+    {
+      "args": [
+        {
+          "wp": 33
+        }
+      ],
+      "kwargs": {},
+      "line": 38,
+      "op": "union",
+      "out": {
+        "wp": 34
+      },
+      "self": {
+        "wp": 28
+      }
+    },
+    {
+      "line": 31,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 35
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        5.0,
+        2.0,
+        40.0
+      ],
+      "kwargs": {},
+      "line": 31,
+      "op": "box",
+      "out": {
+        "wp": 36
+      },
+      "self": {
+        "wp": 35
+      }
+    },
+    {
+      "args": [
+        [
+          -52.5,
+          6.0,
+          0
+        ]
+      ],
+      "kwargs": {},
+      "line": 32,
+      "op": "translate",
+      "out": {
+        "wp": 37
+      },
+      "self": {
+        "wp": 36
+      }
+    },
+    {
+      "before": {
+        "wp": 37
+      },
+      "block": 1,
+      "g": 6,
+      "op": "guard_begin",
+      "skippable": true
+    },
+    {
+      "args": [
+        "|Z"
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 35,
+      "op": "edges",
+      "out": {
+        "wp": 38
+      },
+      "self": {
+        "wp": 37
+      }
+    },
+    {
+      "args": [
+        0.999999
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 35,
+      "op": "fillet",
+      "out": {
+        "wp": 39
+      },
+      "self": {
+        "wp": 38
+      }
+    },
+    {
+      "after": {
+        "wp": 39
+      },
+      "block": 1,
+      "g": 6,
+      "op": "guard_end"
+    },
+    {
+      "args": [
+        {
+          "wp": 39
+        }
+      ],
+      "kwargs": {},
+      "line": 38,
+      "op": "union",
+      "out": {
+        "wp": 40
+      },
+      "self": {
+        "wp": 34
+      }
+    },
+    {
+      "line": 31,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 41
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        5.0,
+        2.0,
+        40.0
+      ],
+      "kwargs": {},
+      "line": 31,
+      "op": "box",
+      "out": {
+        "wp": 42
+      },
+      "self": {
+        "wp": 41
+      }
+    },
+    {
+      "args": [
+        [
+          52.5,
+          18.0,
+          0
+        ]
+      ],
+      "kwargs": {},
+      "line": 32,
+      "op": "translate",
+      "out": {
+        "wp": 43
+      },
+      "self": {
+        "wp": 42
+      }
+    },
+    {
+      "before": {
+        "wp": 43
+      },
+      "block": 1,
+      "g": 7,
+      "op": "guard_begin",
+      "skippable": true
+    },
+    {
+      "args": [
+        "|Z"
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 35,
+      "op": "edges",
+      "out": {
+        "wp": 44
+      },
+      "self": {
+        "wp": 43
+      }
+    },
+    {
+      "args": [
+        0.999999
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 35,
+      "op": "fillet",
+      "out": {
+        "wp": 45
+      },
+      "self": {
+        "wp": 44
+      }
+    },
+    {
+      "after": {
+        "wp": 45
+      },
+      "block": 1,
+      "g": 7,
+      "op": "guard_end"
+    },
+    {
+      "args": [
+        {
+          "wp": 45
+        }
+      ],
+      "kwargs": {},
+      "line": 38,
+      "op": "union",
+      "out": {
+        "wp": 46
+      },
+      "self": {
+        "wp": 40
+      }
+    },
+    {
+      "line": 31,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 47
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        5.0,
+        2.0,
+        40.0
+      ],
+      "kwargs": {},
+      "line": 31,
+      "op": "box",
+      "out": {
+        "wp": 48
+      },
+      "self": {
+        "wp": 47
+      }
+    },
+    {
+      "args": [
+        [
+          -52.5,
+          18.0,
+          0
+        ]
+      ],
+      "kwargs": {},
+      "line": 32,
+      "op": "translate",
+      "out": {
+        "wp": 49
+      },
+      "self": {
+        "wp": 48
+      }
+    },
+    {
+      "before": {
+        "wp": 49
+      },
+      "block": 1,
+      "g": 8,
+      "op": "guard_begin",
+      "skippable": true
+    },
+    {
+      "args": [
+        "|Z"
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 35,
+      "op": "edges",
+      "out": {
+        "wp": 50
+      },
+      "self": {
+        "wp": 49
+      }
+    },
+    {
+      "args": [
+        0.999999
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 35,
+      "op": "fillet",
+      "out": {
+        "wp": 51
+      },
+      "self": {
+        "wp": 50
+      }
+    },
+    {
+      "after": {
+        "wp": 51
+      },
+      "block": 1,
+      "g": 8,
+      "op": "guard_end"
+    },
+    {
+      "args": [
+        {
+          "wp": 51
+        }
+      ],
+      "kwargs": {},
+      "line": 38,
+      "op": "union",
+      "out": {
+        "wp": 52
+      },
+      "self": {
+        "wp": 46
+      }
+    },
+    {
+      "line": 46,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 53
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        2.0,
+        5.0,
+        40.0
+      ],
+      "kwargs": {},
+      "line": 46,
+      "op": "box",
+      "out": {
+        "wp": 54
+      },
+      "self": {
+        "wp": 53
+      }
+    },
+    {
+      "args": [
+        [
+          -35.714285714285715,
+          32.5,
+          0
+        ]
+      ],
+      "kwargs": {},
+      "line": 47,
+      "op": "translate",
+      "out": {
+        "wp": 55
+      },
+      "self": {
+        "wp": 54
+      }
+    },
+    {
+      "before": {
+        "wp": 55
+      },
+      "block": 2,
+      "g": 9,
+      "op": "guard_begin",
+      "skippable": true
+    },
+    {
+      "args": [
+        "|Z"
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 50,
+      "op": "edges",
+      "out": {
+        "wp": 56
+      },
+      "self": {
+        "wp": 55
+      }
+    },
+    {
+      "args": [
+        0.999999
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 50,
+      "op": "fillet",
+      "out": {
+        "wp": 57
+      },
+      "self": {
+        "wp": 56
+      }
+    },
+    {
+      "after": {
+        "wp": 57
+      },
+      "block": 2,
+      "g": 9,
+      "op": "guard_end"
+    },
+    {
+      "args": [
+        {
+          "wp": 57
+        }
+      ],
+      "kwargs": {},
+      "line": 53,
+      "op": "union",
+      "out": {
+        "wp": 58
+      },
+      "self": {
+        "wp": 52
+      }
+    },
+    {
+      "line": 46,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 59
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        2.0,
+        5.0,
+        40.0
+      ],
+      "kwargs": {},
+      "line": 46,
+      "op": "box",
+      "out": {
+        "wp": 60
+      },
+      "self": {
+        "wp": 59
+      }
+    },
+    {
+      "args": [
+        [
+          -35.714285714285715,
+          -32.5,
+          0
+        ]
+      ],
+      "kwargs": {},
+      "line": 47,
+      "op": "translate",
+      "out": {
+        "wp": 61
+      },
+      "self": {
+        "wp": 60
+      }
+    },
+    {
+      "before": {
+        "wp": 61
+      },
+      "block": 2,
+      "g": 10,
+      "op": "guard_begin",
+      "skippable": true
+    },
+    {
+      "args": [
+        "|Z"
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 50,
+      "op": "edges",
+      "out": {
+        "wp": 62
+      },
+      "self": {
+        "wp": 61
+      }
+    },
+    {
+      "args": [
+        0.999999
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 50,
+      "op": "fillet",
+      "out": {
+        "wp": 63
+      },
+      "self": {
+        "wp": 62
+      }
+    },
+    {
+      "after": {
+        "wp": 63
+      },
+      "block": 2,
+      "g": 10,
+      "op": "guard_end"
+    },
+    {
+      "args": [
+        {
+          "wp": 63
+        }
+      ],
+      "kwargs": {},
+      "line": 53,
+      "op": "union",
+      "out": {
+        "wp": 64
+      },
+      "self": {
+        "wp": 58
+      }
+    },
+    {
+      "line": 46,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 65
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        2.0,
+        5.0,
+        40.0
+      ],
+      "kwargs": {},
+      "line": 46,
+      "op": "box",
+      "out": {
+        "wp": 66
+      },
+      "self": {
+        "wp": 65
+      }
+    },
+    {
+      "args": [
+        [
+          -21.428571428571427,
+          32.5,
+          0
+        ]
+      ],
+      "kwargs": {},
+      "line": 47,
+      "op": "translate",
+      "out": {
+        "wp": 67
+      },
+      "self": {
+        "wp": 66
+      }
+    },
+    {
+      "before": {
+        "wp": 67
+      },
+      "block": 2,
+      "g": 11,
+      "op": "guard_begin",
+      "skippable": true
+    },
+    {
+      "args": [
+        "|Z"
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 50,
+      "op": "edges",
+      "out": {
+        "wp": 68
+      },
+      "self": {
+        "wp": 67
+      }
+    },
+    {
+      "args": [
+        0.999999
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 50,
+      "op": "fillet",
+      "out": {
+        "wp": 69
+      },
+      "self": {
+        "wp": 68
+      }
+    },
+    {
+      "after": {
+        "wp": 69
+      },
+      "block": 2,
+      "g": 11,
+      "op": "guard_end"
+    },
+    {
+      "args": [
+        {
+          "wp": 69
+        }
+      ],
+      "kwargs": {},
+      "line": 53,
+      "op": "union",
+      "out": {
+        "wp": 70
+      },
+      "self": {
+        "wp": 64
+      }
+    },
+    {
+      "line": 46,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 71
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        2.0,
+        5.0,
+        40.0
+      ],
+      "kwargs": {},
+      "line": 46,
+      "op": "box",
+      "out": {
+        "wp": 72
+      },
+      "self": {
+        "wp": 71
+      }
+    },
+    {
+      "args": [
+        [
+          -21.428571428571427,
+          -32.5,
+          0
+        ]
+      ],
+      "kwargs": {},
+      "line": 47,
+      "op": "translate",
+      "out": {
+        "wp": 73
+      },
+      "self": {
+        "wp": 72
+      }
+    },
+    {
+      "before": {
+        "wp": 73
+      },
+      "block": 2,
+      "g": 12,
+      "op": "guard_begin",
+      "skippable": true
+    },
+    {
+      "args": [
+        "|Z"
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 50,
+      "op": "edges",
+      "out": {
+        "wp": 74
+      },
+      "self": {
+        "wp": 73
+      }
+    },
+    {
+      "args": [
+        0.999999
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 50,
+      "op": "fillet",
+      "out": {
+        "wp": 75
+      },
+      "self": {
+        "wp": 74
+      }
+    },
+    {
+      "after": {
+        "wp": 75
+      },
+      "block": 2,
+      "g": 12,
+      "op": "guard_end"
+    },
+    {
+      "args": [
+        {
+          "wp": 75
+        }
+      ],
+      "kwargs": {},
+      "line": 53,
+      "op": "union",
+      "out": {
+        "wp": 76
+      },
+      "self": {
+        "wp": 70
+      }
+    },
+    {
+      "line": 46,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 77
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        2.0,
+        5.0,
+        40.0
+      ],
+      "kwargs": {},
+      "line": 46,
+      "op": "box",
+      "out": {
+        "wp": 78
+      },
+      "self": {
+        "wp": 77
+      }
+    },
+    {
+      "args": [
+        [
+          -7.142857142857139,
+          32.5,
+          0
+        ]
+      ],
+      "kwargs": {},
+      "line": 47,
+      "op": "translate",
+      "out": {
+        "wp": 79
+      },
+      "self": {
+        "wp": 78
+      }
+    },
+    {
+      "before": {
+        "wp": 79
+      },
+      "block": 2,
+      "g": 13,
+      "op": "guard_begin",
+      "skippable": true
+    },
+    {
+      "args": [
+        "|Z"
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 50,
+      "op": "edges",
+      "out": {
+        "wp": 80
+      },
+      "self": {
+        "wp": 79
+      }
+    },
+    {
+      "args": [
+        0.999999
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 50,
+      "op": "fillet",
+      "out": {
+        "wp": 81
+      },
+      "self": {
+        "wp": 80
+      }
+    },
+    {
+      "after": {
+        "wp": 81
+      },
+      "block": 2,
+      "g": 13,
+      "op": "guard_end"
+    },
+    {
+      "args": [
+        {
+          "wp": 81
+        }
+      ],
+      "kwargs": {},
+      "line": 53,
+      "op": "union",
+      "out": {
+        "wp": 82
+      },
+      "self": {
+        "wp": 76
+      }
+    },
+    {
+      "line": 46,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 83
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        2.0,
+        5.0,
+        40.0
+      ],
+      "kwargs": {},
+      "line": 46,
+      "op": "box",
+      "out": {
+        "wp": 84
+      },
+      "self": {
+        "wp": 83
+      }
+    },
+    {
+      "args": [
+        [
+          -7.142857142857139,
+          -32.5,
+          0
+        ]
+      ],
+      "kwargs": {},
+      "line": 47,
+      "op": "translate",
+      "out": {
+        "wp": 85
+      },
+      "self": {
+        "wp": 84
+      }
+    },
+    {
+      "before": {
+        "wp": 85
+      },
+      "block": 2,
+      "g": 14,
+      "op": "guard_begin",
+      "skippable": true
+    },
+    {
+      "args": [
+        "|Z"
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 50,
+      "op": "edges",
+      "out": {
+        "wp": 86
+      },
+      "self": {
+        "wp": 85
+      }
+    },
+    {
+      "args": [
+        0.999999
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 50,
+      "op": "fillet",
+      "out": {
+        "wp": 87
+      },
+      "self": {
+        "wp": 86
+      }
+    },
+    {
+      "after": {
+        "wp": 87
+      },
+      "block": 2,
+      "g": 14,
+      "op": "guard_end"
+    },
+    {
+      "args": [
+        {
+          "wp": 87
+        }
+      ],
+      "kwargs": {},
+      "line": 53,
+      "op": "union",
+      "out": {
+        "wp": 88
+      },
+      "self": {
+        "wp": 82
+      }
+    },
+    {
+      "line": 46,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 89
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        2.0,
+        5.0,
+        40.0
+      ],
+      "kwargs": {},
+      "line": 46,
+      "op": "box",
+      "out": {
+        "wp": 90
+      },
+      "self": {
+        "wp": 89
+      }
+    },
+    {
+      "args": [
+        [
+          7.142857142857146,
+          32.5,
+          0
+        ]
+      ],
+      "kwargs": {},
+      "line": 47,
+      "op": "translate",
+      "out": {
+        "wp": 91
+      },
+      "self": {
+        "wp": 90
+      }
+    },
+    {
+      "before": {
+        "wp": 91
+      },
+      "block": 2,
+      "g": 15,
+      "op": "guard_begin",
+      "skippable": true
+    },
+    {
+      "args": [
+        "|Z"
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 50,
+      "op": "edges",
+      "out": {
+        "wp": 92
+      },
+      "self": {
+        "wp": 91
+      }
+    },
+    {
+      "args": [
+        0.999999
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 50,
+      "op": "fillet",
+      "out": {
+        "wp": 93
+      },
+      "self": {
+        "wp": 92
+      }
+    },
+    {
+      "after": {
+        "wp": 93
+      },
+      "block": 2,
+      "g": 15,
+      "op": "guard_end"
+    },
+    {
+      "args": [
+        {
+          "wp": 93
+        }
+      ],
+      "kwargs": {},
+      "line": 53,
+      "op": "union",
+      "out": {
+        "wp": 94
+      },
+      "self": {
+        "wp": 88
+      }
+    },
+    {
+      "line": 46,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 95
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        2.0,
+        5.0,
+        40.0
+      ],
+      "kwargs": {},
+      "line": 46,
+      "op": "box",
+      "out": {
+        "wp": 96
+      },
+      "self": {
+        "wp": 95
+      }
+    },
+    {
+      "args": [
+        [
+          7.142857142857146,
+          -32.5,
+          0
+        ]
+      ],
+      "kwargs": {},
+      "line": 47,
+      "op": "translate",
+      "out": {
+        "wp": 97
+      },
+      "self": {
+        "wp": 96
+      }
+    },
+    {
+      "before": {
+        "wp": 97
+      },
+      "block": 2,
+      "g": 16,
+      "op": "guard_begin",
+      "skippable": true
+    },
+    {
+      "args": [
+        "|Z"
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 50,
+      "op": "edges",
+      "out": {
+        "wp": 98
+      },
+      "self": {
+        "wp": 97
+      }
+    },
+    {
+      "args": [
+        0.999999
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 50,
+      "op": "fillet",
+      "out": {
+        "wp": 99
+      },
+      "self": {
+        "wp": 98
+      }
+    },
+    {
+      "after": {
+        "wp": 99
+      },
+      "block": 2,
+      "g": 16,
+      "op": "guard_end"
+    },
+    {
+      "args": [
+        {
+          "wp": 99
+        }
+      ],
+      "kwargs": {},
+      "line": 53,
+      "op": "union",
+      "out": {
+        "wp": 100
+      },
+      "self": {
+        "wp": 94
+      }
+    },
+    {
+      "line": 46,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 101
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        2.0,
+        5.0,
+        40.0
+      ],
+      "kwargs": {},
+      "line": 46,
+      "op": "box",
+      "out": {
+        "wp": 102
+      },
+      "self": {
+        "wp": 101
+      }
+    },
+    {
+      "args": [
+        [
+          21.42857142857143,
+          32.5,
+          0
+        ]
+      ],
+      "kwargs": {},
+      "line": 47,
+      "op": "translate",
+      "out": {
+        "wp": 103
+      },
+      "self": {
+        "wp": 102
+      }
+    },
+    {
+      "before": {
+        "wp": 103
+      },
+      "block": 2,
+      "g": 17,
+      "op": "guard_begin",
+      "skippable": true
+    },
+    {
+      "args": [
+        "|Z"
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 50,
+      "op": "edges",
+      "out": {
+        "wp": 104
+      },
+      "self": {
+        "wp": 103
+      }
+    },
+    {
+      "args": [
+        0.999999
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 50,
+      "op": "fillet",
+      "out": {
+        "wp": 105
+      },
+      "self": {
+        "wp": 104
+      }
+    },
+    {
+      "after": {
+        "wp": 105
+      },
+      "block": 2,
+      "g": 17,
+      "op": "guard_end"
+    },
+    {
+      "args": [
+        {
+          "wp": 105
+        }
+      ],
+      "kwargs": {},
+      "line": 53,
+      "op": "union",
+      "out": {
+        "wp": 106
+      },
+      "self": {
+        "wp": 100
+      }
+    },
+    {
+      "line": 46,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 107
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        2.0,
+        5.0,
+        40.0
+      ],
+      "kwargs": {},
+      "line": 46,
+      "op": "box",
+      "out": {
+        "wp": 108
+      },
+      "self": {
+        "wp": 107
+      }
+    },
+    {
+      "args": [
+        [
+          21.42857142857143,
+          -32.5,
+          0
+        ]
+      ],
+      "kwargs": {},
+      "line": 47,
+      "op": "translate",
+      "out": {
+        "wp": 109
+      },
+      "self": {
+        "wp": 108
+      }
+    },
+    {
+      "before": {
+        "wp": 109
+      },
+      "block": 2,
+      "g": 18,
+      "op": "guard_begin",
+      "skippable": true
+    },
+    {
+      "args": [
+        "|Z"
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 50,
+      "op": "edges",
+      "out": {
+        "wp": 110
+      },
+      "self": {
+        "wp": 109
+      }
+    },
+    {
+      "args": [
+        0.999999
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 50,
+      "op": "fillet",
+      "out": {
+        "wp": 111
+      },
+      "self": {
+        "wp": 110
+      }
+    },
+    {
+      "after": {
+        "wp": 111
+      },
+      "block": 2,
+      "g": 18,
+      "op": "guard_end"
+    },
+    {
+      "args": [
+        {
+          "wp": 111
+        }
+      ],
+      "kwargs": {},
+      "line": 53,
+      "op": "union",
+      "out": {
+        "wp": 112
+      },
+      "self": {
+        "wp": 106
+      }
+    },
+    {
+      "line": 46,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 113
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        2.0,
+        5.0,
+        40.0
+      ],
+      "kwargs": {},
+      "line": 46,
+      "op": "box",
+      "out": {
+        "wp": 114
+      },
+      "self": {
+        "wp": 113
+      }
+    },
+    {
+      "args": [
+        [
+          35.71428571428572,
+          32.5,
+          0
+        ]
+      ],
+      "kwargs": {},
+      "line": 47,
+      "op": "translate",
+      "out": {
+        "wp": 115
+      },
+      "self": {
+        "wp": 114
+      }
+    },
+    {
+      "before": {
+        "wp": 115
+      },
+      "block": 2,
+      "g": 19,
+      "op": "guard_begin",
+      "skippable": true
+    },
+    {
+      "args": [
+        "|Z"
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 50,
+      "op": "edges",
+      "out": {
+        "wp": 116
+      },
+      "self": {
+        "wp": 115
+      }
+    },
+    {
+      "args": [
+        0.999999
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 50,
+      "op": "fillet",
+      "out": {
+        "wp": 117
+      },
+      "self": {
+        "wp": 116
+      }
+    },
+    {
+      "after": {
+        "wp": 117
+      },
+      "block": 2,
+      "g": 19,
+      "op": "guard_end"
+    },
+    {
+      "args": [
+        {
+          "wp": 117
+        }
+      ],
+      "kwargs": {},
+      "line": 53,
+      "op": "union",
+      "out": {
+        "wp": 118
+      },
+      "self": {
+        "wp": 112
+      }
+    },
+    {
+      "line": 46,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 119
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        2.0,
+        5.0,
+        40.0
+      ],
+      "kwargs": {},
+      "line": 46,
+      "op": "box",
+      "out": {
+        "wp": 120
+      },
+      "self": {
+        "wp": 119
+      }
+    },
+    {
+      "args": [
+        [
+          35.71428571428572,
+          -32.5,
+          0
+        ]
+      ],
+      "kwargs": {},
+      "line": 47,
+      "op": "translate",
+      "out": {
+        "wp": 121
+      },
+      "self": {
+        "wp": 120
+      }
+    },
+    {
+      "before": {
+        "wp": 121
+      },
+      "block": 2,
+      "g": 20,
+      "op": "guard_begin",
+      "skippable": true
+    },
+    {
+      "args": [
+        "|Z"
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 50,
+      "op": "edges",
+      "out": {
+        "wp": 122
+      },
+      "self": {
+        "wp": 121
+      }
+    },
+    {
+      "args": [
+        0.999999
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 50,
+      "op": "fillet",
+      "out": {
+        "wp": 123
+      },
+      "self": {
+        "wp": 122
+      }
+    },
+    {
+      "after": {
+        "wp": 123
+      },
+      "block": 2,
+      "g": 20,
+      "op": "guard_end"
+    },
+    {
+      "args": [
+        {
+          "wp": 123
+        }
+      ],
+      "kwargs": {},
+      "line": 53,
+      "op": "union",
+      "out": {
+        "wp": 124
+      },
+      "self": {
+        "wp": 118
+      }
+    }
+  ],
+  "guarded": true,
+  "i": 2257,
+  "name": "box_prism_with_beveled_and_fillet_edges_and_ribs",
+  "result": {
+    "wp": 124
+  },
+  "status": "ok"
+}

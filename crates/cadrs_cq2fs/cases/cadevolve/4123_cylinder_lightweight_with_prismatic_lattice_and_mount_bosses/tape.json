@@ -1,0 +1,2237 @@
+{
+  "entries": [
+    {
+      "line": 30,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 1
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        20.0
+      ],
+      "kwargs": {},
+      "line": 31,
+      "op": "circle",
+      "out": {
+        "wp": 2
+      },
+      "self": {
+        "wp": 1
+      }
+    },
+    {
+      "args": [
+        30.0
+      ],
+      "kwargs": {},
+      "line": 32,
+      "op": "extrude",
+      "out": {
+        "wp": 3
+      },
+      "self": {
+        "wp": 2
+      }
+    },
+    {
+      "args": [
+        "|Z"
+      ],
+      "kwargs": {},
+      "line": 33,
+      "op": "faces",
+      "out": {
+        "wp": 4
+      },
+      "self": {
+        "wp": 3
+      }
+    },
+    {
+      "args": [
+        -2.0
+      ],
+      "kwargs": {},
+      "line": 34,
+      "op": "shell",
+      "out": {
+        "wp": 5
+      },
+      "self": {
+        "wp": 4
+      }
+    },
+    {
+      "before": {
+        "wp": 5
+      },
+      "block": 1,
+      "g": 1,
+      "op": "guard_begin",
+      "skippable": true
+    },
+    {
+      "args": [
+        "|Z"
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 39,
+      "op": "edges",
+      "out": {
+        "wp": 6
+      },
+      "self": {
+        "wp": 5
+      }
+    },
+    {
+      "at": 8,
+      "op": "injected_failure",
+      "was": "fillet"
+    },
+    {
+      "block": 1,
+      "g": 1,
+      "op": "guard_caught"
+    },
+    {
+      "line": 56,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 8
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        [
+          [
+            -15.5,
+            -9.151502608861565
+          ],
+          [
+            -14.5,
+            -9.151502608861565
+          ],
+          [
+            -14.5,
+            9.151502608861565
+          ],
+          [
+            -15.5,
+            9.151502608861565
+          ]
+        ]
+      ],
+      "kwargs": {},
+      "line": 57,
+      "op": "polyline",
+      "out": {
+        "wp": 9
+      },
+      "self": {
+        "wp": 8
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {},
+      "line": 63,
+      "op": "close",
+      "out": {
+        "wp": 10
+      },
+      "self": {
+        "wp": 9
+      }
+    },
+    {
+      "args": [
+        30.0
+      ],
+      "kwargs": {},
+      "line": 64,
+      "op": "extrude",
+      "out": {
+        "wp": 11
+      },
+      "self": {
+        "wp": 10
+      }
+    },
+    {
+      "line": 56,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 12
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        [
+          [
+            -10.5,
+            -14.620191517213446
+          ],
+          [
+            -9.5,
+            -14.620191517213446
+          ],
+          [
+            -9.5,
+            14.620191517213446
+          ],
+          [
+            -10.5,
+            14.620191517213446
+          ]
+        ]
+      ],
+      "kwargs": {},
+      "line": 57,
+      "op": "polyline",
+      "out": {
+        "wp": 13
+      },
+      "self": {
+        "wp": 12
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {},
+      "line": 63,
+      "op": "close",
+      "out": {
+        "wp": 14
+      },
+      "self": {
+        "wp": 13
+      }
+    },
+    {
+      "args": [
+        30.0
+      ],
+      "kwargs": {},
+      "line": 64,
+      "op": "extrude",
+      "out": {
+        "wp": 15
+      },
+      "self": {
+        "wp": 14
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 15
+        }
+      ],
+      "kwargs": {
+        "clean": true
+      },
+      "line": 66,
+      "op": "union",
+      "out": {
+        "wp": 16
+      },
+      "self": {
+        "wp": 11
+      }
+    },
+    {
+      "line": 56,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 17
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        [
+          [
+            -5.5,
+            -17.13913650100261
+          ],
+          [
+            -4.5,
+            -17.13913650100261
+          ],
+          [
+            -4.5,
+            17.13913650100261
+          ],
+          [
+            -5.5,
+            17.13913650100261
+          ]
+        ]
+      ],
+      "kwargs": {},
+      "line": 57,
+      "op": "polyline",
+      "out": {
+        "wp": 18
+      },
+      "self": {
+        "wp": 17
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {},
+      "line": 63,
+      "op": "close",
+      "out": {
+        "wp": 19
+      },
+      "self": {
+        "wp": 18
+      }
+    },
+    {
+      "args": [
+        30.0
+      ],
+      "kwargs": {},
+      "line": 64,
+      "op": "extrude",
+      "out": {
+        "wp": 20
+      },
+      "self": {
+        "wp": 19
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 20
+        }
+      ],
+      "kwargs": {
+        "clean": true
+      },
+      "line": 66,
+      "op": "union",
+      "out": {
+        "wp": 21
+      },
+      "self": {
+        "wp": 16
+      }
+    },
+    {
+      "line": 56,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 22
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        [
+          [
+            -0.5,
+            -17.99305421544658
+          ],
+          [
+            0.5,
+            -17.99305421544658
+          ],
+          [
+            0.5,
+            17.99305421544658
+          ],
+          [
+            -0.5,
+            17.99305421544658
+          ]
+        ]
+      ],
+      "kwargs": {},
+      "line": 57,
+      "op": "polyline",
+      "out": {
+        "wp": 23
+      },
+      "self": {
+        "wp": 22
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {},
+      "line": 63,
+      "op": "close",
+      "out": {
+        "wp": 24
+      },
+      "self": {
+        "wp": 23
+      }
+    },
+    {
+      "args": [
+        30.0
+      ],
+      "kwargs": {},
+      "line": 64,
+      "op": "extrude",
+      "out": {
+        "wp": 25
+      },
+      "self": {
+        "wp": 24
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 25
+        }
+      ],
+      "kwargs": {
+        "clean": true
+      },
+      "line": 66,
+      "op": "union",
+      "out": {
+        "wp": 26
+      },
+      "self": {
+        "wp": 21
+      }
+    },
+    {
+      "line": 56,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 27
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        [
+          [
+            4.5,
+            -17.13913650100261
+          ],
+          [
+            5.5,
+            -17.13913650100261
+          ],
+          [
+            5.5,
+            17.13913650100261
+          ],
+          [
+            4.5,
+            17.13913650100261
+          ]
+        ]
+      ],
+      "kwargs": {},
+      "line": 57,
+      "op": "polyline",
+      "out": {
+        "wp": 28
+      },
+      "self": {
+        "wp": 27
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {},
+      "line": 63,
+      "op": "close",
+      "out": {
+        "wp": 29
+      },
+      "self": {
+        "wp": 28
+      }
+    },
+    {
+      "args": [
+        30.0
+      ],
+      "kwargs": {},
+      "line": 64,
+      "op": "extrude",
+      "out": {
+        "wp": 30
+      },
+      "self": {
+        "wp": 29
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 30
+        }
+      ],
+      "kwargs": {
+        "clean": true
+      },
+      "line": 66,
+      "op": "union",
+      "out": {
+        "wp": 31
+      },
+      "self": {
+        "wp": 26
+      }
+    },
+    {
+      "line": 56,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 32
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        [
+          [
+            9.5,
+            -14.620191517213446
+          ],
+          [
+            10.5,
+            -14.620191517213446
+          ],
+          [
+            10.5,
+            14.620191517213446
+          ],
+          [
+            9.5,
+            14.620191517213446
+          ]
+        ]
+      ],
+      "kwargs": {},
+      "line": 57,
+      "op": "polyline",
+      "out": {
+        "wp": 33
+      },
+      "self": {
+        "wp": 32
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {},
+      "line": 63,
+      "op": "close",
+      "out": {
+        "wp": 34
+      },
+      "self": {
+        "wp": 33
+      }
+    },
+    {
+      "args": [
+        30.0
+      ],
+      "kwargs": {},
+      "line": 64,
+      "op": "extrude",
+      "out": {
+        "wp": 35
+      },
+      "self": {
+        "wp": 34
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 35
+        }
+      ],
+      "kwargs": {
+        "clean": true
+      },
+      "line": 66,
+      "op": "union",
+      "out": {
+        "wp": 36
+      },
+      "self": {
+        "wp": 31
+      }
+    },
+    {
+      "line": 56,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 37
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        [
+          [
+            14.5,
+            -9.151502608861565
+          ],
+          [
+            15.5,
+            -9.151502608861565
+          ],
+          [
+            15.5,
+            9.151502608861565
+          ],
+          [
+            14.5,
+            9.151502608861565
+          ]
+        ]
+      ],
+      "kwargs": {},
+      "line": 57,
+      "op": "polyline",
+      "out": {
+        "wp": 38
+      },
+      "self": {
+        "wp": 37
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {},
+      "line": 63,
+      "op": "close",
+      "out": {
+        "wp": 39
+      },
+      "self": {
+        "wp": 38
+      }
+    },
+    {
+      "args": [
+        30.0
+      ],
+      "kwargs": {},
+      "line": 64,
+      "op": "extrude",
+      "out": {
+        "wp": 40
+      },
+      "self": {
+        "wp": 39
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 40
+        }
+      ],
+      "kwargs": {
+        "clean": true
+      },
+      "line": 66,
+      "op": "union",
+      "out": {
+        "wp": 41
+      },
+      "self": {
+        "wp": 36
+      }
+    },
+    {
+      "line": 74,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 42
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        [
+          [
+            -9.151502608861565,
+            -15.5
+          ],
+          [
+            9.151502608861565,
+            -15.5
+          ],
+          [
+            9.151502608861565,
+            -14.5
+          ],
+          [
+            -9.151502608861565,
+            -14.5
+          ]
+        ]
+      ],
+      "kwargs": {},
+      "line": 75,
+      "op": "polyline",
+      "out": {
+        "wp": 43
+      },
+      "self": {
+        "wp": 42
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {},
+      "line": 81,
+      "op": "close",
+      "out": {
+        "wp": 44
+      },
+      "self": {
+        "wp": 43
+      }
+    },
+    {
+      "args": [
+        30.0
+      ],
+      "kwargs": {},
+      "line": 82,
+      "op": "extrude",
+      "out": {
+        "wp": 45
+      },
+      "self": {
+        "wp": 44
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 45
+        }
+      ],
+      "kwargs": {
+        "clean": true
+      },
+      "line": 84,
+      "op": "union",
+      "out": {
+        "wp": 46
+      },
+      "self": {
+        "wp": 41
+      }
+    },
+    {
+      "line": 74,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 47
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        [
+          [
+            -14.620191517213446,
+            -10.5
+          ],
+          [
+            14.620191517213446,
+            -10.5
+          ],
+          [
+            14.620191517213446,
+            -9.5
+          ],
+          [
+            -14.620191517213446,
+            -9.5
+          ]
+        ]
+      ],
+      "kwargs": {},
+      "line": 75,
+      "op": "polyline",
+      "out": {
+        "wp": 48
+      },
+      "self": {
+        "wp": 47
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {},
+      "line": 81,
+      "op": "close",
+      "out": {
+        "wp": 49
+      },
+      "self": {
+        "wp": 48
+      }
+    },
+    {
+      "args": [
+        30.0
+      ],
+      "kwargs": {},
+      "line": 82,
+      "op": "extrude",
+      "out": {
+        "wp": 50
+      },
+      "self": {
+        "wp": 49
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 50
+        }
+      ],
+      "kwargs": {
+        "clean": true
+      },
+      "line": 84,
+      "op": "union",
+      "out": {
+        "wp": 51
+      },
+      "self": {
+        "wp": 46
+      }
+    },
+    {
+      "line": 74,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 52
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        [
+          [
+            -17.13913650100261,
+            -5.5
+          ],
+          [
+            17.13913650100261,
+            -5.5
+          ],
+          [
+            17.13913650100261,
+            -4.5
+          ],
+          [
+            -17.13913650100261,
+            -4.5
+          ]
+        ]
+      ],
+      "kwargs": {},
+      "line": 75,
+      "op": "polyline",
+      "out": {
+        "wp": 53
+      },
+      "self": {
+        "wp": 52
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {},
+      "line": 81,
+      "op": "close",
+      "out": {
+        "wp": 54
+      },
+      "self": {
+        "wp": 53
+      }
+    },
+    {
+      "args": [
+        30.0
+      ],
+      "kwargs": {},
+      "line": 82,
+      "op": "extrude",
+      "out": {
+        "wp": 55
+      },
+      "self": {
+        "wp": 54
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 55
+        }
+      ],
+      "kwargs": {
+        "clean": true
+      },
+      "line": 84,
+      "op": "union",
+      "out": {
+        "wp": 56
+      },
+      "self": {
+        "wp": 51
+      }
+    },
+    {
+      "line": 74,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 57
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        [
+          [
+            -17.99305421544658,
+            -0.5
+          ],
+          [
+            17.99305421544658,
+            -0.5
+          ],
+          [
+            17.99305421544658,
+            0.5
+          ],
+          [
+            -17.99305421544658,
+            0.5
+          ]
+        ]
+      ],
+      "kwargs": {},
+      "line": 75,
+      "op": "polyline",
+      "out": {
+        "wp": 58
+      },
+      "self": {
+        "wp": 57
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {},
+      "line": 81,
+      "op": "close",
+      "out": {
+        "wp": 59
+      },
+      "self": {
+        "wp": 58
+      }
+    },
+    {
+      "args": [
+        30.0
+      ],
+      "kwargs": {},
+      "line": 82,
+      "op": "extrude",
+      "out": {
+        "wp": 60
+      },
+      "self": {
+        "wp": 59
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 60
+        }
+      ],
+      "kwargs": {
+        "clean": true
+      },
+      "line": 84,
+      "op": "union",
+      "out": {
+        "wp": 61
+      },
+      "self": {
+        "wp": 56
+      }
+    },
+    {
+      "line": 74,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 62
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        [
+          [
+            -17.13913650100261,
+            4.5
+          ],
+          [
+            17.13913650100261,
+            4.5
+          ],
+          [
+            17.13913650100261,
+            5.5
+          ],
+          [
+            -17.13913650100261,
+            5.5
+          ]
+        ]
+      ],
+      "kwargs": {},
+      "line": 75,
+      "op": "polyline",
+      "out": {
+        "wp": 63
+      },
+      "self": {
+        "wp": 62
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {},
+      "line": 81,
+      "op": "close",
+      "out": {
+        "wp": 64
+      },
+      "self": {
+        "wp": 63
+      }
+    },
+    {
+      "args": [
+        30.0
+      ],
+      "kwargs": {},
+      "line": 82,
+      "op": "extrude",
+      "out": {
+        "wp": 65
+      },
+      "self": {
+        "wp": 64
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 65
+        }
+      ],
+      "kwargs": {
+        "clean": true
+      },
+      "line": 84,
+      "op": "union",
+      "out": {
+        "wp": 66
+      },
+      "self": {
+        "wp": 61
+      }
+    },
+    {
+      "line": 74,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 67
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        [
+          [
+            -14.620191517213446,
+            9.5
+          ],
+          [
+            14.620191517213446,
+            9.5
+          ],
+          [
+            14.620191517213446,
+            10.5
+          ],
+          [
+            -14.620191517213446,
+            10.5
+          ]
+        ]
+      ],
+      "kwargs": {},
+      "line": 75,
+      "op": "polyline",
+      "out": {
+        "wp": 68
+      },
+      "self": {
+        "wp": 67
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {},
+      "line": 81,
+      "op": "close",
+      "out": {
+        "wp": 69
+      },
+      "self": {
+        "wp": 68
+      }
+    },
+    {
+      "args": [
+        30.0
+      ],
+      "kwargs": {},
+      "line": 82,
+      "op": "extrude",
+      "out": {
+        "wp": 70
+      },
+      "self": {
+        "wp": 69
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 70
+        }
+      ],
+      "kwargs": {
+        "clean": true
+      },
+      "line": 84,
+      "op": "union",
+      "out": {
+        "wp": 71
+      },
+      "self": {
+        "wp": 66
+      }
+    },
+    {
+      "line": 74,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 72
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        [
+          [
+            -9.151502608861565,
+            14.5
+          ],
+          [
+            9.151502608861565,
+            14.5
+          ],
+          [
+            9.151502608861565,
+            15.5
+          ],
+          [
+            -9.151502608861565,
+            15.5
+          ]
+        ]
+      ],
+      "kwargs": {},
+      "line": 75,
+      "op": "polyline",
+      "out": {
+        "wp": 73
+      },
+      "self": {
+        "wp": 72
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {},
+      "line": 81,
+      "op": "close",
+      "out": {
+        "wp": 74
+      },
+      "self": {
+        "wp": 73
+      }
+    },
+    {
+      "args": [
+        30.0
+      ],
+      "kwargs": {},
+      "line": 82,
+      "op": "extrude",
+      "out": {
+        "wp": 75
+      },
+      "self": {
+        "wp": 74
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 75
+        }
+      ],
+      "kwargs": {
+        "clean": true
+      },
+      "line": 84,
+      "op": "union",
+      "out": {
+        "wp": 76
+      },
+      "self": {
+        "wp": 71
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 76
+        }
+      ],
+      "kwargs": {
+        "clean": true
+      },
+      "line": 86,
+      "op": "union",
+      "out": {
+        "wp": 77
+      },
+      "self": {
+        "wp": 5
+      }
+    },
+    {
+      "line": 101,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 78
+      },
+      "plane": {
+        "origin": [
+          20.0,
+          0.0,
+          15.0
+        ],
+        "xDir": [
+          -0.0,
+          1.0,
+          0.0
+        ],
+        "zDir": [
+          1.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "args": [
+        1.0
+      ],
+      "kwargs": {},
+      "line": 102,
+      "op": "circle",
+      "out": {
+        "wp": 79
+      },
+      "self": {
+        "wp": 78
+      }
+    },
+    {
+      "args": [
+        2.0
+      ],
+      "kwargs": {},
+      "line": 103,
+      "op": "extrude",
+      "out": {
+        "wp": 80
+      },
+      "self": {
+        "wp": 79
+      }
+    },
+    {
+      "before": {
+        "wp": 80
+      },
+      "block": 2,
+      "g": 2,
+      "op": "guard_begin",
+      "skippable": true
+    },
+    {
+      "args": [
+        "|Z"
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 107,
+      "op": "edges",
+      "out": {
+        "wp": 81
+      },
+      "self": {
+        "wp": 80
+      }
+    },
+    {
+      "args": [
+        0.5
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 107,
+      "op": "fillet",
+      "out": {
+        "wp": 82
+      },
+      "self": {
+        "wp": 81
+      }
+    },
+    {
+      "after": {
+        "wp": 82
+      },
+      "block": 2,
+      "g": 2,
+      "op": "guard_end"
+    },
+    {
+      "line": 101,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 83
+      },
+      "plane": {
+        "origin": [
+          10.000000000000002,
+          17.32050807568877,
+          15.0
+        ],
+        "xDir": [
+          -0.8660254037844386,
+          0.5000000000000001,
+          0.0
+        ],
+        "zDir": [
+          0.5000000000000001,
+          0.8660254037844386,
+          0.0
+        ]
+      }
+    },
+    {
+      "args": [
+        1.0
+      ],
+      "kwargs": {},
+      "line": 102,
+      "op": "circle",
+      "out": {
+        "wp": 84
+      },
+      "self": {
+        "wp": 83
+      }
+    },
+    {
+      "args": [
+        2.0
+      ],
+      "kwargs": {},
+      "line": 103,
+      "op": "extrude",
+      "out": {
+        "wp": 85
+      },
+      "self": {
+        "wp": 84
+      }
+    },
+    {
+      "before": {
+        "wp": 85
+      },
+      "block": 2,
+      "g": 3,
+      "op": "guard_begin",
+      "skippable": true
+    },
+    {
+      "args": [
+        "|Z"
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 107,
+      "op": "edges",
+      "out": {
+        "wp": 86
+      },
+      "self": {
+        "wp": 85
+      }
+    },
+    {
+      "args": [
+        0.5
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 107,
+      "op": "fillet",
+      "out": {
+        "wp": 87
+      },
+      "self": {
+        "wp": 86
+      }
+    },
+    {
+      "after": {
+        "wp": 87
+      },
+      "block": 2,
+      "g": 3,
+      "op": "guard_end"
+    },
+    {
+      "args": [
+        {
+          "wp": 87
+        }
+      ],
+      "kwargs": {
+        "clean": true
+      },
+      "line": 110,
+      "op": "union",
+      "out": {
+        "wp": 88
+      },
+      "self": {
+        "wp": 82
+      }
+    },
+    {
+      "line": 101,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 89
+      },
+      "plane": {
+        "origin": [
+          -9.999999999999996,
+          17.320508075688775,
+          15.0
+        ],
+        "xDir": [
+          -0.8660254037844388,
+          -0.49999999999999983,
+          0.0
+        ],
+        "zDir": [
+          -0.49999999999999983,
+          0.8660254037844388,
+          0.0
+        ]
+      }
+    },
+    {
+      "args": [
+        1.0
+      ],
+      "kwargs": {},
+      "line": 102,
+      "op": "circle",
+      "out": {
+        "wp": 90
+      },
+      "self": {
+        "wp": 89
+      }
+    },
+    {
+      "args": [
+        2.0
+      ],
+      "kwargs": {},
+      "line": 103,
+      "op": "extrude",
+      "out": {
+        "wp": 91
+      },
+      "self": {
+        "wp": 90
+      }
+    },
+    {
+      "before": {
+        "wp": 91
+      },
+      "block": 2,
+      "g": 4,
+      "op": "guard_begin",
+      "skippable": true
+    },
+    {
+      "args": [
+        "|Z"
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 107,
+      "op": "edges",
+      "out": {
+        "wp": 92
+      },
+      "self": {
+        "wp": 91
+      }
+    },
+    {
+      "args": [
+        0.5
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 107,
+      "op": "fillet",
+      "out": {
+        "wp": 93
+      },
+      "self": {
+        "wp": 92
+      }
+    },
+    {
+      "after": {
+        "wp": 93
+      },
+      "block": 2,
+      "g": 4,
+      "op": "guard_end"
+    },
+    {
+      "args": [
+        {
+          "wp": 93
+        }
+      ],
+      "kwargs": {
+        "clean": true
+      },
+      "line": 110,
+      "op": "union",
+      "out": {
+        "wp": 94
+      },
+      "self": {
+        "wp": 88
+      }
+    },
+    {
+      "line": 101,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 95
+      },
+      "plane": {
+        "origin": [
+          -20.0,
+          2.4492935982947065e-15,
+          15.0
+        ],
+        "xDir": [
+          -1.2246467991473532e-16,
+          -1.0,
+          0.0
+        ],
+        "zDir": [
+          -1.0,
+          1.2246467991473532e-16,
+          0.0
+        ]
+      }
+    },
+    {
+      "args": [
+        1.0
+      ],
+      "kwargs": {},
+      "line": 102,
+      "op": "circle",
+      "out": {
+        "wp": 96
+      },
+      "self": {
+        "wp": 95
+      }
+    },
+    {
+      "args": [
+        2.0
+      ],
+      "kwargs": {},
+      "line": 103,
+      "op": "extrude",
+      "out": {
+        "wp": 97
+      },
+      "self": {
+        "wp": 96
+      }
+    },
+    {
+      "before": {
+        "wp": 97
+      },
+      "block": 2,
+      "g": 5,
+      "op": "guard_begin",
+      "skippable": true
+    },
+    {
+      "args": [
+        "|Z"
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 107,
+      "op": "edges",
+      "out": {
+        "wp": 98
+      },
+      "self": {
+        "wp": 97
+      }
+    },
+    {
+      "args": [
+        0.5
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 107,
+      "op": "fillet",
+      "out": {
+        "wp": 99
+      },
+      "self": {
+        "wp": 98
+      }
+    },
+    {
+      "after": {
+        "wp": 99
+      },
+      "block": 2,
+      "g": 5,
+      "op": "guard_end"
+    },
+    {
+      "args": [
+        {
+          "wp": 99
+        }
+      ],
+      "kwargs": {
+        "clean": true
+      },
+      "line": 110,
+      "op": "union",
+      "out": {
+        "wp": 100
+      },
+      "self": {
+        "wp": 94
+      }
+    },
+    {
+      "line": 101,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 101
+      },
+      "plane": {
+        "origin": [
+          -10.000000000000009,
+          -17.320508075688767,
+          15.0
+        ],
+        "xDir": [
+          0.8660254037844384,
+          -0.5000000000000004,
+          0.0
+        ],
+        "zDir": [
+          -0.5000000000000004,
+          -0.8660254037844384,
+          0.0
+        ]
+      }
+    },
+    {
+      "args": [
+        1.0
+      ],
+      "kwargs": {},
+      "line": 102,
+      "op": "circle",
+      "out": {
+        "wp": 102
+      },
+      "self": {
+        "wp": 101
+      }
+    },
+    {
+      "args": [
+        2.0
+      ],
+      "kwargs": {},
+      "line": 103,
+      "op": "extrude",
+      "out": {
+        "wp": 103
+      },
+      "self": {
+        "wp": 102
+      }
+    },
+    {
+      "before": {
+        "wp": 103
+      },
+      "block": 2,
+      "g": 6,
+      "op": "guard_begin",
+      "skippable": true
+    },
+    {
+      "args": [
+        "|Z"
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 107,
+      "op": "edges",
+      "out": {
+        "wp": 104
+      },
+      "self": {
+        "wp": 103
+      }
+    },
+    {
+      "args": [
+        0.5
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 107,
+      "op": "fillet",
+      "out": {
+        "wp": 105
+      },
+      "self": {
+        "wp": 104
+      }
+    },
+    {
+      "after": {
+        "wp": 105
+      },
+      "block": 2,
+      "g": 6,
+      "op": "guard_end"
+    },
+    {
+      "args": [
+        {
+          "wp": 105
+        }
+      ],
+      "kwargs": {
+        "clean": true
+      },
+      "line": 110,
+      "op": "union",
+      "out": {
+        "wp": 106
+      },
+      "self": {
+        "wp": 100
+      }
+    },
+    {
+      "line": 101,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 107
+      },
+      "plane": {
+        "origin": [
+          10.000000000000002,
+          -17.32050807568877,
+          15.0
+        ],
+        "xDir": [
+          0.8660254037844386,
+          0.5000000000000001,
+          0.0
+        ],
+        "zDir": [
+          0.5000000000000001,
+          -0.8660254037844386,
+          0.0
+        ]
+      }
+    },
+    {
+      "args": [
+        1.0
+      ],
+      "kwargs": {},
+      "line": 102,
+      "op": "circle",
+      "out": {
+        "wp": 108
+      },
+      "self": {
+        "wp": 107
+      }
+    },
+    {
+      "args": [
+        2.0
+      ],
+      "kwargs": {},
+      "line": 103,
+      "op": "extrude",
+      "out": {
+        "wp": 109
+      },
+      "self": {
+        "wp": 108
+      }
+    },
+    {
+      "before": {
+        "wp": 109
+      },
+      "block": 2,
+      "g": 7,
+      "op": "guard_begin",
+      "skippable": true
+    },
+    {
+      "args": [
+        "|Z"
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 107,
+      "op": "edges",
+      "out": {
+        "wp": 110
+      },
+      "self": {
+        "wp": 109
+      }
+    },
+    {
+      "args": [
+        0.5
+      ],
+      "guarded": true,
+      "kwargs": {},
+      "line": 107,
+      "op": "fillet",
+      "out": {
+        "wp": 111
+      },
+      "self": {
+        "wp": 110
+      }
+    },
+    {
+      "after": {
+        "wp": 111
+      },
+      "block": 2,
+      "g": 7,
+      "op": "guard_end"
+    },
+    {
+      "args": [
+        {
+          "wp": 111
+        }
+      ],
+      "kwargs": {
+        "clean": true
+      },
+      "line": 110,
+      "op": "union",
+      "out": {
+        "wp": 112
+      },
+      "self": {
+        "wp": 106
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 112
+        }
+      ],
+      "kwargs": {
+        "clean": true
+      },
+      "line": 113,
+      "op": "union",
+      "out": {
+        "wp": 113
+      },
+      "self": {
+        "wp": 77
+      }
+    }
+  ],
+  "fail_at": [
+    8
+  ],
+  "guarded": true,
+  "i": 4123,
+  "name": "cylinder_lightweight_with_prismatic_lattice_and_mount_bosses",
+  "result": {
+    "wp": 113
+  },
+  "status": "ok"
+}

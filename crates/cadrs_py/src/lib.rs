@@ -24,5 +24,29 @@ fn _cadrs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(shapes::edges_to_wires, m)?)?;
     m.add_function(wrap_pyfunction!(shapes::loft_fn, m)?)?;
     m.add_function(wrap_pyfunction!(shapes::text_fn, m)?)?;
+    m.add_function(wrap_pyfunction!(set_tolerance, m)?)?;
+    m.add_function(wrap_pyfunction!(tolerance, m)?)?;
     Ok(())
+}
+
+/// `set_tolerance(point)`: the merge distance (mm) the kernel's operations run with from now on,
+/// or `"parasolid"` for Parasolid's (and Onshape's) 1e-5 mm, or `"default"`. Also from the
+/// environment: `CADRS_TOLERANCE=parasolid`.
+#[pyfunction]
+fn set_tolerance(point: &Bound<'_, PyAny>) -> PyResult<()> {
+    let name = match point.extract::<f64>() {
+        Ok(x) => x.to_string(),
+        Err(_) => point.extract::<String>()?,
+    };
+    let t = cadrs_kernel::cadquery::tolerances_named(&name).ok_or_else(|| {
+        pyo3::exceptions::PyValueError::new_err(format!("no tolerance named {name:?}"))
+    })?;
+    cadrs_kernel::cadquery::set_tolerances(t)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+}
+
+/// `tolerance()`: the merge distance (mm) the kernel's operations run with.
+#[pyfunction]
+fn tolerance() -> f64 {
+    cadrs_kernel::cadquery::tolerances().point
 }

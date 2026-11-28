@@ -1,0 +1,151 @@
+{
+  "entries": [
+    {
+      "line": 27,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 1
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            10.0,
+            0.0
+          ],
+          [
+            5.0,
+            8.660254037844386
+          ]
+        ]
+      ],
+      "kwargs": {},
+      "line": 28,
+      "op": "polyline",
+      "out": {
+        "wp": 2
+      },
+      "self": {
+        "wp": 1
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {},
+      "line": 29,
+      "op": "close",
+      "out": {
+        "wp": 3
+      },
+      "self": {
+        "wp": 2
+      }
+    },
+    {
+      "args": [
+        25.0
+      ],
+      "kwargs": {},
+      "line": 30,
+      "op": "extrude",
+      "out": {
+        "wp": 4
+      },
+      "self": {
+        "wp": 3
+      }
+    },
+    {
+      "args": [
+        ">Z"
+      ],
+      "kwargs": {},
+      "line": 35,
+      "op": "faces",
+      "out": {
+        "wp": 5
+      },
+      "self": {
+        "wp": 4
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": -0.0
+      },
+      "line": 36,
+      "op": "workplane",
+      "out": {
+        "wp": 6
+      },
+      "self": {
+        "wp": 5
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "rotate": {
+          "vec": [
+            30.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "line": 37,
+      "op": "transformed",
+      "out": {
+        "wp": 7
+      },
+      "self": {
+        "wp": 6
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "keepBottom": true
+      },
+      "line": 41,
+      "op": "split",
+      "out": {
+        "wp": 8
+      },
+      "self": {
+        "wp": 7
+      }
+    }
+  ],
+  "guarded": false,
+  "i": 47,
+  "name": "triangular_prism_with_tilt",
+  "result": {
+    "wp": 8
+  },
+  "status": "ok"
+}

@@ -2,6 +2,10 @@
 //! runs each through evalFeatureScript with the person's own session, and posts the response
 //! back; results land in each case's directory as parasolid.json.
 //!
+//! Answers are cached: each parasolid.json records the hash of the script it answers
+//! (`script`), and a case is asked again only when its script changed and `--rerun` is given
+//! (or `--force`, whatever changed); `--adopt` keys old answers to new scripts without asking.
+//!
 //! In a cad.onshape.com tab's console (Chrome asks once to allow local network access):
 //!   eval(await (await fetch('http://127.0.0.1:8766/client.js', {targetAddressSpace: 'loopback'})).text())
 //!
@@ -47,6 +51,16 @@ pub fn unfs(v: &Value) -> Value {
         return Value::Null;
     }
     v.get("value").cloned().unwrap_or(Value::Null)
+}
+
+/// FNV-1a of a case's FeatureScript: the key its cached answer is stored under.
+pub fn script_hash(s: &str) -> String {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in s.bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    format!("{h:016x}")
 }
 
 /// Integral floats back to integers (FeatureScript numbers are all floats).
@@ -145,6 +159,11 @@ fn record_result(st: &mut State, job: &Job, status: i64, text: &str, now: u64) -
             );
             m.insert("evaluated".into(), json!(now));
             m.insert("guarded_steps".into(), json!(guarded));
+            // what it is the answer to: the cache key (see `run`)
+            let script =
+                std::fs::read_to_string(st.dir.join(format!("{i}_{name}")).join("case.fs"))
+                    .unwrap_or_default();
+            m.insert("script".into(), json!(script_hash(&script)));
         }
         let dir = st.dir.join(format!("{i}_{name}"));
         // Parasolid failed inside the generator's own `try`: CadQuery's caller would have
@@ -308,6 +327,11 @@ fn handle(
             );
             if st.queue.is_empty() && st.inflight.is_empty() {
                 eprintln!("all jobs answered");
+                // done: leave a moment for the client's last requests, then stop listening
+                std::thread::spawn(|| {
+                    std::thread::sleep(std::time::Duration::from_secs(3));
+                    std::process::exit(0);
+                });
             }
         }
         let left = st.queue.len() + st.inflight.len();
@@ -340,6 +364,9 @@ pub fn run(args: &[String]) -> Result<()> {
         .transpose()?
         .unwrap_or(2000);
     let rerun = args.iter().any(|a| a == "--rerun");
+    let force = args.iter().any(|a| a == "--force");
+    let adopt = args.iter().any(|a| a == "--adopt");
+    let (mut cached, mut stale) = (0, 0);
     let rerun_errors = args.iter().any(|a| a == "--rerun-errors");
     let only: Option<Vec<i64>> =
         flag(args, "--only").map(|s| s.split(',').map(|x| x.parse().unwrap()).collect());
@@ -360,8 +387,34 @@ pub fn run(args: &[String]) -> Result<()> {
                     .ok()
                     .and_then(|s| serde_json::from_str(&s).ok());
                 let errored = prev.as_ref().is_some_and(|p| p["status"] != "ok");
-                if rerun || prev.is_none() || (rerun_errors && errored) {
+                // Onshape answers are cached: a case whose answer is to this very script (its
+                // tape, the runtime and the translation unchanged) is not asked again unless
+                // forced; one whose script changed is "stale", asked again with --rerun.
+                let fresh = prev
+                    .as_ref()
+                    .is_some_and(|p| p["script"] == json!(script_hash(&emit::batch(&[&t]))));
+                if force
+                    || prev.is_none()
+                    || (rerun && !fresh)
+                    || (rerun_errors && errored && !fresh)
+                {
                     todo.push(*i);
+                } else if !fresh && adopt {
+                    // --adopt: the script changed in ways that don't change its answer (say, the
+                    // runtime gained an operation the case doesn't use): keep the answer, keyed to
+                    // the script it now stands for
+                    let mut p = prev.clone().unwrap();
+                    p["script"] = json!(script_hash(&emit::batch(&[&t])));
+                    p["adopted"] = json!(true);
+                    std::fs::write(
+                        dir.join("parasolid.json"),
+                        serde_json::to_string_pretty(&p)? + "\n",
+                    )?;
+                    cached += 1;
+                } else if !fresh {
+                    stale += 1;
+                } else {
+                    cached += 1;
                 }
                 names.insert(*i, (name.clone(), t.guarded.clone()));
                 translated.insert(*i, t);
@@ -389,10 +442,14 @@ pub fn run(args: &[String]) -> Result<()> {
         });
     }
     eprintln!(
-        "cq2fs serve: {} cases in {} jobs on 127.0.0.1:{port}; host document {host:?}",
+        "cq2fs serve: {} cases in {} jobs on 127.0.0.1:{port}; host document {host:?} ({cached} answered already, {stale} answered for an older script: --rerun asks again, --adopt keeps)",
         todo.len(),
         queue.len()
     );
+    if queue.is_empty() {
+        eprintln!("nothing to ask Onshape");
+        return Ok(());
+    }
     eprintln!(
         "  in a cad.onshape.com tab: eval(await (await fetch('http://127.0.0.1:{port}/client.js', {{targetAddressSpace: 'loopback'}})).text())"
     );

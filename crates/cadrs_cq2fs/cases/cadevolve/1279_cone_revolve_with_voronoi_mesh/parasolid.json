@@ -1,0 +1,13 @@
+{
+  "adopted": true,
+  "at": 6,
+  "err": "{ message : REVOLVE_FAILED }",
+  "evaluated": 1795850414,
+  "guarded_steps": [],
+  "i": 1279,
+  "log": [],
+  "script": "ced20268158def50",
+  "source": "Onshape evalFeatureScript (Parasolid), case.fs",
+  "status": "error",
+  "warn": []
+}

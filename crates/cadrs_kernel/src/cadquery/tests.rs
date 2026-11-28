@@ -325,6 +325,13 @@ fn replay_logged_boolean() {
         _ => crate::BoolOp::Subtract,
     };
     let mut k = crate::native::NativeKernel::new();
+    // CADRS_REPLAY_POINT: the session's merge distance (mm), as `Tolerances::with_point`
+    if let Ok(p) = std::env::var("CADRS_REPLAY_POINT") {
+        k.set_tolerances(crate::native::tol::Tolerances::with_point(
+            p.parse().unwrap(),
+        ))
+        .unwrap();
+    }
     let mut ids = Vec::new();
     for j in 0.. {
         let Ok(bytes) = std::fs::read(format!("{stem}-{j}.body")) else {

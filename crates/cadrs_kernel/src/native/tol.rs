@@ -129,6 +129,23 @@ impl Default for Tolerances {
 }
 
 impl Tolerances {
+    /// A session merging at `point` (mm) on its first run, its retries ten and a hundred times
+    /// that, and entities holding no less than [`CONFUSION`] or a tenth of `point`, the smaller.
+    /// Parasolid's (and so Onshape's) linear precision is 1e-8 m: [`Self::parasolid`].
+    pub fn with_point(point: f64) -> Self {
+        Self {
+            point,
+            retries: [point * 10.0, point * 100.0],
+            confusion: CONFUSION.min(point * 0.1),
+        }
+    }
+
+    /// Parasolid's linear precision, 1e-8 m = 1e-5 mm (Onshape's `TOLERANCE.zeroLength` in
+    /// std's math.fs): points closer are one point there. For comparing with Onshape.
+    pub fn parasolid() -> Self {
+        Self::with_point(1e-5)
+    }
+
     /// The tolerances for a model of this size (its box's diagonal, mm): the defaults for a
     /// millimetre and more, to the bit; below that the merge distance and the retries shrink
     /// with the model ([`small`]), down to the smallest tolerance an entity holds, so that a

@@ -111,7 +111,12 @@ pub fn run_cadrs(args: &[String]) -> Result<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|| set.dir.join("cadrs.jsonl"));
     let names: Vec<&str> = set.cases.iter().map(|(_, n)| n.as_str()).collect();
-    let st = std::process::Command::new("python3")
+    let mut cmd = std::process::Command::new("python3");
+    // --tolerance parasolid|default|<mm>: the kernel's session tolerances (CADRS_TOLERANCE)
+    if let Some(t) = flag(args, "--tolerance") {
+        cmd.env("CADRS_TOLERANCE", t);
+    }
+    let st = cmd
         .arg("-I")
         .arg(repo.join("tools/cadevolve/run.py"))
         .arg("--python")

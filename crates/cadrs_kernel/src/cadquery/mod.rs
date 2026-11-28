@@ -85,8 +85,39 @@ macro_rules! value_err {
 }
 pub(crate) use value_err;
 
-/// The session every shape's body lives in.
-static SESSION: LazyLock<Mutex<NativeKernel>> = LazyLock::new(|| Mutex::new(NativeKernel::new()));
+/// The session every shape's body lives in, at the tolerances `CADRS_TOLERANCE` names
+/// ([`tolerances_named`]) or the kernel's defaults.
+static SESSION: LazyLock<Mutex<NativeKernel>> = LazyLock::new(|| {
+    let mut k = NativeKernel::new();
+    if let Ok(name) = std::env::var("CADRS_TOLERANCE")
+        && let Some(t) = tolerances_named(&name)
+    {
+        let _ = k.set_tolerances(t);
+    }
+    Mutex::new(k)
+});
+
+/// Tolerances by name: `"parasolid"` (Parasolid's and Onshape's linear precision, 1e-5 mm:
+/// [`crate::native::tol::Tolerances::parasolid`]), `"default"`, or a merge distance in mm.
+pub fn tolerances_named(name: &str) -> Option<crate::native::tol::Tolerances> {
+    use crate::native::tol::Tolerances;
+    match name.trim() {
+        "parasolid" => Some(Tolerances::parasolid()),
+        "default" | "" => Some(Tolerances::default()),
+        x => x.parse::<f64>().ok().map(Tolerances::with_point),
+    }
+}
+
+/// Sets the tolerances every operation of the session runs with from now on (see
+/// [`crate::native::tol`]); shapes made before keep theirs.
+pub fn set_tolerances(t: crate::native::tol::Tolerances) -> CqResult<()> {
+    session(|k| k.set_tolerances(t)).map_err(|e| CqError::Value(e.to_string()))
+}
+
+/// The tolerances the session's operations run with.
+pub fn tolerances() -> crate::native::tol::Tolerances {
+    session(|k| k.tolerances())
+}
 
 /// Bodies whose last shape went away, released at the session's next use (a shape may go away
 /// while the session is in use).

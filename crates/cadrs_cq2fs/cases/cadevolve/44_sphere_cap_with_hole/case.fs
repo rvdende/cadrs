@@ -113,8 +113,8 @@ const warn = function(st, msg) {
 };
 
 // ---- data edges / wires (world coordinates, mm)
-const eStart = function(e) { return (e.k == "circle" || e.k == "ellipse") ? e.s : e.a; };
-const eEnd = function(e) { return (e.k == "circle" || e.k == "ellipse") ? e.s : e.b; };
+const eStart = function(e) { return (e.k == "circle" || e.k == "ellipse") ? e.s : (e.k == "spline" ? e.pts[0] : e.a); };
+const eEnd = function(e) { return (e.k == "circle" || e.k == "ellipse") ? e.s : (e.k == "spline" ? e.pts[size(e.pts) - 1] : e.b); };
 const eLine = function(a, b) { return {"t": "edge", "k": "line", "a": a, "b": b}; };
 const eArc = function(a, m, b) { return {"t": "edge", "k": "arc", "a": a, "m": m, "b": b}; };
 const eXform = function(T, e) {
@@ -122,6 +122,13 @@ const eXform = function(T, e) {
     if (e.k == "arc") return eArc(tP(T, e.a), tP(T, e.m), tP(T, e.b));
     if (e.k == "circle") return {"t": "edge", "k": "circle", "c": tP(T, e.c), "n": tD(T, e.n), "r": e.r, "s": tP(T, e.s)};
     if (e.k == "ellipse") return {"t": "edge", "k": "ellipse", "c": tP(T, e.c), "n": tD(T, e.n), "xa": tD(T, e.xa), "r1": e.r1, "r2": e.r2, "s": tP(T, e.s)};
+    if (e.k == "spline") {
+        var ps = [];
+        for (var p in e.pts) ps = append(ps, tP(T, p));
+        var ts = undefined;
+        if (e.tans != undefined) { ts = []; for (var d in e.tans) ts = append(ts, d == undefined ? undefined : tD(T, d)); }
+        return {"t": "edge", "k": "spline", "pts": ps, "tans": ts, "periodic": e.periodic};
+    }
     cqErr("edge kind " ~ e.k);
 };
 const wXform = function(T, w) {
@@ -156,6 +163,11 @@ const eLenCen = function(e) {
         const half = ang / 2;
         return {"L": r * ang, "C": cc + bis * (r * sin(half * radian) / half)};
     }
+    if (e.k == "spline") {   // by its control polygon: only used to centre a wire made of it
+        var L = 0; var acc = vector(0, 0, 0);
+        for (var j = 0; j + 1 < size(e.pts); j += 1) { const l = norm(e.pts[j + 1] - e.pts[j]); L += l; acc += (e.pts[j] + e.pts[j + 1]) / 2 * l; }
+        return {"L": L, "C": acc / L};
+    }
     cqErr("edge kind " ~ e.k);
 };
 const wCenter = function(w) {
@@ -171,6 +183,7 @@ const wPoints = function(w) {
         if (e.k == "line") ps = concatenateArrays([ps, [e.a, e.b]]);
         else if (e.k == "arc") ps = concatenateArrays([ps, [e.a, e.m, e.b]]);
         else if (e.k == "circle" || e.k == "ellipse") ps = append(ps, e.c);
+        else if (e.k == "spline") ps = concatenateArrays([ps, e.pts]);
     }
     return ps;
 };
@@ -455,6 +468,24 @@ const solidObj = function(q) { return {"t": "solid", "q": q}; };
 const isShapeObj = function(o) { return o.t == "solid" || o.t == "face" || o.t == "edgeq" || o.t == "vertex" || o.t == "wire" || o.t == "edge"; };
 
 // ---- faces from pending wires (wiresToFaces) as sketch regions; or selected faces
+// Edge.makeSpline through the points (GeomAPI_Interpolate in CadQuery): Onshape's fit spline
+// through the same points, with the end tangents where given. Both interpolate, but OCCT's
+// parametrization may not be Onshape's: the result carries a warning.
+const skSpline = function(sk, nm, e, to2, P, st) {
+    warn(st, "spline: Onshape's interpolation through the points, not OCCT's GeomAPI_Interpolate");
+    var pts = [];
+    for (var p in e.pts) pts = append(pts, to2(p));
+    var def = {"points": pts};
+    if (e.periodic == true) def.closed = true;
+    if (e.tans != undefined && size(e.tans) >= 2) {
+        const d2 = function(d) { const l = plL(P, P.o + d); return vector(l[0], l[1]) * MM; };
+        if (e.tans[0] != undefined) def.startDerivative = d2(e.tans[0]);
+        if (e.tans[size(e.tans) - 1] != undefined) def.endDerivative = d2(e.tans[size(e.tans) - 1]);
+        if (size(e.tans) > 2) warn(st, "spline: tangents at inner points not given to Onshape");
+    }
+    skFitSpline(sk, nm, def);
+};
+
 const sketchRegions = function(c, st, wires) {
     const P = wPlane(wires[0]);
     const scale = 1;
@@ -481,19 +512,24 @@ const sketchRegions = function(c, st, wires) {
                 var r1 = e.r1; var r2 = e.r2;
                 if (r2 > r1) { major = vector(-major[1], major[0]); r1 = e.r2; r2 = e.r1; }
                 skEllipse(sk, nm, {"center": to2(e.c), "majorRadius": r1 * MM, "minorRadius": r2 * MM, "majorAxis": normalize(major)});
-            }
+            } else if (e.k == "spline") skSpline(sk, nm, e, to2, P, st);
         }
     }
     skSolve(sk);
     const regions = qSketchRegion(id, true);
-    if (size(ents(c, regions)) == 0) cqErr("Cannot build face(s): no closed region");
-    return regions;
+    const n = size(ents(c, regions));
+    if (n == 0) cqErr("Cannot build face(s): no closed region");
+    // a wire inside another: its region a hole in the other's face (an inner wire)
+    return {"q": regions, "inner": size(ents(c, qSketchRegion(id, false))) > n};
 };
 const getFaces = function(c, st, selfI) {     // Workplane._getFaces
     const w = wpGet(st, selfI);
     var fq = [];
     for (var o in w.objs) if (o.t == "face") fq = append(fq, o.q);
-    if (size(fq) > 0) return qUnion(fq);
+    if (size(fq) > 0) {
+        warn(st, "faces on the stack extruded: inner wires not checked for a taper");
+        return {"q": qUnion(fq), "inner": false};
+    }
     var cx = ctxGet(st, w);
     if (size(cx.pw) == 0) cqErr("No pending wires present");
     const wires = cx.pw;
@@ -847,35 +883,62 @@ const cqClose = function(c, st, out, selfI, a) {      // Workplane.close
 };
 
 // 3D
-const extrudeRaw = function(c, st, selfI, dist, both) {   // Workplane._extrude (distance)
+// Solid.extrudeLinear's taper (LocOpe_DPrism, its height divided by cos(taper) so the solid is
+// `dist` tall): every side face leans in by `taper` degrees from the extrusion's direction,
+// about the face it starts from; out for a negative taper. Onshape's extrude does the same with
+// opDraft about its start cap (std extrude.fs, extrudeWithDraft).
+const taperDraft = function(c, st, id, dir, taper) {
+    for (var b in ents(c, qCreatedBy(id, EntityType.BODY))) {
+        const start = qOwnedByBody(qCapEntity(id, CapType.START, EntityType.FACE), b);
+        const end = qOwnedByBody(qCapEntity(id, CapType.END, EntityType.FACE), b);
+        opDraft(c, nid(st, "dr"), {"draftType": DraftType.NEUTRAL_PLANE, "neutralPlane": start,
+                                   "draftFaces": qSubtraction(qOwnedByBody(b, EntityType.FACE), qUnion([start, end])),
+                                   "pullVec": dir * (taper > 0 ? 1 : -1), "angle": abs(taper) * degree,
+                                   "tangentPropagation": false, "reFillet": false});
+    }
+};
+const extrudeRaw = function(c, st, selfI, dist, both, taper) {   // Workplane._extrude (distance)
     const w = wpGet(st, selfI);
     const faces = getFaces(c, st, selfI);
     if (abs(dist) < 1e-12) cqErr("extrude distance is zero");
-    const id = nid(st, "ex");
-    var def = {"entities": faces, "direction": w.plane.z * (dist > 0 ? 1 : -1), "endBound": BoundingType.BLIND, "endDepth": abs(dist) * MM};
-    if (both) { def.startBound = BoundingType.BLIND; def.startDepth = abs(dist) * MM; }
-    opExtrude(c, id, def);
-    return qCreatedBy(id, EntityType.BODY);
+    const t = (taper == undefined) ? 0 : taper;
+    const dir = w.plane.z * (dist > 0 ? 1 : -1);
+    if (t == 0) {
+        const id = nid(st, "ex");
+        var def = {"entities": faces.q, "direction": dir, "endBound": BoundingType.BLIND, "endDepth": abs(dist) * MM};
+        if (both) { def.startBound = BoundingType.BLIND; def.startDepth = abs(dist) * MM; }
+        opExtrude(c, id, def);
+        return qCreatedBy(id, EntityType.BODY);
+    }
+    if (faces.inner) cqErr("Inner wires not allowed with tapered extrusion");
+    // each way its own tapered extrusion (both: s1 fused with s2)
+    var qs = [];
+    for (var d in (both ? [dir, -dir] : [dir])) {
+        const id = nid(st, "ex");
+        opExtrude(c, id, {"entities": faces.q, "direction": d, "endBound": BoundingType.BLIND, "endDepth": abs(dist) * MM});
+        taperDraft(c, st, id, d, t);
+        qs = append(qs, qCreatedBy(id, EntityType.BODY));
+    }
+    if (size(qs) > 1) opBoolean(c, nid(st, "bo"), {"tools": qUnion(qs), "operationType": BooleanOperationType.UNION});
+    return qUnion(qs);
 };
 const cqCutBlind = function(c, st, out, selfI, a) {   // Workplane.cutBlind
     if (!(a.until is number)) cqUnsup("cutBlind until " ~ toString(a.until));
-    if (a.taper != undefined && a.taper != 0) cqUnsup("taper");
-    const toCut = extrudeRaw(c, st, selfI, a.until, a.both == true);
+    const toCut = extrudeRaw(c, st, selfI, a.until, a.both == true, a.taper);
     const base = findSolid(st, selfI);
     newObject(st, out, selfI, [solidObj(boolOp(c, st, "cut", base, toCut))]);
 };
 const cqExtrude = function(c, st, out, selfI, a) {    // Workplane.extrude
     if (a.combine == "cut" || a.combine == "s") return cqCutBlind(c, st, out, selfI, {"until": a.until, "both": a.both, "taper": a.taper});
     if (!(a.until is number)) cqUnsup("extrude until " ~ toString(a.until));
-    if (a.taper != undefined && a.taper != 0) cqUnsup("taper");
-    const r = extrudeRaw(c, st, selfI, a.until, a.both == true);
+    const r = extrudeRaw(c, st, selfI, a.until, a.both == true, a.taper);
     combineWithBase(c, st, out, selfI, r, a.combine);
 };
 const cqCutThruAll = function(c, st, out, selfI, a) {   // Workplane.cutThruAll: both directions
-    if (a.taper != 0) cqUnsup("taper");
+    if (a.taper != 0) cqUnsup("cutThruAll with a taper");
     const w = wpGet(st, selfI);
     const base = findSolid(st, selfI);
-    const faces = getFaces(c, st, selfI);
+    const faces = getFaces(c, st, selfI).q;
     const bb = evBox3d(c, {"topology": qUnion([base, faces]), "tight": false});
     const depth = norm(bb.maxCorner - bb.minCorner) / MM * 2 + 1;
     const id = nid(st, "ex");
@@ -969,11 +1032,158 @@ const cqRevolve = function(c, st, out, selfI, a) {   // Workplane.revolve
     if (a.axisEnd == undefined) e = (s[1] != 0) ? plW(w.plane, [0, s[1]]) : plW(w.plane, [0, 1]);
     else e = plW(w.plane, a.axisEnd);
     if (norm(e - s) < 1e-12) cqErr("revolve axis of zero length");
-    const faces = getFaces(c, st, selfI);
+    const faces = getFaces(c, st, selfI).q;
     const id = nid(st, "rv");
     opRevolve(c, id, {"entities": faces, "axis": line(s * MM, normalize(e - s)), "angleForward": (angle == 360 ? 2 * PI : angle * PI / 180) * radian});
     combineWithBase(c, st, out, selfI, qCreatedBy(id, EntityType.BODY), a.combine);
 };
+
+// Workplane.loft: each pending wire one section, in order (or the outer wires of the faces on
+// the stack); OCCT's ThruSections in CadQuery. Two sections make a ruled loft whatever the
+// kernel; so does `ruled` between each pair. A smooth loft through three or more is each
+// kernel's own surface: the result carries a warning saying so.
+const cqLoft = function(c, st, out, selfI, a) {
+    const w = wpGet(st, selfI);
+    var cx = ctxGet(st, w);
+    var profiles = [];
+    if (size(cx.pw) > 0) {
+        const wires = cx.pw;
+        cx.pw = [];
+        ctxPut(st, w, cx);
+        for (var x in wires) {
+            const f = sketchRegions(c, st, [x]);
+            if (size(ents(c, f.q)) != 1) cqErr("loft: a section that isn't one closed wire");
+            profiles = append(profiles, f.q);
+        }
+    } else {
+        for (var o in w.objs) {
+            if (o.t == "face") profiles = append(profiles, o.q);
+            else if (o.t == "vertex") cqUnsup("loft to a vertex");
+        }
+    }
+    if (size(profiles) == 0) cqErr("Nothing to loft");
+    if (size(profiles) == 1) cqErr("More than one wire or face is required");
+    var q;
+    if (a.ruled && size(profiles) > 2) {
+        var parts = [];
+        for (var j = 0; j + 1 < size(profiles); j += 1) {
+            const id = nid(st, "lo");
+            opLoft(c, id, {"profileSubqueries": [profiles[j], profiles[j + 1]], "bodyType": ToolBodyType.SOLID});
+            parts = append(parts, qCreatedBy(id, EntityType.BODY));
+        }
+        opBoolean(c, nid(st, "bo"), {"tools": qUnion(parts), "operationType": BooleanOperationType.UNION});
+        q = qUnion(parts);
+    } else {
+        if (size(profiles) > 2) warn(st, "smooth loft through " ~ size(profiles) ~ " sections: Parasolid's surface, not OCCT's ThruSections");
+        const id = nid(st, "lo");
+        opLoft(c, id, {"profileSubqueries": profiles, "bodyType": ToolBodyType.SOLID});
+        q = qCreatedBy(id, EntityType.BODY);
+    }
+    combineWithBase(c, st, out, selfI, q, a.combine);
+};
+
+const cqNewObject = function(c, st, out, selfI, a) {   // Workplane.newObject(objlist)
+    var objs = [];
+    for (var x in a.objlist) objs = concatenateArrays([objs, argShapes(c, st, x)]);
+    newObject(st, out, selfI, objs);
+};
+
+const cqSlot2D = function(c, st, out, selfI, a) {   // Workplane.slot2D
+    const r = a.diameter / 2;
+    const p1 = vector(-a.length / 2 + r, a.diameter / 2, 0);
+    const p2 = p1 + vector(a.length - a.diameter, 0, 0);
+    const p3 = p1 + vector(a.length - a.diameter, -a.diameter, 0);
+    const p4 = p1 + vector(0, -a.diameter, 0);
+    const arc1 = p2 + vector(r, -r, 0);
+    const arc2 = p4 + vector(-r, r, 0);
+    var w = {"t": "wire", "closed": true, "constr": false, "edges": [eLine(p1, p2), eArc(p2, arc1, p3), eLine(p3, p4), eArc(p4, arc2, p1)]};
+    w = wXform(transform(rotationMatrix3d(vector(0, 0, 1), a.angle * degree), vector(0, 0, 0) * MM), w);
+    placeWire(c, st, out, selfI, w);
+};
+
+const cqSpline = function(c, st, out, selfI, a) {    // Workplane.spline
+    const w = wpGet(st, selfI);
+    var pts = [];
+    if (a.includeCurrent) pts = append(pts, fromPoint(c, w, false));
+    for (var p in a.listOfXYTuple) pts = append(pts, plW(w.plane, p));
+    if (a.parameters != undefined) cqUnsup("spline with parameters");
+    var tans = undefined;
+    if (a.tangents != undefined) {
+        tans = [];
+        for (var t in a.tangents) tans = append(tans, t == undefined ? undefined : plW(w.plane, t) - w.plane.o);
+    }
+    const e = {"t": "edge", "k": "spline", "pts": pts, "tans": tans, "periodic": a.periodic};
+    if (a.makeWire) {
+        const wire = {"t": "wire", "edges": [e], "closed": a.periodic == true || norm(pts[0] - pts[size(pts) - 1]) < 1e-9, "constr": a.forConstruction};
+        if (!a.forConstruction) addPendingWires(st, w, [wire]);
+        newObject(st, out, selfI, [wire]);
+    } else {
+        if (!a.forConstruction) addPendingEdge(st, w, e);
+        newObject(st, out, selfI, [e]);
+    }
+};
+
+// A sweep's path as edges Parasolid can follow: one sketch when the path lies in a plane, else
+// (straight segments only) a 3D polyline.
+const pathEdges = function(c, st, p) {
+    var edges = (p.t == "wire") ? p.edges : [p];
+    var pts = [];
+    for (var e in edges) pts = concatenateArrays([pts, (e.k == "line") ? [e.a, e.b] : (e.k == "arc" ? [e.a, e.m, e.b] : (e.k == "spline" ? e.pts : [e.c, e.s]))]);
+    var planar = undefined;
+    try silent { planar = wPlane({"edges": edges}); }
+    if (planar == undefined && size(edges) == 1 && edges[0].k == "line") {
+        const d = unitOf(edges[0].b - edges[0].a);
+        planar = plMake(edges[0].a, d, defaultXDir(d));
+    }
+    var flat = planar != undefined;
+    if (flat) for (var q in pts) if (abs(dot(q - planar.o, planar.z)) > 1e-7 * max(1, norm(q))) flat = false;
+    if (flat) {
+        const id = nid(st, "pk");
+        var sk = newSketchOnPlane(c, id, {"sketchPlane": plane(planar.o * MM, planar.z, planar.x)});
+        const to2 = function(q) { const l = plL(planar, q); return vector(l[0], l[1]) * MM; };
+        var j = 0;
+        for (var e in edges) {
+            j += 1;
+            if (e.k == "line") skLineSegment(sk, "p" ~ j, {"start": to2(e.a), "end": to2(e.b)});
+            else if (e.k == "arc") skArc(sk, "p" ~ j, {"start": to2(e.a), "mid": to2(e.m), "end": to2(e.b)});
+            else if (e.k == "circle") skCircle(sk, "p" ~ j, {"center": to2(e.c), "radius": e.r * MM});
+            else if (e.k == "spline") skSpline(sk, "p" ~ j, e, to2, planar, st);
+            else cqUnsup("sweep path edge " ~ e.k);
+        }
+        skSolve(sk);
+        return qCreatedBy(id, EntityType.EDGE);
+    }
+    for (var e in edges) if (e.k != "line") cqUnsup("a sweep path off one plane with a " ~ e.k);
+    var chain = [edges[0].a * MM];
+    for (var e in edges) chain = append(chain, e.b * MM);
+    const id = nid(st, "pl");
+    opPolyline(c, id, {"points": chain});
+    return qCreatedBy(id, EntityType.EDGE);
+};
+const cqSweep = function(c, st, out, selfI, a) {     // Workplane.sweep / _sweep
+    if (a.multisection == true || a.sweepAlongWires == true) cqUnsup("multisection sweep");
+    if (a.normal != undefined || a.auxSpine != undefined) cqUnsup("sweep with a normal or an auxiliary spine");
+    if (a.makeSolid == false) cqUnsup("sweep as a shell");
+    var p;
+    if (a.path.wp != undefined) {
+        // path.wire(): its pending edges made a wire (and a pending wire of its context)
+        const tmp = toString(a.path.wp) ~ "_wire";
+        cqWire(c, st, tmp, a.path.wp, {"forConstruction": false});
+        const objs = wpGet(st, tmp).objs;
+        if (size(objs) == 0) cqErr("Wire or Edge instance required");
+        p = objs[0];
+    } else p = shapeGet(st, a.path.shape);
+    if (p.t != "wire" && p.t != "edge") cqErr("Wire or Edge instance required");
+    var corners = false;
+    if (p.t == "wire") for (var j = 0; j + 1 < size(p.edges); j += 1) corners = true;
+    if (corners) warn(st, "sweep along several edges: Parasolid's joins where they meet at an angle, not OCCT's '" ~ a.transition ~ "' transition");
+    const path = pathEdges(c, st, p);
+    const faces = getFaces(c, st, selfI).q;
+    const id = nid(st, "sw");
+    opSweep(c, id, {"profiles": faces, "path": path});
+    combineWithBase(c, st, out, selfI, qCreatedBy(id, EntityType.BODY), a.combine);
+};
+
 
 const unionLike = function(c, st, out, selfI, kind, a, argName) {
     const arg = a[argName];
@@ -1213,6 +1423,15 @@ const cqVal = function(c, st, outShape, selfI) {   // Workplane.val
 
 // ---- shape-level calls (cq.Solid.make*, Shape methods)
 const putShape = function(st, i, o) { var s = st[]; s.shapes[i] = o; st[] = s; };
+const shCompoundMake = function(c, st, out, a) {    // Compound.makeCompound(listOfShapes)
+    var qs = [];
+    for (var x in a.listOfShapes) for (var o in argShapes(c, st, x)) {
+        if (o.t == "solid") qs = append(qs, o.q);
+        else cqUnsup("a compound of " ~ o.t);
+    }
+    putShape(st, out, solidObj(qUnion(qs)));
+};
+
 const shSolidMakeBox = function(c, st, out, a) {   // Solid.makeBox(length, width, height, pnt, dir)
     const T = toWorld(coordSystem(v3(a.pnt) * MM, defaultXDir(normalize(v3(a.dir))), normalize(v3(a.dir))));
     const id = nid(st, "bx");

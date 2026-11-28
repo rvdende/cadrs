@@ -1,4 +1,5 @@
 {
+  "adopted": true,
   "area": 1256.6370614359173,
   "bbox": [
     -10.0,
@@ -9,7 +10,9 @@
     10.0
   ],
   "edges": 0.0,
+  "evaluated": 1795846204,
   "faces": 1.0,
+  "guarded_steps": [],
   "i": 2.0,
   "log": [
     {
@@ -22,12 +25,11 @@
     }
   ],
   "other": [],
+  "script": "876eb9f185fcbd76",
   "solids": 1.0,
+  "source": "Onshape evalFeatureScript (Parasolid), cq2fs case.fs",
   "status": "ok",
   "vertices": 0.0,
   "vol": 4188.790204786391,
-  "warn": [],
-  "source": "Onshape evalFeatureScript (Parasolid), cq2fs case.fs",
-  "evaluated": 1795846204,
-  "guarded_steps": []
+  "warn": []
 }
