@@ -12,6 +12,8 @@
 //!                                               job server for the Onshape tab: writes parasolid.json
 //! cq2fs cadrs <set.json> [--out <results.jsonl>] run the set on cadrs's CadQuery (crates/cadrs_py)
 //! cq2fs compare <set.json> [--cadrs <results.jsonl>] [--out report.json]
+//! cq2fs steps <set.json> <i>                    each Workplane call's solids and volume, Parasolid
+//!                                               beside cadrs, and where they first differ
 //! ```
 //!
 //! A case set is `{"generators": path, "dir": dir, "cases": [{"i", "name"}]}`, paths relative to the
@@ -195,6 +197,113 @@ pub fn record_cases(set: &CaseSet, idx: &[i64], fails: &BTreeMap<i64, Vec<i64>>)
     Ok(())
 }
 
+/// Parasolid's volume after each solid-making step (parasolid.json's log, by the step's output
+/// workplane) beside cadrs's (recorder/cadrs_steps.py), Workplane call by Workplane call.
+fn steps(args: &[String]) -> Result<()> {
+    let set = CaseSet::load(Path::new(args.first().context("set.json")?))?;
+    let i: i64 = args.get(1).context("case index")?.parse()?;
+    let (_, name) = set
+        .cases
+        .iter()
+        .find(|(j, _)| *j == i)
+        .context("no such case in the set")?;
+    let dir = set.case_dir(i, name);
+    let tape = set.tape(i, name)?;
+    let ps: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("parasolid.json"))?)?;
+    let mut pvol: BTreeMap<i64, Value> = BTreeMap::new();
+    for l in ps["log"].as_array().into_iter().flatten() {
+        if let Some(id) = l["id"].as_f64() {
+            pvol.insert(id as i64, l["msg"].clone());
+        }
+    }
+    let out = std::process::Command::new(python())
+        .arg("-I")
+        .arg(Path::new(CRATE).join("recorder/cadrs_steps.py"))
+        .arg(&set.generators)
+        .arg(i.to_string())
+        .output()?;
+    let clog: Vec<Value> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+    // the tape's Workplane calls, in order (what the cadrs log records)
+    let calls: Vec<&Value> = tape["entries"]
+        .as_array()
+        .context("entries")?
+        .iter()
+        .filter(|e| {
+            e["op"] == "Workplane"
+                || (e["self"].get("wp").is_some() && e["out"].get("wp").is_some())
+        })
+        .collect();
+    let mut first = None;
+    println!(
+        "{:>4} {:>5} {:16} {:>22} {:>22}",
+        "n", "step", "op", "parasolid", "cadrs"
+    );
+    for (n, e) in calls.iter().enumerate() {
+        let out_wp = e["out"]["wp"].as_i64().unwrap_or(-1);
+        let step = tape["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .position(|x| std::ptr::eq(x, *e))
+            .map(|p| p + 1)
+            .unwrap_or(0);
+        let p = pvol.get(&out_wp);
+        let c = clog.get(n);
+        let show = |m: Option<&Value>| match m {
+            Some(m) if m.get("vol").is_some() => format!(
+                "{} {:.9}",
+                m["solids"],
+                m["vol"].as_f64().unwrap_or(f64::NAN)
+            ),
+            Some(m) if m.get("raised").is_some() => format!(
+                "raised {}",
+                m["raised"]
+                    .as_str()
+                    .unwrap_or("")
+                    .chars()
+                    .take(14)
+                    .collect::<String>()
+            ),
+            _ => "-".into(),
+        };
+        let mut mark = "";
+        if let (Some(p), Some(c)) = (p, c)
+            && let (Some(pv), Some(cv)) = (p["vol"].as_f64(), c["vol"].as_f64())
+            && ((pv - cv).abs() > 1e-6 * pv.abs().max(cv.abs()).max(1.0)
+                || p["solids"].as_f64() != c["solids"].as_f64())
+        {
+            mark = " <-";
+            first.get_or_insert(step);
+        }
+        if p.is_some() || mark != "" || c.is_some_and(|c| c.get("raised").is_some()) {
+            println!(
+                "{:>4} {:>5} {:16} {:>22} {:>22}{mark}",
+                n + 1,
+                step,
+                e["op"].as_str().unwrap_or(""),
+                show(p),
+                show(c)
+            );
+        }
+    }
+    if let Some(s) = clog.last() {
+        println!("cadrs: {}", s["status"]);
+    }
+    println!(
+        "parasolid: {} {}",
+        ps["status"],
+        ps["err"].as_str().unwrap_or("")
+    );
+    match first {
+        Some(s) => println!("first difference at step {s}"),
+        None => println!("no difference in the logged steps"),
+    }
+    Ok(())
+}
+
 pub fn flag(args: &[String], name: &str) -> Option<String> {
     args.iter()
         .position(|a| a == name)
@@ -303,6 +412,7 @@ fn main() -> Result<()> {
         "serve" => serve::run(rest)?,
         "cadrs" => compare::run_cadrs(rest)?,
         "compare" => compare::run(rest)?,
+        "steps" => steps(rest)?,
         _ => bail!(
             "usage: cq2fs scan|translate|selectors|add|record|emit|serve|cadrs|compare (see src/main.rs)"
         ),
