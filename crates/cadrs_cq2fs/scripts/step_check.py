@@ -7,10 +7,13 @@ each case, which should be one:
 - eval:  evalFeatureScript's volume (parasolid.json), the case built in a scratch context;
 - part:  Onshape's mass properties of the parts the generator feature built and named
          c<i>.<n> in the Part Studio (the batch's json);
-- step:  the STEP file read back (by cadrs's STEP reader), its solids given to cases by the
-         slot each lies in (case k of a batch moved k * slot_mm along X).
-eval = step (within 1e-7) says the file holds what evalFeatureScript built, read by another
-kernel's reader; part (the REST mass properties, computed less accurately: 8.6e-7 off on
+- step:  the STEP file imported back into Onshape and measured by Parasolid
+         (`cq2fs step --verify`: <set>-<k>.reimport.json), parts by their names;
+- cadrs: the STEP file read by cadrs's STEP reader, its solids given to cases by the slot each
+         lies in (case k of a batch moved k * slot_mm along X): a check of that reader.
+eval = step (within 1e-7) says the file holds what evalFeatureScript built, read by Parasolid
+itself, not by the kernel under test; step = cadrs (within 1e-7) says cadrs's reader reads it;
+part (the REST mass properties, computed less accurately: 8.6e-7 off on
 CADEvolve 24 where eval and step agree to 2e-8) is held to 1e-6. Writes
 <dir>/step/<set>-check.json.
 """
@@ -51,6 +54,14 @@ def main():
                 continue
             i = int(nm[1:].split(".")[0])
             part_vol[i] = part_vol.get(i, 0.0) + m["volume"][0] * 1e9  # m^3 -> mm^3
+        reimport = {}
+        rp = os.path.join(d, "step", f"{name}-{k}.reimport.json")
+        if os.path.exists(rp):
+            for part in json.load(open(rp)).get("parts") or []:
+                nm = part.get("name") or ""
+                if nm.startswith("c") and "." in nm:
+                    i = int(nm[1:].split(".")[0])
+                    reimport[i] = reimport.get(i, 0.0) + part["vol"]
         shape = cq.importers.importStep(k_file)
         step_vol = {}
         sols = [x for o in shape.vals() for x in o.Solids()]
@@ -65,18 +76,22 @@ def main():
             p = json.load(open(os.path.join(d, f"{i}_{names[i]}", "parasolid.json")))
             ev = p.get("vol")
             pv = part_vol.get(i)
-            sv = step_vol.get(i)
+            sv = reimport.get(i)
+            cv = step_vol.get(i)
             rel = lambda a, b: abs(a - b) / max(abs(a), abs(b), 1e-12) if a is not None and b is not None else None
-            r = {"i": i, "name": names[i], "batch": k, "eval": ev, "part": pv, "step": sv,
-                 "eval_vs_step": rel(ev, sv), "eval_vs_part": rel(ev, pv)}
+            r = {"i": i, "name": names[i], "batch": k, "eval": ev, "part": pv, "step": sv, "cadrs_read": cv,
+                 "eval_vs_step": rel(ev, sv), "eval_vs_part": rel(ev, pv), "step_vs_cadrs_read": rel(sv, cv)}
+            r["cadrs_reads_it"] = r["step_vs_cadrs_read"] is not None and r["step_vs_cadrs_read"] <= FLAG
             r["ok"] = (r["eval_vs_step"] is not None and r["eval_vs_step"] <= FLAG
                        and r["eval_vs_part"] is not None and r["eval_vs_part"] <= PART)
             rows.append(r)
             mark = "" if r["ok"] else "  <-"
             f = lambda x: "-" if x is None else f"{x:.3e}"
-            print(f"{i:6} {names[i][:40]:40} eval/step {f(r['eval_vs_step'])}  eval/part {f(r['eval_vs_part'])}{mark}")
+            print(f"{i:6} {names[i][:40]:40} eval/step {f(r['eval_vs_step'])}  eval/part {f(r['eval_vs_part'])}  step/cadrs-read {f(r['step_vs_cadrs_read'])}{mark}")
         k += 1
     ok = sum(r["ok"] for r in rows)
+    reads = sum(r["cadrs_reads_it"] for r in rows)
+    print(f"cadrs's STEP reader reads {reads} of {len(rows)} as Parasolid does (within {FLAG})")
     print(f"{ok} of {len(rows)} cases: the STEP holds what evalFeatureScript built (within {FLAG}), the Part Studio's parts too (within {PART})")
     json.dump({"rows": rows, "ok": ok, "of": len(rows)}, open(os.path.join(d, "step", f"{name}-check.json"), "w"), indent=1)
 

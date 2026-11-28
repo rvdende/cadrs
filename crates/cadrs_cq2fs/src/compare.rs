@@ -72,6 +72,16 @@ pub fn run(args: &[String]) -> Result<()> {
             }
         }
     }
+    // cases/<set>.adjudications.json: what a disagreement was found to be, by case
+    let adj_path = set.path.with_extension("adjudications.json");
+    let adjudications: BTreeMap<i64, Value> = std::fs::read_to_string(&adj_path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|a| Some((a["i"].as_i64()?, a)))
+        .collect();
     let mut rows = vec![];
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     for (i, name) in &set.cases {
@@ -80,7 +90,12 @@ pub fn run(args: &[String]) -> Result<()> {
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or(json!({"status": "pending"}));
-        let (v, d) = verdict(&p, cadrs.get(i));
+        let (mut v, d) = verdict(&p, cadrs.get(i));
+        if v != "agree"
+            && let Some(a) = adjudications.get(i)
+        {
+            v = format!("{v}/{}", a["verdict"].as_str().unwrap_or("adjudicated"));
+        }
         *counts.entry(v.clone()).or_default() += 1;
         println!(
             "{:5} {:44} {:16} {}",

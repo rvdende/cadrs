@@ -149,6 +149,8 @@ pub struct NativeKernel {
     pub(crate) united: Vec<Arc<super::sweep_cache::United>>,
     /// Inside [`Self::union_by_parasolid_rules`]: its own unions run as cadrs's.
     in_rules: bool,
+    /// Inside a boolean whose result [`parasolid_solids`] reshapes (its inner booleans not).
+    in_post: bool,
 }
 
 /// How many of [`Kernel::joins`]'s unions a session keeps for the union that may follow.
@@ -540,6 +542,7 @@ impl NativeKernel {
             swept: self.swept.clone(),
             united: self.united.clone(),
             in_rules: self.in_rules,
+            in_post: self.in_post,
         }
     }
 
@@ -1805,6 +1808,25 @@ impl Kernel for NativeKernel {
     }
 
     fn boolean(&mut self, op: BoolOp, target: BodyId, tools: &[BodyId]) -> Result<OpResult> {
+        // Parasolid's rules: its solids hold together through faces ([`parasolid_solids`]).
+        if !self.in_post
+            && !self.in_rules
+            && super::tol::rules() == super::tol::KernelRules::Parasolid
+        {
+            self.in_post = true;
+            let r = self.boolean(op, target, tools);
+            self.in_post = false;
+            let mut r = r?;
+            for b in &mut r.bodies {
+                let body = self.get(*b)?.as_ref().clone();
+                if let Some(split) = parasolid_solids(&body)? {
+                    let old = *b;
+                    *b = self.insert(split);
+                    self.release(old);
+                }
+            }
+            return Ok(r);
+        }
         // Parasolid's rules: bodies that only graze one another stay separate parts.
         if op == BoolOp::Union
             && !tools.is_empty()
@@ -3850,4 +3872,127 @@ mod tests {
             assert_eq!(k.overlaps(id, tool).ok(), full.ok(), "{name}");
         }
     }
+}
+
+/// A body as Parasolid has its solids ([`super::tol::KernelRules::Parasolid`]): an edge between
+/// more than two faces refused (Parasolid's BOOLEAN_NON_MANIFOLD_RESULT), and a solid whose
+/// outer shell's faces fall into pieces that hold together through no edge (islands touching
+/// only at points) made one solid per piece, each void kept with the piece whose box holds it.
+/// Its faces stay as they were (so does a history of them). None where nothing changes.
+pub(crate) fn parasolid_solids(b: &Body) -> Result<Option<Body>> {
+    let mut uses = vec![0usize; b.edges.len()];
+    for f in &b.faces {
+        for l in &f.loops {
+            for c in l {
+                if let Some(u) = uses.get_mut(c.edge) {
+                    *u += 1;
+                }
+            }
+        }
+    }
+    if let Some(e) = uses.iter().position(|&u| u > 2) {
+        return Err(KernelError::InvalidResult {
+            op: "boolean",
+            why: format!(
+                "non-manifold result: edge {e} is used by {} faces (Parasolid's rules)",
+                uses[e]
+            ),
+        });
+    }
+    let mut out = b.clone();
+    let mut solids = Vec::new();
+    let mut changed = false;
+    for sol in &b.solids {
+        let Some(&outer) = sol.shells.first() else {
+            continue;
+        };
+        let faces = &b.shells[outer].faces;
+        // pieces of the outer shell: faces joined through the edges they share
+        let mut parent: Vec<usize> = (0..faces.len()).collect();
+        fn root(p: &mut [usize], mut i: usize) -> usize {
+            while p[i] != i {
+                p[i] = p[p[i]];
+                i = p[i];
+            }
+            i
+        }
+        let mut first_face_of_edge: std::collections::HashMap<usize, usize> =
+            std::collections::HashMap::new();
+        for (k, &f) in faces.iter().enumerate() {
+            for l in &b.faces[f].loops {
+                for c in l {
+                    match first_face_of_edge.get(&c.edge) {
+                        Some(&j) => {
+                            let (a, r) = (root(&mut parent, j), root(&mut parent, k));
+                            parent[r] = a;
+                        }
+                        None => {
+                            first_face_of_edge.insert(c.edge, k);
+                        }
+                    }
+                }
+            }
+        }
+        let mut pieces: Vec<Vec<usize>> = Vec::new();
+        let mut piece_of: std::collections::HashMap<usize, usize> =
+            std::collections::HashMap::new();
+        for k in 0..faces.len() {
+            let r = root(&mut parent, k);
+            let idx = *piece_of.entry(r).or_insert_with(|| {
+                pieces.push(Vec::new());
+                pieces.len() - 1
+            });
+            pieces[idx].push(faces[k]);
+        }
+        if pieces.len() < 2 {
+            solids.push(sol.clone());
+            continue;
+        }
+        changed = true;
+        let bbox_of = |fs: &[usize]| {
+            let mut bb = super::math::Bbox::empty();
+            for &f in fs {
+                for l in &b.faces[f].loops {
+                    for c in l {
+                        let e = &b.edges[c.edge];
+                        for v in e.v {
+                            bb.add(&b.verts[v].p);
+                        }
+                    }
+                }
+            }
+            bb
+        };
+        let boxes: Vec<_> = pieces.iter().map(|p| bbox_of(p)).collect();
+        let mut new_solids: Vec<super::topo::Solid> = Vec::new();
+        for (n, p) in pieces.iter().enumerate() {
+            let sh = if n == 0 {
+                out.shells[outer].faces = p.clone();
+                outer
+            } else {
+                out.shells.push(super::topo::Shell {
+                    faces: p.clone(),
+                    closed: true,
+                });
+                out.shells.len() - 1
+            };
+            new_solids.push(super::topo::Solid { shells: vec![sh] });
+        }
+        for &void in &sol.shells[1..] {
+            let vb = bbox_of(&b.shells[void].faces);
+            let home = (0..pieces.len())
+                .find(|&n| {
+                    let o = &boxes[n];
+                    (0..3).all(|a| o.min[a] <= vb.min[a] && vb.max[a] <= o.max[a])
+                })
+                .unwrap_or(0);
+            new_solids[home].shells.push(void);
+        }
+        solids.extend(new_solids);
+    }
+    if !changed {
+        return Ok(None);
+    }
+    out.solids = solids;
+    Ok(Some(out))
 }

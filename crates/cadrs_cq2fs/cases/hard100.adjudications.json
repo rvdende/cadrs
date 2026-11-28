@@ -1,0 +1,6 @@
+[
+  {"i": 2472, "verdict": "cadrs-exact",
+   "note": "Spikes (r 0.1) start 1e-4 inside a sphere of radius 10 whose sag over them is 5e-4: the true union leaves an exposed annulus of each spike's base. cadrs has it (3 faces a spike) and matches the closed form of one spike to 1.1e-14 (4188.805915577); Parasolid keeps the cylinder's side whole and closes the sphere's hole against it across the 4e-4 mm gap (its tolerant modelling), 8.8e-4 mm3 a spike short (4188.805038 for one). Checked 2026-11-28."},
+  {"i": 3031, "verdict": "cadrs-exact",
+   "note": "The same construction as 2472 (spikes 1e-4 into a sphere whose sag under them is larger): Parasolid's tolerant union, cadrs exact."}
+]

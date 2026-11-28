@@ -3385,16 +3385,15 @@ pub fn flat_corners(
         if beyond <= near || pts.iter().any(|q| (q - c).dot(&n).abs() > near) {
             continue;
         }
-        let reach = pts.iter().map(|q| (q - c).norm()).fold(0.0, f64::max);
-        let id = k.primitive(&Primitive::Cylinder {
-            base: c,
-            axis: nalgebra::Unit::new_normalize(n),
-            radius: 1.5 * reach,
-            height: 1.5 * beyond + d,
-        })?;
-        let tool = std::sync::Arc::clone(k.get(id.bodies[0])?);
-        k.release(id.bodies[0]);
-        tools.push(((*tool).clone(), v));
+        // The corner itself: the pyramid from the vertex (pushed half as far again out, past the
+        // solid) down to the points, cut off by their plane. (A disc on the plane, wider than
+        // the points, took the chamfers' flanks too where the corner is nearly flat: a seam of
+        // a polyline extruded and every edge chamfered, CADEvolve 5532, lost 0.65 mm³ a corner
+        // where Parasolid's chamfer, and the chamfers made one group at a time, lose nothing.)
+        let Some(tool) = corner_pyramid(p + (p - c) * 0.5, &pts, c, n, near) else {
+            continue;
+        };
+        tools.push((tool, v));
     }
     if tools.is_empty() {
         return Ok(r);
@@ -3436,6 +3435,40 @@ pub fn flat_corners(
     }
     k.release(*out);
     Ok(cur.into_result(k, body))
+}
+
+/// The solid pyramid from `apex` to the polygon of `pts` (in the plane through `c` square to
+/// `n`, `n` toward the apex): the corner a flat corner's cut takes ([`flat_corners`]).
+fn corner_pyramid(apex: P3, pts: &[P3], c: P3, n: V3, eps: f64) -> Option<Body> {
+    let u = (pts[0] - c).try_normalize(tol::TINY)?;
+    let w = n.cross(&u);
+    let mut ring: Vec<P3> = pts.to_vec();
+    ring.sort_by(|a, b| {
+        let ang = |q: &P3| (q - c).dot(&w).atan2((q - c).dot(&u));
+        ang(a).total_cmp(&ang(b))
+    });
+    let mut bb = super::math::Bbox::empty();
+    bb.add(&apex);
+    for q in &ring {
+        bb.add(q);
+    }
+    let mut poly = super::polytope::Polytope::of_box(&bb.grow(1.0 + bb.diagonal()));
+    // keep the apex's side of the points' plane
+    if !poly.clip(c, -n, eps) {
+        return None;
+    }
+    let inside = P3::from((apex.coords + c.coords) * 0.5);
+    for i in 0..ring.len() {
+        let (a, b) = (ring[i], ring[(i + 1) % ring.len()]);
+        let mut m = (a - apex).cross(&(b - apex)).try_normalize(tol::TINY)?;
+        if m.dot(&(inside - apex)) > 0.0 {
+            m = -m;
+        }
+        if !poly.clip(apex, m, eps) {
+            return None;
+        }
+    }
+    poly.body(eps)
 }
 
 /// `opts` with the first distance's side ([`ChamferSpec::TwoDistances`]) made explicit: the

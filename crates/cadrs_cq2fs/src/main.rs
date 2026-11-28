@@ -281,7 +281,7 @@ fn steps(args: &[String]) -> Result<()> {
             mark = " <-";
             first.get_or_insert(step);
         }
-        if p.is_some() || mark != "" || c.is_some_and(|c| c.get("raised").is_some()) {
+        if p.is_some() || !mark.is_empty() || c.is_some_and(|c| c.get("raised").is_some()) {
             println!(
                 "{:>4} {:>5} {:16} {:>22} {:>22}{mark}",
                 n + 1,

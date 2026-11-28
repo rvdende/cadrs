@@ -1,6 +1,7 @@
 //! STEP (and Parasolid) files of Onshape's own builds of a case set.
 //!
 //!   cq2fs step <set.json> --doc <document url> [--batch 10] [--port 8766] [--only i,j] [--rerun]
+//!   cq2fs step <set.json> --doc <document url> --verify   (each STEP imported back and measured)
 //!
 //! In the document (a Part Studio holds solids, which evalFeatureScript's scratch context can't
 //! export), each batch of cases gets a Feature Studio "cq2fs <set> <k>" with the runtime, the
@@ -93,6 +94,69 @@ const STEP_JS: &str = r#"
 })();
 "#;
 
+/// The STEP files checked by Onshape itself (`--verify`): each batch's STEP imported into the
+/// document as a new Part Studio and every part measured there by Parasolid, so the file is
+/// held to what evalFeatureScript built by a reader that isn't cadrs's.
+const VERIFY_JS: &str = r#"
+(async () => {
+  const S = 'http://127.0.0.1:PORT';
+  const opt = {targetAddressSpace: 'loopback'};
+  const xs = document.cookie.split(';').map(c => c.trim()).find(c => /^XSRF-TOKEN=/i.test(c));
+  const X = decodeURIComponent(xs.split('=').slice(1).join('='));
+  const H = {Accept: 'application/json', 'Content-Type': 'application/json', 'X-XSRF-TOKEN': X};
+  const api = async (method, path, body) => {
+    const r = await fetch(path, {method, headers: H, credentials: 'include', body: body === undefined ? undefined : JSON.stringify(body)});
+    const t = await r.text();
+    if (!r.ok) throw new Error(method + ' ' + path + ' -> ' + r.status + ' ' + t.slice(0, 300));
+    try { return JSON.parse(t); } catch (e) { return t; }
+  };
+  const post = (what, body) => fetch(S + what, {...opt, method: 'POST', body: JSON.stringify(body)});
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  const job = await (await fetch(S + '/verifyjob', opt)).json();
+  const {did, wid} = job;
+  const D = `d/${did}/w/${wid}`;
+  window.cq2fsVerify = {batch: null, done: 0, error: null};
+  const measure = `function(context is Context, queries) {
+    var out = [];
+    for (var b in evaluateQuery(context, qAllModifiableSolidBodies()))
+      out = append(out, {"name": getProperty(context, {"entity": b, "propertyType": PropertyType.NAME}),
+                         "vol": evVolume(context, {"entities": b, "accuracy": "HIGH"}) / millimeter ^ 3});
+    return out;
+  }`;
+  const unfs = (v) => { if (!v) return v; const t = v.btType || ''; if (t.includes('Map')) { const o = {}; for (const e of v.value) o[unfs(e.key)] = unfs(e.value); return o; } if (t.includes('Array')) return v.value.map(unfs); return v.value; };
+  for (const b of job.batches) {
+    window.cq2fsVerify.batch = b.k;
+    try {
+      const text = await (await fetch(S + `/stepfile?k=${b.k}`, opt)).text();
+      const form = new FormData();
+      form.append('file', new Blob([text], {type: 'application/octet-stream'}), `cq2fs ${job.set} ${b.k} reimport.step`);
+      form.append('translate', 'true');
+      form.append('flattenAssemblies', 'true');
+      form.append('allowFaultyParts', 'true');
+      const r = await fetch(`/api/v10/translations/${D}`, {method: 'POST', headers: {Accept: 'application/json', 'X-XSRF-TOKEN': X}, credentials: 'include', body: form});
+      const t = await r.json();
+      if (!r.ok) throw new Error('import -> ' + r.status + ' ' + JSON.stringify(t).slice(0, 300));
+      let st = t;
+      for (let n = 0; n < 240 && st.requestState === 'ACTIVE'; n++) { await wait(2500); st = await api('GET', `/api/v10/translations/${t.id}`); }
+      if (st.requestState !== 'DONE') throw new Error('import ' + st.requestState + ' ' + (st.failureReason || ''));
+      const els = await api('GET', `/api/v10/documents/${D}/elements`);
+      const ps = els.find(e => (st.resultElementIds || []).includes(e.id) && e.elementType === 'PARTSTUDIO');
+      if (!ps) throw new Error('no Part Studio among ' + JSON.stringify(st.resultElementIds));
+      const m = await api('POST', `/api/v10/partstudios/${D}/e/${ps.id}/featurescript`, {script: measure, queries: {}});
+      await post(`/verifyresult?k=${b.k}`, {element: ps.id, parts: unfs(m.result)});
+      window.cq2fsVerify.done += 1;
+    } catch (e) {
+      window.cq2fsVerify.error = String(e);
+      await post(`/verifyresult?k=${b.k}`, {error: String(e)});
+      if (/ 429 /.test(String(e))) break;
+    }
+    await wait(1500);
+  }
+  await fetch(S + '/stepdone', opt);
+  window.cq2fsVerify.batch = 'done';
+})();
+"#;
+
 /// The document and workspace ids of an Onshape document URL.
 fn doc_ids(url: &str) -> Result<(String, String)> {
     let part = |key: &str| -> Option<String> {
@@ -117,6 +181,7 @@ pub fn run(args: &[String]) -> Result<()> {
         .transpose()?
         .unwrap_or(10);
     let rerun = args.iter().any(|a| a == "--rerun");
+    let verify = args.iter().any(|a| a == "--verify");
     let only: Option<Vec<i64>> =
         flag(args, "--only").map(|s| s.split(',').map(|x| x.parse().unwrap()).collect());
     let set_name = set.path.file_stem().unwrap().to_string_lossy().to_string();
@@ -143,7 +208,11 @@ pub fn run(args: &[String]) -> Result<()> {
     let mut k = 0;
     while it.peek().is_some() {
         let b: Vec<emit::Translated> = it.by_ref().take(size).collect();
-        if rerun || !out_dir.join(format!("{set_name}-{k}.step")).exists() {
+        let have_step = out_dir.join(format!("{set_name}-{k}.step")).exists();
+        let have_check = out_dir
+            .join(format!("{set_name}-{k}.reimport.json"))
+            .exists();
+        if (verify && have_step && (rerun || !have_check)) || (!verify && (rerun || !have_step)) {
             batches.push((k, b));
         }
         k += 1;
@@ -158,8 +227,9 @@ pub fn run(args: &[String]) -> Result<()> {
         "cq2fs step: {} batches of up to {size} for document {did}",
         batches.len()
     );
+    let script = if verify { "verify.js" } else { "step.js" };
     eprintln!(
-        "  in a cad.onshape.com tab: eval(await (await fetch('http://127.0.0.1:{port}/step.js', {{targetAddressSpace: 'loopback'}})).text())"
+        "  in a cad.onshape.com tab: eval(await (await fetch('http://127.0.0.1:{port}/{script}', {{targetAddressSpace: 'loopback'}})).text())"
     );
     let batches = Arc::new(batches);
     let listener = TcpListener::bind(("127.0.0.1", port))?;
@@ -196,7 +266,12 @@ pub fn run(args: &[String]) -> Result<()> {
                 "text/javascript",
                 STEP_JS.replace("PORT", &port.to_string()),
             )
-        } else if url.starts_with("/stepjob") {
+        } else if url.starts_with("/verify.js") {
+            (
+                "text/javascript",
+                VERIFY_JS.replace("PORT", &port.to_string()),
+            )
+        } else if url.starts_with("/verifyjob") || url.starts_with("/stepjob") {
             ("application/json", job.to_string())
         } else if url.starts_with("/studio") {
             let k: usize = q("k").and_then(|s| s.parse().ok()).unwrap_or(0);
@@ -243,6 +318,26 @@ pub fn run(args: &[String]) -> Result<()> {
             eprintln!(
                 "batch {k}: {}",
                 v.get("error").and_then(|e| e.as_str()).unwrap_or("saved")
+            );
+            ("application/json", json!({"ok": true}).to_string())
+        } else if url.starts_with("/stepfile") {
+            let k: usize = q("k").and_then(|s| s.parse().ok()).unwrap_or(0);
+            (
+                "application/octet-stream",
+                std::fs::read_to_string(out_dir.join(format!("{set_name}-{k}.step")))?,
+            )
+        } else if url.starts_with("/verifyresult") {
+            let k: usize = q("k").and_then(|s| s.parse().ok()).unwrap_or(0);
+            let v: Value = serde_json::from_slice(&body).unwrap_or(json!({}));
+            std::fs::write(
+                out_dir.join(format!("{set_name}-{k}.reimport.json")),
+                serde_json::to_string_pretty(&v)? + "\n",
+            )?;
+            eprintln!(
+                "batch {k} re-imported: {}",
+                v.get("error")
+                    .and_then(|e| e.as_str())
+                    .unwrap_or("measured")
             );
             ("application/json", json!({"ok": true}).to_string())
         } else if url.starts_with("/stepdone") {

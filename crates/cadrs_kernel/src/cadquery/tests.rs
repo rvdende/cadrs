@@ -49,6 +49,49 @@ fn box_with_a_hole_and_fillets() {
     assert!((vol(&f) - want).abs() < 1e-6, "{} vs {want}", vol(&f));
 }
 
+/// Every edge of a prism chamfered, one of its upright edges nearly flat (the outline bent by a
+/// few degrees there): the flat corners where three chamfers meet take only the corner, as
+/// Parasolid's chamfer does (Onshape's evalFeatureScript, 2026-11-28: the volumes removed for a
+/// bend of 0, 0.3, 0.7 and 2 mm over 10). A disc wider than the corner took the chamfers' flanks
+/// too: a wavy slot's cutter (CADEvolve 5532) lost 109.5 mm³ where Parasolid's loses 45.0.
+#[test]
+fn chamfer_corners_nearly_flat_as_parasolid() {
+    for (bend, want) in [
+        (0.0, 15.333333333333284),
+        (0.3, 15.26559367198385),
+        (0.7, 15.178398511358044),
+        (2.0, 14.919057273908534),
+    ] {
+        let p = xy()
+            .polyline(
+                &[
+                    V3::new(0.0, 0.0, 0.0),
+                    V3::new(10.0, 0.0, 0.0),
+                    V3::new(20.0, bend, 0.0),
+                    V3::new(20.0, 10.0, 0.0),
+                    V3::new(0.0, 10.0, 0.0),
+                ],
+                false,
+                false,
+            )
+            .unwrap()
+            .close()
+            .unwrap()
+            .extrude(Until::Distance(2.0), Combine::Fuse, true, false, 0.0)
+            .unwrap();
+        let c = p
+            .select(ShapeType::Edge, None, None)
+            .unwrap()
+            .chamfer(0.5, None)
+            .unwrap();
+        let removed = vol(&p) - vol(&c);
+        assert!(
+            (removed - want).abs() < 1e-9,
+            "bend {bend}: {removed} vs {want}"
+        );
+    }
+}
+
 /// A chamfer of the circle where a sphere meets a plane: both new edges `d` from the old one in
 /// a straight line, as Parasolid puts them (Onshape's evalFeatureScript, 2026-11-28: the cap of
 /// a sphere of radius 12 above z = 8, its rim chamfered 0.5, is 531.1410166167934; with a
