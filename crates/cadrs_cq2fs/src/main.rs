@@ -3,7 +3,7 @@
 //!
 //! ```text
 //! cq2fs scan [--out target/cq2fs/tapes.jsonl]   record every generator (for choosing cases)
-//! cq2fs translate <tapes.jsonl>                 which tapes translate, and why the others do not
+//! cq2fs translate <tapes.jsonl> [--ok-out f]    which tapes translate, and why the others do not
 //! cq2fs selectors < strings                     compile selector strings (tests/selector_grammar_check.py)
 //! cq2fs add <set.json> <i> [<i> ...]            add generators to a case set (generator.py, tape.json)
 //! cq2fs record <set.json>                       re-record every case's tape.json
@@ -183,13 +183,17 @@ fn main() -> Result<()> {
         "translate" => {
             let tapes = load_tapes(Path::new(rest.first().context("tapes path")?))?;
             let mut ok = 0;
+            let mut ok_ids = vec![];
             let mut why: BTreeMap<String, Vec<i64>> = BTreeMap::new();
             for (i, rec) in &tapes {
                 if rec["status"] != "ok" {
                     continue;
                 }
                 match emit::translate(rec) {
-                    Ok(_) => ok += 1,
+                    Ok(_) => {
+                        ok += 1;
+                        ok_ids.push(*i);
+                    }
                     Err(e) => {
                         let key: String = e
                             .chars()
@@ -199,6 +203,9 @@ fn main() -> Result<()> {
                         why.entry(key).or_default().push(*i);
                     }
                 }
+            }
+            if let Some(p) = flag(rest, "--ok-out") {
+                std::fs::write(p, serde_json::to_string(&ok_ids)?)?;
             }
             println!(
                 "{ok} translatable of {} recorded ({} generators)",
