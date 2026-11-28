@@ -60,9 +60,18 @@ fn prism_with_hole_array_as_parasolid() {
     check("hard100-6", &[("c3424.1", 3e-7)]);
 }
 
-/// 2223: countersinks whose cones meet planes and fillets along B-splines 5.6 µm off the cones
-/// (Parasolid's STEP approximations): re-intersected, 2.5e-9 (1.4e-5 as written).
+/// 2223: countersinks whose cones meet planes and fillets along B-splines 5.6 µm off the cones,
+/// and vertices up to 2.4 µm off (Parasolid's STEP approximations): re-intersected through
+/// refined vertices, 1.7e-7 (1.4e-5 as written).
 #[test]
 fn countersinks_reintersected_as_parasolid() {
-    check("hard100-3", &[("c2223.1", 1e-8)]);
+    check("hard100-3", &[("c2223.1", 3e-7)]);
+}
+
+/// 5587: a spherical lattice whose splines cross the cylinders' seams: a vertex moved onto the
+/// surfaces leaves a spline it ends not replaced short of it, so neither is (5.3e-4 when the
+/// vertices were left where the file put them; 2.1e-5 as written).
+#[test]
+fn lattice_vertices_and_curves_together_as_parasolid() {
+    check("hard100-11", &[("c5587.1", 2e-5)]);
 }
