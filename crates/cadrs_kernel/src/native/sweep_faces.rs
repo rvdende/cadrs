@@ -76,7 +76,7 @@ fn axis_of_revolution(b: &Body) -> Option<(P3, V3)> {
     let mut axis: Option<(P3, V3)> = None;
     let on = |(o, a): (P3, V3), p: &P3| {
         let d = p - o;
-        (d - a * d.dot(&a)).norm() <= tol::POINT
+        (d - a * d.dot(&a)).norm() <= tol::point()
     };
     // The turned faces fix the axis; then every face must agree with it.
     for f in &b.faces {
@@ -771,7 +771,7 @@ fn contact_curves(b: &Body, fi: usize, mv: &Move) -> Vec<Curve> {
     // (Interpolated through the grid's crossings, then through the contact halfway between two
     // points wherever the curve strays from it there by more than `fit`: as few poles as that
     // takes, since the sweep's sides carry a row of them for each.)
-    let fit = CONTACT_FIT * b.bbox().diagonal().max(crate::native::tol::POINT);
+    let fit = CONTACT_FIT * b.bbox().diagonal().max(crate::native::tol::point());
     for chain in chains {
         let mut uv = chain;
         let mut curve = None;
@@ -781,7 +781,7 @@ fn contact_curves(b: &Body, fi: usize, mv: &Move) -> Vec<Curve> {
             for w in pts.windows(2) {
                 params.push(params.last().unwrap() + (w[1] - w[0]).norm());
             }
-            if *params.last().unwrap() <= tol::POINT {
+            if *params.last().unwrap() <= tol::point() {
                 break;
             }
             let c = Curve::Nurbs(std::sync::Arc::new(super::nurbs::NurbsCurve::interpolate(
@@ -1075,7 +1075,7 @@ fn prepared_rising(
         mv => mv,
     };
     let start = seams_ahead(start, &mv);
-    let size = start.bbox().diagonal().max(tol::POINT);
+    let size = start.bbox().diagonal().max(tol::point());
     let debug = crate::native::env_flag!("CADRS_SWEEP_DEBUG");
     // (A sweep by its faces is contact curves traced, pieces united and volumes taken, face by
     // face: the threads are wanted from its first loop, and made meanwhile.)
@@ -1412,7 +1412,7 @@ fn prepared_rising(
                     .map(|f| -> Rise { std::sync::Arc::new(move |s: f64| f(s * sign) * sign) }),
                 s1,
                 reach,
-                SCREW_TOL * size.max(crate::native::tol::POINT),
+                SCREW_TOL * size.max(crate::native::tol::point()),
             ))
         }
         _ => None,
@@ -1900,7 +1900,7 @@ pub fn glued_groups(k: &mut NativeKernel, pieces: Vec<Body>) -> Vec<Body> {
         .iter()
         .map(|p| p.bbox().diagonal())
         .fold(0.0, f64::max)
-        .max(tol::POINT);
+        .max(tol::point());
     // All of them at once, where they make one solid so (sewn and simplified the once: one at
     // a time, each joins a group the ones before have grown).
     if pieces.len() > 2
@@ -2026,7 +2026,7 @@ pub(super) fn glued_with(
     size: f64,
     apart: bool,
 ) -> Option<OpResult> {
-    let close = 1e-7 * size.max(crate::native::tol::POINT);
+    let close = 1e-7 * size.max(crate::native::tol::point());
     // Each face's measure and middle, and its outward normal near there: its area and
     // centroid, or on a surface that must be walked over to have them (a B-spline, a swept or
     // a revolved one) its boundary's length and middle. (A face closed on itself by a seam has
@@ -2069,7 +2069,7 @@ pub(super) fn glued_with(
                 continue;
             }
             if (a.2 - b2.2).norm() <= close
-                && (a.3 - b2.3).abs() <= close * size.max(crate::native::tol::POINT)
+                && (a.3 - b2.3).abs() <= close * size.max(crate::native::tol::point())
                 && coincide(&all[a.0], a.1, &all[b2.0], b2.1, close)
                 && facing(&all[a.0], a.1, &all[b2.0], b2.1)
             {
@@ -2123,7 +2123,7 @@ pub(super) fn glued_with(
         let classifier = |bj: usize| {
             classifiers[bj].get_or_init(|| super::classify::Classifier::new(&all[bj], &polys[bj]))
         };
-        let eps = 1e-3 * size.max(crate::native::tol::POINT);
+        let eps = 1e-3 * size.max(crate::native::tol::point());
         let kept: Vec<(usize, usize)> = faces
             .iter()
             .zip(&dropped)
@@ -2158,7 +2158,8 @@ pub(super) fn glued_with(
             // the same body's mesh for the same point.)
             let m = meshes[bj].get_or_insert_with(|| {
                 let _kept = super::tess::keeping_meshes();
-                super::tess::mesh_body(&all[bj], 1e-4 * size.max(crate::native::tol::POINT), 0.3).0
+                super::tess::mesh_body(&all[bj], 1e-4 * size.max(crate::native::tol::point()), 0.3)
+                    .0
             });
             winding(m, &out) > 0.5
         });
@@ -2187,7 +2188,7 @@ pub(super) fn glued_with(
         );
     }
     let t_sew = web_time::Instant::now();
-    let r = k.sew_solid(&ids, 1e-6 * size.max(crate::native::tol::POINT));
+    let r = k.sew_solid(&ids, 1e-6 * size.max(crate::native::tol::point()));
     if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
         eprintln!(
             "sweep by faces: sewing {:.0} ms",

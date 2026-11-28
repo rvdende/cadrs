@@ -83,7 +83,7 @@ pub(crate) fn face_crossings_in(
                     let e = &b.edges[c.edge];
                     e.tol.max(b.verts[e.v[0]].tol).max(b.verts[e.v[1]].tol)
                 })
-                .fold(super::tol::POINT, f64::max)
+                .fold(super::tol::point(), f64::max)
         })
         .collect();
     let edges: Vec<std::collections::BTreeSet<usize>> = b
@@ -110,7 +110,7 @@ pub(crate) fn face_crossings_in(
         })
         .collect();
     // (The part's own size, however small: no floor at a millimetre.)
-    let size = b.bbox().diagonal().max(tol::POINT);
+    let size = b.bbox().diagonal().max(tol::point());
     let bvh = Bvh::new(boxes.clone());
     let mut pairs: Vec<(usize, usize)> = bvh
         .pairs(&bvh)

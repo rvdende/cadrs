@@ -65,7 +65,7 @@ pub fn face_blend(k: &mut NativeKernel, spec: &FaceBlendSpec) -> Result<OpResult
         .face_bbox(f1)
         .diagonal()
         .max(two.face_bbox(f2).diagonal())
-        .max(crate::native::tol::POINT);
+        .max(crate::native::tol::point());
     let near = 1e-6 * scale;
     // Which way into each face, square to the spine, at `p` with tangent `t`.
     let into = |k: usize, p: &P3, t: &V3, hint: Option<P2>| -> Option<(V3, V3, P2)> {

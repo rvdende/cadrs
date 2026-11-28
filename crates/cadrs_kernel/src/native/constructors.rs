@@ -52,7 +52,7 @@ pub fn screw(k: &mut super::NativeKernel, profile: &Profile, spec: &ScrewSpec) -
     let a = axis.dir.into_inner();
     let pl = &profile.plane;
     if a.dot(&pl.normal).abs() > tol::ANGULAR
-        || (axis.origin - pl.origin).dot(&pl.normal).abs() > tol::POINT
+        || (axis.origin - pl.origin).dot(&pl.normal).abs() > tol::point()
     {
         return Err(KernelError::InvalidParameter(
             "The screw's axis must lie in the profile's plane".into(),
@@ -68,9 +68,9 @@ pub fn screw(k: &mut super::NativeKernel, profile: &Profile, spec: &ScrewSpec) -
             let r = rho(p, &out);
             (l.min(r), h.max(r))
         });
-    let (lo, hi) = if lo >= -tol::POINT {
+    let (lo, hi) = if lo >= -tol::point() {
         (lo.max(0.0), hi)
-    } else if hi <= tol::POINT {
+    } else if hi <= tol::point() {
         out = -out;
         ((-hi).max(0.0), -lo)
     } else {
@@ -78,7 +78,7 @@ pub fn screw(k: &mut super::NativeKernel, profile: &Profile, spec: &ScrewSpec) -
             "The screw's profile crosses its axis".into(),
         ));
     };
-    if hi <= tol::POINT {
+    if hi <= tol::point() {
         return Err(KernelError::InvalidProfile(
             "The screw's profile lies on its axis".into(),
         ));
@@ -90,7 +90,7 @@ pub fn screw(k: &mut super::NativeKernel, profile: &Profile, spec: &ScrewSpec) -
             (l.min(w), h.max(w))
         });
     let lead = TAU * rise.abs();
-    if whi - wlo - lead > tol::POINT {
+    if whi - wlo - lead > tol::point() {
         return Err(KernelError::InvalidParameter(format!(
             "The screw's turns would collide: a turn rises {lead}, less than the profile's \
              extent {} along the axis",

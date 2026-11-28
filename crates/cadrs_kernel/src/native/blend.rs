@@ -1797,7 +1797,7 @@ pub fn blend(
         super::mass::body_volume(&b),
         super::mass::body_volume(&cur.body),
     );
-    let slack = 1e-6 * (before.abs() + cut_volume + fill_volume) + tol::POINT;
+    let slack = 1e-6 * (before.abs() + cut_volume + fill_volume) + tol::point();
     if crate::native::env_flag!("CADRS_BLEND_DEBUG") {
         eprintln!("blend: volume {before} -> {after}; tools cut {cut_volume}, fill {fill_volume}");
     }
@@ -1826,7 +1826,7 @@ pub fn blend(
         let ed = &b.edges[e];
         let left = [0.25, 0.5, 0.75].into_iter().all(|w| {
             let p = ed.curve.point(ed.t[0] + (ed.t[1] - ed.t[0]) * w);
-            after.classify(&p, tol::POINT) == crate::PointClass::OnBoundary
+            after.classify(&p, tol::point()) == crate::PointClass::OnBoundary
         });
         if left {
             return Err(KernelError::InvalidResult {
@@ -2243,7 +2243,7 @@ fn consumed_face(b: &Body, edges: &[EdgeId], r: f64) -> Option<f64> {
 /// The width of face `f` when it is flat and two of `edges` bound it on opposite sides exactly
 /// two radii `r` apart.
 fn consumed_width(b: &Body, f: usize, edges: &[EdgeId], r: f64) -> Option<f64> {
-    let close = tol::POINT.max(tol::REL_POINT * r);
+    let close = tol::point().max(tol::REL_POINT * r);
     let line = |e: usize| -> Option<(P3, V3)> {
         let ed = &b.edges[e];
         let Curve::Line { .. } = ed.curve else {
@@ -2251,7 +2251,7 @@ fn consumed_width(b: &Body, f: usize, edges: &[EdgeId], r: f64) -> Option<f64> {
         };
         let (p, q) = (ed.point(ed.t[0]), ed.point(ed.t[1]));
         let d = q - p;
-        (d.norm() > tol::POINT).then(|| (p, d / d.norm()))
+        (d.norm() > tol::point()).then(|| (p, d / d.norm()))
     };
     let face = &b.faces[f];
     if !matches!(face.surf, Surface::Plane { .. }) {
@@ -2317,7 +2317,7 @@ pub(super) fn on_face(b: &Body, f: usize, p: &P3) -> bool {
 /// Face `f` as a [`RoundFace`] of the `picked` edges' fillets of radius `r`, when it is one
 /// (and its walls reach a radius under it all along, so the round cuts nothing beyond them).
 fn round_face(b: &Body, f: usize, picked: &[usize], r: f64) -> Option<RoundFace> {
-    let close = tol::POINT.max(tol::REL_POINT * r);
+    let close = tol::point().max(tol::REL_POINT * r);
     let (_, n) = face_plane(b, f)?;
     let [lp] = &b.faces[f].loops[..] else {
         return None;
@@ -2332,7 +2332,7 @@ fn round_face(b: &Body, f: usize, picked: &[usize], r: f64) -> Option<RoundFace>
         };
         let (p, q) = (ed.point(ed.t[0]), ed.point(ed.t[1]));
         let d = q - p;
-        (d.norm() > tol::POINT).then(|| (p, d / d.norm()))
+        (d.norm() > tol::point()).then(|| (p, d / d.norm()))
     };
     // The picked pair of opposite edges two radii apart (one pair only: a square face of
     // side 2r with all four edges picked has no direction).
@@ -2583,7 +2583,7 @@ fn full_round_corners(
     let rounds: Vec<RoundFace> = (0..b.faces.len())
         .filter_map(|f| round_face(&b, f, &picked, r))
         .collect();
-    let close = tol::POINT.max(tol::REL_POINT * r);
+    let close = tol::point().max(tol::REL_POINT * r);
     // Each round's tool's range along its axis, and the corners: (round, its end, the edge
     // there, the ball centre).
     let mut ranges: Vec<[f64; 2]> = Vec::new();
@@ -3324,7 +3324,7 @@ pub fn flat_corners(
         .map(|e| e.0 as usize)
         .collect();
     // (The part's own size, however small: no floor at a millimetre.)
-    let size = b.bbox().diagonal().max(tol::POINT);
+    let size = b.bbox().diagonal().max(tol::point());
     let near = tol::REL_POINT * size;
     let mut tools: Vec<(Body, usize)> = Vec::new();
     for v in 0..b.verts.len() {
@@ -3570,7 +3570,7 @@ fn iso_ends(out: &mut Body, fi: usize) {
         let e = out.edges[ei].clone();
         let (p0, p1) = (out.verts[e.v[0]].p, out.verts[e.v[1]].p);
         let (s0, s1) = (iso.closest(&p0, v0, v1), iso.closest(&p1, v0, v1));
-        let size = (p1 - p0).norm().max(tol::POINT);
+        let size = (p1 - p0).norm().max(tol::point());
         if (iso.point(s0) - p0).norm() > 1e-7 * size
             || (iso.point(s1) - p1).norm() > 1e-7 * size
             || (s1 - s0).abs() <= tol::TINY
@@ -4038,7 +4038,7 @@ fn swallow_narrow_faces(b: &Body, edges: &[EdgeId], r: f64) -> Result<Option<(Bo
             .map(|x| (x, super::fillet::edge_distance(&nb, x, &m)))
             .min_by(|p, q| p.1.total_cmp(&q.1));
         match near {
-            Some((x, d)) if d <= tol::POINT * (1.0 + r) => {
+            Some((x, d)) if d <= tol::point() * (1.0 + r) => {
                 if !out.contains(&EdgeId(x as u64)) {
                     out.push(EdgeId(x as u64));
                 }
@@ -4765,7 +4765,7 @@ fn chain_tool_lofted(
         (starts[a.0] + a.1 * lens[a.0]).total_cmp(&(starts[c.0] + c.1 * lens[c.0]))
     });
     stations.dedup_by(|a, c| {
-        ((starts[a.0] + a.1 * lens[a.0]) - (starts[c.0] + c.1 * lens[c.0])).abs() < tol::POINT
+        ((starts[a.0] + a.1 * lens[a.0]) - (starts[c.0] + c.1 * lens[c.0])).abs() < tol::point()
     });
     let mut sections = Vec::new();
     for &(k, fr) in &stations {

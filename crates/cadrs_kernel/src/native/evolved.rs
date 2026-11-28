@@ -106,7 +106,7 @@ impl Spine {
         let up = up.normalize();
         if pts
             .iter()
-            .any(|p| (p - pts[0]).dot(&up).abs() > tol::POINT * size)
+            .any(|p| (p - pts[0]).dot(&up).abs() > tol::point() * size)
         {
             return Err(KernelError::InvalidParameter(
                 "an evolved solid's spine must be planar".into(),
@@ -454,7 +454,7 @@ fn caps(t: &Tagged, end: bool) -> Vec<(f64, P3)> {
 
 /// Whether two caps coincide (as the sweep's gluing takes them).
 fn same_cap(a: &(f64, P3), b: &(f64, P3)) -> bool {
-    (a.1 - b.1).norm() < tol::POINT && (a.0 - b.0).abs() < tol::POINT * (1.0 + a.0)
+    (a.1 - b.1).norm() < tol::point() && (a.0 - b.0).abs() < tol::point() * (1.0 + a.0)
 }
 
 /// A swept piece with its faces' origins (its caps among them), out of the kernel.
@@ -533,7 +533,7 @@ fn glue_shared(a: &Body, b: &Body) -> Option<Body> {
 /// across an overlap would count it twice).
 fn additive(g: &Body, a: &Body, b: &Body) -> bool {
     let (va, vb) = (super::mass::body_volume(a), super::mass::body_volume(b));
-    (super::mass::body_volume(g) - va - vb).abs() <= tol::POINT * (va.abs() + vb.abs())
+    (super::mass::body_volume(g) - va - vb).abs() <= tol::point() * (va.abs() + vb.abs())
 }
 
 /// `a` less `b`, `None` when nothing is left.
@@ -1077,7 +1077,7 @@ fn evolved_wire_with(
             }),
             Curve::Circle { c: centre, x, y, r } => {
                 let axis = x.cross(y);
-                if axis.cross(&normal).norm() > tol::POINT {
+                if axis.cross(&normal).norm() > tol::point() {
                     return Err(KernelError::Unsupported(
                         "evolved profiles with arcs out of the profile's plane",
                     ));
@@ -1105,7 +1105,7 @@ fn evolved_wire_with(
             .map(|p| (p - origin).norm())
             .fold(0.0, f64::max),
     );
-    let eps = tol::POINT * (1.0 + size);
+    let eps = tol::point() * (1.0 + size);
     let (p0, p1) = (pieces[0].point(0.0), pieces[pieces.len() - 1].point(1.0));
     // A point past every inward offset of the spine.
     let deep = -2.0 * size - 1.0;

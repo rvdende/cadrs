@@ -96,7 +96,7 @@ pub(crate) fn edge_tube(b: &Body, e: usize, r: f64) -> Result<Body> {
         && let Some(Curve::Line { .. }) = crate::native::recognize::curve(n)
     {
         let (p0, p1) = (ed.point(ed.t[0]), ed.point(ed.t[1]));
-        if (p1 - p0).norm() > tol::POINT {
+        if (p1 - p0).norm() > tol::point() {
             let mut nb = b.clone();
             nb.edges[e].curve = Curve::Line { o: p0, d: p1 - p0 };
             nb.edges[e].t = [0.0, 1.0];
@@ -540,7 +540,7 @@ fn grown_filleted(b: &Body, dist: &[f64], d: f64) -> Option<Body> {
             if ring {
                 rmin + d < rmaj * (1.0 - tol::REL)
             } else {
-                rmin - d > tol::POINT * (1.0 + rmin)
+                rmin - d > tol::point() * (1.0 + rmin)
             }
         }
         _ => false,
@@ -935,7 +935,7 @@ fn grown_round(b: &Body, d: f64) -> Option<Body> {
         let (aa, bb, ab) = (a.norm_squared(), b.norm_squared(), a.dot(&b));
         if (aa - bb).abs() <= tol::REL_FINE * (aa + bb) && ab.abs() <= tol::REL_FINE * (aa + bb) {
             let r = aa.sqrt();
-            return (r > tol::POINT).then(|| Curve::Circle {
+            return (r > tol::point()).then(|| Curve::Circle {
                 c,
                 x: a / r,
                 y: b / bb.sqrt(),
@@ -946,7 +946,7 @@ fn grown_round(b: &Body, d: f64) -> Option<Body> {
         let phi = 0.5 * (2.0 * ab).atan2(aa - bb);
         let (major, minor) = (a * phi.cos() + b * phi.sin(), b * phi.cos() - a * phi.sin());
         let (la, lb) = (major.norm(), minor.norm());
-        (la > tol::POINT && lb > tol::POINT).then(|| Curve::Ellipse {
+        (la > tol::point() && lb > tol::point()).then(|| Curve::Ellipse {
             c,
             x: major / la,
             y: minor / lb,
@@ -1473,7 +1473,7 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
             // meet (a hair thinner would leave a cavity) leave the body itself; a shell thicker
             // than that is as thick as the part, and refused, as Onshape and OCCT do.
             None => {
-                let thinner = t - tol::POINT.max(1e-9 * size);
+                let thinner = t - tol::point().max(1e-9 * size);
                 let meeting =
                     || matches!(cavity_of_supports(&b, &remove, thinner), Some(Ok(Some(_))));
                 match spec.nothing_hollowed {
@@ -1611,7 +1611,7 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
         let moved = !((concave || crossing) && !spec.sharp);
         // (Only where some face reaches past a removed face's plane, by its box: else no wall
         // rises beyond an opening for the cavity past it to cut into.)
-        let size_tol = tol::POINT.max(tol::REL * size);
+        let size_tol = tol::point().max(tol::REL * size);
         let past_openings = remove.iter().any(|&f| {
             let Surface::Plane { f: fr } = &b.faces[f].surf else {
                 return true;
@@ -1778,7 +1778,7 @@ pub fn shell(k: &mut NativeKernel, body: BodyId, spec: &ShellSpec) -> Result<OpR
                     && mb
                         .verts
                         .iter()
-                        .all(|v| (v.p - fr.o).dot(&m) <= tol::POINT.max(tol::REL * size));
+                        .all(|v| (v.p - fr.o).dot(&m) <= tol::point().max(tol::REL * size));
                 let beyond = if behind {
                     None
                 } else {
@@ -2275,7 +2275,7 @@ fn walls_cross(b: &Body, remove: &[usize], t: f64) -> bool {
                 min: bb.min + across,
                 max: bb.max + across,
             };
-            if gap < 2.0 * t + tol::ROUNDOFF && ba.grow(tol::POINT).overlaps(&carried) {
+            if gap < 2.0 * t + tol::ROUNDOFF && ba.grow(tol::point()).overlaps(&carried) {
                 return true;
             }
         }
@@ -2406,7 +2406,7 @@ fn face_samples(b: &Body, sag: f64) -> Option<Vec<P3>> {
 fn cavity_of_supports(b: &Body, remove: &[usize], t: f64) -> Option<Result<Option<Body>>> {
     let bb = b.bbox();
     let size = bb.diagonal();
-    let close = tol::POINT.max(tol::REL * size);
+    let close = tol::point().max(tol::REL * size);
     // A body that is itself where half-spaces meet (a box, a wedge): every face's plane bounds
     // it, by its corners, so the cavity is its polygons cut by each wall's plane moved in,
     // exactly and with no boolean, and nothing of it is sampled to find that out.
@@ -3353,7 +3353,7 @@ fn grown_closed_holes(b: &Body, d: f64) -> Option<Body> {
                 };
                 // The segment's distance from the rim's centre.
                 let t = ((o - lo).dot(&ld) / ld.norm_squared()).clamp(e.t[0], e.t[1]);
-                if (lo + ld * t - o).norm() <= h.r + tol::POINT {
+                if (lo + ld * t - o).norm() <= h.r + tol::point() {
                     return None;
                 }
             }
@@ -3362,7 +3362,7 @@ fn grown_closed_holes(b: &Body, d: f64) -> Option<Body> {
             let (a, c) = (h.ends[0].2, g.ends[0].2);
             let axis = h.ends[0].3;
             let off = (c - a) - axis * (c - a).dot(&axis);
-            if off.norm() <= h.r + g.r + tol::POINT {
+            if off.norm() <= h.r + g.r + tol::point() {
                 return None;
             }
         }

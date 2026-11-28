@@ -373,7 +373,7 @@ pub enum HealOp {
 ///   `BudgetExhausted`, `InvalidResult` or `OperationFailed`) when the algorithm gives up, and
 ///   [`KernelError::OpenResult`] when faces didn't close into a solid. An operation never
 ///   returns a body it found invalid: results pass the native kernel's `Body::check`.
-/// - **Tolerance**: exact geometry is within `native::tol::POINT` (1e-6 mm); vertices and edges
+/// - **Tolerance**: exact geometry is within `native::tol::point()` (1e-6 mm); vertices and edges
 ///   carry their own tolerance when an operation had to merge within more (read files, healed
 ///   shapes). Models must fit in the size box `native::tol::SIZE` (±1e8 mm).
 /// - **History**: [`OpResult::history`] lists each result face as `generated` (with an

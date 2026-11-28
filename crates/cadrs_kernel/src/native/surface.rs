@@ -1430,7 +1430,7 @@ impl Surface {
                     return None;
                 }
                 // Their normals at a point of the first, off the apex.
-                let p = self.eval(0.0, if ra.abs() > tol::POINT { 0.0 } else { 1.0 });
+                let p = self.eval(0.0, if ra.abs() > tol::point() { 0.0 } else { 1.0 });
                 let (u, v) = o.project(&p, None);
                 let (ua, va) = self.project(&p, None);
                 Some(self.normal(ua, va).dot(&o.normal(u, v)) > 0.0)

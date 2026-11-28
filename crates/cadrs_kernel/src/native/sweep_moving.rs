@@ -3692,7 +3692,7 @@ pub fn polyhedron(k: &mut NativeKernel, b: &Body, place: Place) -> Option<Result
         place,
         edge_faces: ef,
     };
-    let size = b.bbox().diagonal().max(tol::POINT);
+    let size = b.bbox().diagonal().max(tol::point());
     let r = swept(&sw, size);
     if let Err(e) = &r {
         // With CADRS_DUMP_DIR set, the polyhedron whose sweep is refused is left there.

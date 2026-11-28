@@ -92,9 +92,11 @@ fn counts() -> [u64; 6] {
     ]
 }
 
-/// The default distance under which two points of a boolean are one (mm; [`tol::POINT`]; a
+/// The default distance under which two points of a boolean are one (mm; [`tol::point()`]; a
 /// run's is [`BoolOptions::tol`]'s).
-pub const VTOL: f64 = super::tol::POINT;
+pub fn vtol() -> f64 {
+    super::tol::point()
+}
 
 /// How a boolean runs: its tolerances, and which faces on one surface are merged afterwards.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -220,15 +222,17 @@ impl Work {
 }
 
 impl RunOpts {
-    /// Section and imprint runs: a boolean's defaults.
-    const PLAIN: RunOpts = RunOpts {
-        tol: VTOL,
-        flush: false,
-        merge_coplanar: true,
-        work_budget: DEFAULT_WORK_BUDGET,
-        check_crossings: false,
-        within: false,
-    };
+    /// Section and imprint runs: a boolean's defaults (at the process's merge distance).
+    fn plain() -> RunOpts {
+        RunOpts {
+            tol: vtol(),
+            flush: false,
+            merge_coplanar: true,
+            work_budget: DEFAULT_WORK_BUDGET,
+            check_crossings: false,
+            within: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1483,7 +1487,7 @@ fn ball_turned_to(a: &Body, other: &Body, op: BoolOp) -> Option<Body> {
 /// [`boolean_bodies_with`] (counted with `CADRS_PROFILE`).
 fn boolean_bodies_counted(a: &Body, b: &Body, op: BoolOp, opts: BoolOptions) -> Result<BoolOut> {
     // Small bodies are worked on larger, and very large ones smaller: the merge tolerances are
-    // absolute ([`tol::POINT`] and the retries up to a hundred times it), so a part a few
+    // absolute ([`tol::point()`] and the retries up to a hundred times it), so a part a few
     // microns across would have its features taken for coincident, and one tens of metres
     // across its tangencies missed. Scaled by a power of two, which changes no mantissa, the
     // boolean runs at an ordinary size and its result is scaled back exactly.
@@ -1573,7 +1577,11 @@ fn recognized_against(x: &Body, y: &Body) -> Option<Body> {
     if !x.faces.iter().any(|f| matches!(f.surf, Surface::Nurbs(_))) {
         return None;
     }
-    let size = x.bbox().diagonal().max(y.bbox().diagonal()).max(tol::POINT);
+    let size = x
+        .bbox()
+        .diagonal()
+        .max(y.bbox().diagonal())
+        .max(tol::point());
     let tol = tol::REL * size;
     let mut surfs: Option<Vec<Surface>> = None;
     for (fi, f) in x.faces.iter().enumerate() {
@@ -2122,7 +2130,7 @@ pub(crate) fn union_falls_apart(a: &Body, b: &Body) -> bool {
             .iter()
             .map(|e| e.tol)
             .chain(x.verts.iter().map(|v| v.tol))
-            .fold(tol::POINT, f64::max);
+            .fold(tol::point(), f64::max);
         for s in 0..x.solids.len() {
             let mut bb = Bbox::empty();
             for f in x.solid_faces(s) {
@@ -2932,7 +2940,7 @@ pub(crate) fn flush_cavity(a: &Body, c: &Body) -> Option<BoolOut> {
         )),
         _ => None,
     };
-    let size = a.bbox().diagonal().max(tol::POINT);
+    let size = a.bbox().diagonal().max(tol::point());
     let near = 1e-9 * (size + a.bbox().center().coords.norm());
     // The one face pair on one plane, facing the same way.
     let mut pair = None;
@@ -3116,7 +3124,11 @@ pub(crate) fn through_cut(a: &Body, c: &Body) -> Option<BoolOut> {
         return None;
     }
     let (o, z) = (fr.o, fr.z.normalize());
-    let size = a.bbox().diagonal().max(c.bbox().diagonal()).max(tol::POINT);
+    let size = a
+        .bbox()
+        .diagonal()
+        .max(c.bbox().diagonal())
+        .max(tol::point());
     let near = 1e-9 * (size + a.bbox().center().coords.norm());
     // The faces of `a` near `c`: exactly two planes square to the axis.
     let cb = c.bbox();
@@ -3159,7 +3171,7 @@ pub(crate) fn through_cut(a: &Body, c: &Body) -> Option<BoolOut> {
         let p = o + z * t;
         let polys = super::classify::face_polygons(a, &a.faces[f]);
         let (u, v) = a.faces[f].surf.project(&p, None);
-        if super::classify::in_face(&polys, &a.faces[f].surf, P2::new(u, v), tol::POINT)
+        if super::classify::in_face(&polys, &a.faces[f].surf, P2::new(u, v), tol::point())
             != InFace::Inside
         {
             return None;
@@ -3299,7 +3311,7 @@ fn uv_gap(b: &Body) -> Option<String> {
     None
 }
 
-/// Gives B-spline faces of `a` that lie (within 2 × [`VTOL`]) on a plane or cylinder face of
+/// Gives B-spline faces of `a` that lie (within 2 × [`vtol()`]) on a plane or cylinder face of
 /// `b` that surface, with their p-curves and sense recomputed. True when any changed.
 fn snap_to(a: &mut Body, b: &Body, tol: f64) -> bool {
     if super::env_flag!("CADRS_DEBUG_NO_SNAP") {
@@ -3421,11 +3433,11 @@ pub enum Mode {
 
 /// The section of two bodies: the edges where their faces meet (a body of edges, no faces).
 pub fn section(a: &Body, b: &Body) -> Result<Body> {
-    run(a, b, Mode::Section, RunOpts::PLAIN).map(|o| o.body)
+    run(a, b, Mode::Section, RunOpts::plain()).map(|o| o.body)
 }
 
 pub fn imprint(a: &Body, b: &Body, faces: Option<Vec<usize>>) -> Result<BoolOut> {
-    run(a, b, Mode::Imprint(faces), RunOpts::PLAIN)
+    run(a, b, Mode::Imprint(faces), RunOpts::plain())
 }
 
 /// One run of the boolean.
@@ -5235,7 +5247,7 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                 {
                     return None;
                 }
-                let allowed = 4.0 * run_tol.max(ae.tol).max(ce.tol).max(tol::POINT);
+                let allowed = 4.0 * run_tol.max(ae.tol).max(ce.tol).max(tol::point());
                 pcurve::carried(
                     &f.surf, &ce.curve, ce.t[0], ce.t[1], &ae.curve, ae.t, &a.pc, allowed,
                 )
@@ -5371,7 +5383,7 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                         let q = pc.point(*t);
                         let d = (f.surf.eval(q.x, q.y) - pool.verts[ed.v[k]]).norm();
                         let dc = (ed.curve.point(*t) - pool.verts[ed.v[k]]).norm();
-                        if d > tol::POINT || dc > tol::POINT {
+                        if d > tol::point() || dc > tol::point() {
                             eprintln!(
                                 "cut {c} end {k}: p-curve off by {d:e}, curve off by {dc:e}; {:?} t {:?} surf {:?}",
                                 ed.curve, ed.t, f.surf
@@ -6119,7 +6131,8 @@ fn touch_voids(b: &mut Body, tol: f64) {
             vs.dedup();
             for v in vs {
                 let vx = &b.verts[v];
-                if classifier.classify(&vx.p, vx.tol.max(super::tol::POINT)) != PointClass::Outside
+                if classifier.classify(&vx.p, vx.tol.max(super::tol::point()))
+                    != PointClass::Outside
                 {
                     continue;
                 }
@@ -6298,7 +6311,7 @@ fn drop_empty_solids(
                 // lens two parallel cylinders overlapping by 2 µm share runs their length, its
                 // volume nothing against that length cubed, and is a solid 3 µm thick.)
                 v.abs() <= tol::REL * size * size * size
-                    && (area <= 0.0 || 2.0 * v.abs() / area <= tol::POINT)
+                    && (area <= 0.0 || 2.0 * v.abs() / area <= tol::point())
             })
         })
         .collect();
@@ -6486,7 +6499,7 @@ fn join_twin_edges(b: &mut Body) {
     }
     // The same points: `y` passes within tolerance of `x`'s points along it.
     let same = |x: &Edge, y: &Edge| {
-        let tol = x.tol.max(y.tol).max(super::tol::POINT);
+        let tol = x.tol.max(y.tol).max(super::tol::point());
         [0.25, 0.5, 0.75].iter().all(|f| {
             let p = x.point(x.t[0] + (x.t[1] - x.t[0]) * f);
             let t = y.curve.closest(&p, y.t[0], y.t[1]);
@@ -7535,7 +7548,7 @@ mod tests {
             faces: vec![0],
             closed: false,
         });
-        assert!(cut_seams_at_holes(&mut b, tol::POINT));
+        assert!(cut_seams_at_holes(&mut b, tol::point()));
         let f = &b.faces[0];
         assert_eq!(f.loops.len(), 1);
         // The seam's two pieces (each up one side and down the other), the hole's six edges,
@@ -7613,7 +7626,7 @@ mod tests {
         assert!(uv_gap(&a).is_some());
         // (One run at the default tolerance: the retries at coarser ones would hide it.)
         let opts = RunOpts {
-            tol: tol::POINT,
+            tol: tol::point(),
             flush: false,
             merge_coplanar: true,
             work_budget: DEFAULT_WORK_BUDGET,
@@ -7669,7 +7682,7 @@ mod tests {
                 .count(),
             4
         );
-        let (glued, keep) = glue_touching_caps(&ring, tol::POINT).expect("the caps glue");
+        let (glued, keep) = glue_touching_caps(&ring, tol::point()).expect("the caps glue");
         assert_eq!(glued.faces.len(), ring.faces.len() - 2);
         assert_eq!(keep.len(), glued.faces.len());
         assert_eq!(
@@ -7687,7 +7700,7 @@ mod tests {
         };
         let mut two = cube(&mut k, 0.0);
         two.append(&cube(&mut k, 1.0));
-        assert!(glue_touching_caps(&two, tol::POINT).is_none());
+        assert!(glue_touching_caps(&two, tol::point()).is_none());
     }
 
     /// A tool carrying a closed profile gap of 7.1e-5 as its edges' tolerance (squish bottle

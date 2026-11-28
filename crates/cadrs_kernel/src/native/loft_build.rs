@@ -792,7 +792,7 @@ fn assemble_rows(
         let size = (far - o).norm();
         if pts
             .iter()
-            .any(|p| (p - o).dot(&nrm).abs() > tol::REL * size.max(crate::native::tol::POINT))
+            .any(|p| (p - o).dot(&nrm).abs() > tol::REL * size.max(crate::native::tol::point()))
         {
             return None;
         }
@@ -1049,7 +1049,7 @@ pub(crate) fn circle_of(c: &NurbsCurve) -> Option<(P3, V3, f64)> {
     let (t0, t1) = c.range();
     let (a, m, e) = (c.point(t0), c.point(0.5 * (t0 + t1)), c.point(t1));
     // Three points apart: the ends and the middle, or a quarter for a whole circle.
-    let b = if (a - e).norm() <= tol::POINT {
+    let b = if (a - e).norm() <= tol::point() {
         c.point(t0 + 0.25 * (t1 - t0))
     } else {
         e
@@ -1308,7 +1308,7 @@ pub fn loft_wires(
     };
     let closed = secs.iter().all(|s| match s {
         Sec::Loop { parts, .. } => {
-            (parts[0].start() - parts[parts.len() - 1].end()).norm() < tol::POINT
+            (parts[0].start() - parts[parts.len() - 1].end()).norm() < tol::point()
         }
         Sec::Point(_) => true,
     });
@@ -1558,7 +1558,7 @@ fn wire_plane(parts: &[Part]) -> Option<Plane> {
     let size = pts.iter().map(|p| (p - o).norm()).fold(0.0, f64::max);
     if pts
         .iter()
-        .any(|p| (p - o).dot(&nrm).abs() > 1e-7 * size.max(crate::native::tol::POINT))
+        .any(|p| (p - o).dot(&nrm).abs() > 1e-7 * size.max(crate::native::tol::point()))
     {
         return None;
     }
@@ -1624,7 +1624,7 @@ fn loft_exact_with(
     // Open sections (sheets): each the way round that starts nearest the previous one's start.
     let closed_u = secs.iter().all(|s| match s {
         Sec::Loop { parts, .. } => {
-            (parts[0].start() - parts[parts.len() - 1].end()).norm() < tol::POINT
+            (parts[0].start() - parts[parts.len() - 1].end()).norm() < tol::point()
         }
         Sec::Point(_) => true,
     });
@@ -2326,7 +2326,7 @@ pub fn loft_guided(
         .iter()
         .map(|(s, e)| (s - e).norm())
         .fold(0.0, f64::max)
-        .max(crate::native::tol::POINT);
+        .max(crate::native::tol::point());
     let near = tol::REL_POINT * size;
     // Where each guide meets each loop section: its place along the loop (curve i at t is
     // i + t); a point section every guide meets.

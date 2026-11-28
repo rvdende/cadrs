@@ -47,7 +47,7 @@ pub(crate) fn pc_from(s: &Surface, e: &Edge, fwd: bool, at: Option<P2>) -> Curve
 /// edge along the seam has a p-curve at either end of the range, and only one continues the
 /// chain). None otherwise.
 fn own_pc(s: &Surface, e: &Edge, c: &Coedge, at: Option<P2>) -> Option<Curve> {
-    let allowed = e.tol.max(tol::POINT);
+    let allowed = e.tol.max(tol::point());
     let on = (0..=8).all(|i| {
         let t = e.t[0] + (e.t[1] - e.t[0]) * i as f64 / 8.0;
         let uv = c.pc.point(t);
@@ -241,7 +241,7 @@ fn flat_on(b: &Body, f: usize, s: &Surface) -> bool {
         let e = &b.edges[c.edge];
         [e.t[0], e.t[1]].iter().all(|&t| {
             s.signed_distance(&e.point(t))
-                .is_none_or(|d| d.abs() <= tol::POINT)
+                .is_none_or(|d| d.abs() <= tol::point())
         })
     })
 }
@@ -277,9 +277,9 @@ fn coincident_lines(b: &Body) -> Option<Vec<usize>> {
                 let f = &b.edges[j];
                 let same = (0..=2).all(|k| {
                     let t = e.t[0] + (e.t[1] - e.t[0]) * k as f64 / 2.0;
-                    (f.point(t) - e.point(t)).norm() <= tol::POINT
-                }) && (f.t[0] - e.t[0]).abs() <= tol::POINT
-                    && (f.t[1] - e.t[1]).abs() <= tol::POINT;
+                    (f.point(t) - e.point(t)).norm() <= tol::point()
+                }) && (f.t[0] - e.t[0]).abs() <= tol::point()
+                    && (f.t[1] - e.t[1]).abs() <= tol::point();
                 if same {
                     to[i] = j;
                 }
@@ -354,7 +354,7 @@ fn merge_faces(
         let same = if a.surf == c.surf {
             Some(true)
         } else {
-            a.surf.same_domain(&c.surf, tol::POINT)
+            a.surf.same_domain(&c.surf, tol::point())
         };
         // Two planes a hair from parallel pass `same_domain` (its test is on the cosine of their
         // angle): they merge only when each face lies on the other's plane too (a cube's top and
@@ -1278,7 +1278,7 @@ fn merge_group(b: &mut Body, g: &[usize]) -> Option<Face> {
             let e = &b.edges[c.edge];
             let (a, z) = (co_uv(b, c, false).x, co_uv(b, c, true).x);
             let m = c.pc.point(0.5 * (e.t[0] + e.t[1])).x;
-            !e.degenerate && (a - z).abs() * mu < tol::POINT && (a - m).abs() * mu < tol::POINT
+            !e.degenerate && (a - z).abs() * mu < tol::point() && (a - m).abs() * mu < tol::point()
         };
         // The holes' spans in u (their p-curves run on continuously): a seam at a u inside one
         // (or a whole turn from it) would run through that hole (Dr Browns cap: a window
@@ -1303,7 +1303,7 @@ fn merge_group(b: &mut Body, g: &[usize]) -> Option<Face> {
         // a turn bites through): every seam would cut it, so the pieces stay as they are.
         if spans
             .iter()
-            .any(|&(lo, hi)| (hi - lo) * mu >= TAU * mu - tol::POINT)
+            .any(|&(lo, hi)| (hi - lo) * mu >= TAU * mu - tol::point())
         {
             return None;
         }
@@ -1721,7 +1721,7 @@ pub fn straighten(b: &mut Body) -> bool {
         let (t0, t1) = (e.t[0], e.t[1]);
         let (p0, p1) = (n.point(t0), n.point(t1));
         let len = (p1 - p0).norm();
-        if !(t1 > t0 && len > tol::POINT) {
+        if !(t1 > t0 && len > tol::point()) {
             continue;
         }
         let d = (p1 - p0) / (t1 - t0);

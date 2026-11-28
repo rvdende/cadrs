@@ -577,7 +577,7 @@ fn piece(
             };
             // A piece still at the far end: part of the profile met nothing.
             let (_, hi) = super::kernel::extent_along(&kept.body, &o, &dir);
-            if hi > far - tol::REL_POINT * far.max(crate::native::tol::POINT)
+            if hi > far - tol::REL_POINT * far.max(crate::native::tol::point())
                 || kept
                     .tags
                     .iter()
@@ -777,10 +777,10 @@ fn sweep_united(
     for i in 0..boxes.len() {
         for j in i + 1..boxes.len() {
             let (a, b) = (&boxes[i], &boxes[j]);
-            if a.min.x < b.max.x - tol::POINT
-                && b.min.x < a.max.x - tol::POINT
-                && a.min.y < b.max.y - tol::POINT
-                && b.min.y < a.max.y - tol::POINT
+            if a.min.x < b.max.x - tol::point()
+                && b.min.x < a.max.x - tol::point()
+                && a.min.y < b.max.y - tol::point()
+                && b.min.y < a.max.y - tol::point()
             {
                 overlap = true;
             }
@@ -836,7 +836,7 @@ pub fn revolve_frame(
             "The revolve axis must lie in the sketch plane".into(),
         ));
     }
-    if (axis.origin - profile.plane.origin).dot(&n).abs() > tol::POINT {
+    if (axis.origin - profile.plane.origin).dot(&n).abs() > tol::point() {
         return Err(KernelError::InvalidParameter(
             "The revolve axis must lie in the sketch plane".into(),
         ));
@@ -863,11 +863,11 @@ pub fn revolve_frame(
     for c in chains {
         add(c);
     }
-    let x = if hi > tol::POINT && lo < -tol::POINT {
+    let x = if hi > tol::point() && lo < -tol::point() {
         return Err(KernelError::InvalidParameter(
             "The profile crosses the revolve axis".into(),
         ));
-    } else if hi > tol::POINT {
+    } else if hi > tol::point() {
         x
     } else {
         -x
@@ -934,7 +934,7 @@ pub fn revolve_with(
                 match info.plane {
                     Some(pl)
                         if pl.normal.dot(&f.z).abs() < tol::ANGULAR
-                            && (pl.origin - f.o).dot(&pl.normal).abs() < tol::POINT =>
+                            && (pl.origin - f.o).dot(&pl.normal).abs() < tol::point() =>
                     {
                         End::Angle(ang_of(&info.center) - offset)
                     }
@@ -1109,7 +1109,7 @@ pub fn revolve_with(
 fn axis_off_plane(profile: &Profile, axis: &Axis) -> bool {
     let n = profile.plane.normal.into_inner();
     axis.dir.dot(&n).abs() > tol::ANGULAR
-        || (axis.origin - profile.plane.origin).dot(&n).abs() > tol::POINT
+        || (axis.origin - profile.plane.origin).dot(&n).abs() > tol::point()
 }
 
 /// A revolve about an axis off the sketch plane (SMLib's rotational sweep of a face about any

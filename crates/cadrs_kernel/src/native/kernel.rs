@@ -84,7 +84,7 @@ impl Entry {
     }
 
     /// Each face's box, grown by the largest of the body's edge and vertex tolerances and
-    /// [`tol::POINT`].
+    /// [`tol::point()`].
     pub fn face_boxes(&self) -> &Vec<Bbox> {
         self.face_boxes.get_or_init(|| {
             let b = &self.body;
@@ -93,7 +93,7 @@ impl Entry {
                 .iter()
                 .map(|e| e.tol)
                 .chain(b.verts.iter().map(|v| v.tol))
-                .fold(tol::POINT, f64::max);
+                .fold(tol::point(), f64::max);
             (0..b.faces.len())
                 .map(|f| b.face_bbox(f).grow(2.0 * reach))
                 .collect()
@@ -171,9 +171,12 @@ impl NativeKernel {
     }
 
     /// Sets the tolerances the session's operations run with from now on.
+    /// The merge distance ([`super::tol::point`]) is one for the process: setting it here sets
+    /// it for every session.
     pub fn set_tolerances(&mut self, tol: super::tol::Tolerances) -> Result<()> {
         tol.validate()?;
         self.tol = tol;
+        super::tol::set_point(tol.point);
         Ok(())
     }
 
@@ -296,7 +299,7 @@ impl NativeKernel {
                     Some(x.body.verts[e.v[0]].p)
                 });
                 point.is_some_and(|p| {
-                    classify::classify_point(&y.body, y.polys(), &p, tol::POINT)
+                    classify::classify_point(&y.body, y.polys(), &p, tol::point())
                         == PointClass::Outside
                 })
             })
@@ -2643,7 +2646,7 @@ impl Kernel for NativeKernel {
             // face (a fitted curve swept) has its tolerance grown to cover the gap, up to
             // LOOP_GAP, as OCCT grows its edges'.
             let mut b = built.body.clone();
-            super::heal::refit_pcurves(&mut b, super::tol::POINT);
+            super::heal::refit_pcurves(&mut b, super::tol::point());
             if !b.check().is_empty() {
                 b.fit_tolerances_searched(super::tol::LOOP_GAP);
             }
@@ -3065,7 +3068,7 @@ impl Kernel for NativeKernel {
         );
         // A line through an edge (or a vertex) meets each face there: one crossing, not one per
         // face (springrep's tests/rays.rs, a ray through an edge crosses there once).
-        hits.dedup_by(|a, b| (a.0 - b.0).abs() <= super::tol::POINT);
+        hits.dedup_by(|a, b| (a.0 - b.0).abs() <= super::tol::point());
         Ok(hits
             .into_iter()
             .map(|(t, f, p)| RayHit {

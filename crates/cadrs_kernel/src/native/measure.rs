@@ -192,7 +192,7 @@ pub fn curvatures_at(
                             &polys[fi],
                             &f.surf,
                             P2::new(u, v),
-                            tol::POINT,
+                            tol::point(),
                         ) != super::classify::InFace::Outside;
                         held.then(|| ((foot - p).norm(), fi, foot, (u, v)))
                     })
@@ -208,7 +208,7 @@ pub fn curvatures_at(
                 match (face, edge) {
                     // (A point on an edge is as near the faces there as the edge: the edge's,
                     // so a crease answers None as the general search does.)
-                    (Some((df, f, foot, uv)), Some((de, ..))) if df + tol::POINT < de => {
+                    (Some((df, f, foot, uv)), Some((de, ..))) if df + tol::point() < de => {
                         (foot, vec![(f, Some(uv))])
                     }
                     (_, Some((_, e, foot))) => (
@@ -305,7 +305,7 @@ fn section_loops(b: &Body, o: P3, n: V3) -> Result<(Body, Vec<EdgeLoop>)> {
         // (Within a hundred-thousandth of its length, at most the point tolerance: the sliver
         // a plane cuts through a cap 1.5 µm high has its arc and its chord 7e-7 apart at their
         // middles, two edges of the loop, not one found twice.)
-        let near = tol::POINT.min(1e-5 * len);
+        let near = tol::point().min(1e-5 * len);
         let twin = edges.iter().any(|&x| {
             let o = &sec.edges[x];
             (o.point(o.mid_t()) - mid).norm() < near
@@ -351,7 +351,7 @@ fn section_loops(b: &Body, o: P3, n: V3) -> Result<(Body, Vec<EdgeLoop>)> {
                     (0..b.faces.len())
                         .filter(|&f| {
                             matches!(b.faces[f].surf, Surface::Plane { .. })
-                                && b.faces[f].surf.distance(q) <= tol::POINT
+                                && b.faces[f].surf.distance(q) <= tol::point()
                         })
                         .collect::<Vec<usize>>()
                 };
@@ -359,9 +359,9 @@ fn section_loops(b: &Body, o: P3, n: V3) -> Result<(Body, Vec<EdgeLoop>)> {
                 let face = fa.iter().find(|f| fb.contains(f)).copied();
                 let mid = P3::from((at.coords + start.coords) * 0.5);
                 let inside = face.is_some_and(|f| {
-                    super::classify::Classifier::lazy(b).classify(&mid, tol::POINT)
+                    super::classify::Classifier::lazy(b).classify(&mid, tol::point())
                         == crate::PointClass::OnBoundary
-                        && b.faces[f].surf.distance(&mid) <= tol::POINT
+                        && b.faces[f].surf.distance(&mid) <= tol::point()
                 });
                 if !inside {
                     return Err(KernelError::OpenResult(
@@ -632,7 +632,7 @@ pub fn betti_numbers(k: &NativeKernel, body: BodyId) -> Result<[u64; 3]> {
             for f in b.solid_faces(s) {
                 bb.union(&b.face_bbox(f));
             }
-            bb.grow(tol::POINT)
+            bb.grow(tol::point())
         })
         .collect();
     let mut parent: Vec<usize> = (0..ns).collect();
@@ -654,7 +654,7 @@ pub fn betti_numbers(k: &NativeKernel, body: BodyId) -> Result<[u64; 3]> {
                 .any(|v| verts_of[j].binary_search(v).is_ok());
             let touch = shared
                 || extremum(&of_solid(i), &of_solid(j), Sense::Min)
-                    .is_some_and(|x| x.distance <= tol::POINT);
+                    .is_some_and(|x| x.distance <= tol::point());
             if touch {
                 contacts += 1;
                 let (ri, rj) = (root(&mut parent, i), root(&mut parent, j));
@@ -715,7 +715,7 @@ pub fn interference(k: &mut NativeKernel, a: BodyId, b: BodyId) -> Result<Interf
         .iter()
         .map(|&x| k.get(x).map_or(0.0, |x| x.bbox().diagonal()))
         .fold(0.0, f64::max);
-    if volume <= tol::REL_POINT * tol::POINT * scale * scale {
+    if volume <= tol::REL_POINT * tol::point() * scale * scale {
         return Ok(Interference {
             volume: 0.0,
             gap: gap(k)?,

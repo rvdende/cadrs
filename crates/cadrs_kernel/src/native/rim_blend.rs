@@ -45,7 +45,7 @@ impl Meridian {
             Meridian::Line { p, n } => Meridian::Line { p: p - n * k, n },
             Meridian::Circle { q, r, out } => {
                 let r = r - out * k;
-                if r <= tol::POINT {
+                if r <= tol::point() {
                     return None;
                 }
                 Meridian::Circle { q, r, out }
@@ -80,7 +80,7 @@ impl Meridian {
                 // The line's foot from the centre, and half its chord.
                 let h = (q - p).dot(n);
                 let half = (r * r - h * h).max(0.0).sqrt();
-                if h.abs() > r + tol::POINT {
+                if h.abs() > r + tol::point() {
                     return None;
                 }
                 let (foot, along) = (q - n * h, V2::new(-n.y, n.x));
@@ -89,7 +89,10 @@ impl Meridian {
             (Meridian::Circle { q, r, .. }, Meridian::Circle { q: q2, r: r2, .. }) => {
                 let d = q2 - q;
                 let l = d.norm();
-                if l <= tol::POINT || l > r + r2 + tol::POINT || l < (r - r2).abs() - tol::POINT {
+                if l <= tol::point()
+                    || l > r + r2 + tol::point()
+                    || l < (r - r2).abs() - tol::point()
+                {
                     return None;
                 }
                 let a = (l * l + r * r - r2 * r2) / (2.0 * l);
@@ -715,8 +718,8 @@ pub(crate) fn rims_chamfer_at(
         };
         let z = x.cross(y).normalize();
         match rims.iter_mut().find(|g| {
-            (g.0 - c).norm() <= tol::POINT
-                && (g.2 - r).abs() <= tol::POINT
+            (g.0 - c).norm() <= tol::point()
+                && (g.2 - r).abs() <= tol::point()
                 && g.1.cross(&z).norm() <= tol::ANGULAR
         }) {
             Some(g) => g.3.push(e),

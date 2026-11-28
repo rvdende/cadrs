@@ -542,7 +542,7 @@ fn snap_tiny(c: Curve) -> Curve {
             .map(|h| (h.x / h.w).abs().max((h.y / h.w).abs()))
             .fold(0.0, f64::max),
     };
-    let tiny = 1e-13 * size.max(crate::native::tol::POINT);
+    let tiny = 1e-13 * size.max(crate::native::tol::point());
     let z = |x: f64| if x.abs() < tiny { 0.0 } else { x };
     let p = |q: &P3| P3::new(z(q.x), z(q.y), z(q.z));
     let v = |q: &V3| V3::new(z(q.x), z(q.y), z(q.z));
@@ -665,7 +665,7 @@ fn pcurve_unsnapped_found(
         let on = |pc: &Curve| {
             samples(pc).iter().all(|&t| {
                 let q = pc.point(t);
-                (s.eval(q.x, q.y) - c.point(t)).norm() < tol::POINT
+                (s.eval(q.x, q.y) - c.point(t)).norm() < tol::point()
             })
         };
         if on(&pc) {
@@ -2668,7 +2668,7 @@ pub fn orient_shells(b: &mut Body, always: bool) -> usize {
                 .then(|| super::mass::faces_volume(&super::kernel::subset(b, &faces, false)))
                 .filter(|v| v.is_finite() && *v != 0.0);
             let shift = bb.center().coords;
-            let defl = (bb.diagonal() * 1e-2).max(tol::POINT);
+            let defl = (bb.diagonal() * 1e-2).max(tol::point());
             let es = || super::tess::edge_samples(b, defl, 0.5);
             let vol: f64 = exact.unwrap_or_else(|| {
                 let es = es();

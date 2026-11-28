@@ -257,7 +257,7 @@ fn cylinder_outline(
     }
     let dn = d.normalize();
     let a2 = frame.dir_2d(&axis.dir);
-    if a2.norm() < tol::POINT {
+    if a2.norm() < tol::point() {
         return false;
     }
     let a2 = a2.normalize();
@@ -581,7 +581,7 @@ pub fn reveal_unoccluded(
                 let sl = sd.norm();
                 let (d, t) = segment_distance(q, w[0], w[1]);
                 // Beside the segment, not past its end: a line ending short of `q` leaves it bare.
-                let beside = (t > tol::REL && t < 1.0 - tol::REL) || d < tol::POINT;
+                let beside = (t > tol::REL && t < 1.0 - tol::REL) || d < tol::point();
                 sl > tol::DEGENERATE
                     && d <= tol
                     && beside

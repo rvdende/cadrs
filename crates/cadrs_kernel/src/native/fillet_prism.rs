@@ -139,7 +139,7 @@ pub(crate) fn prism_rim(
                 // Inward toward the axis (a convex round) or away from it.
                 let convex = m.dot(&(o - mid)) > 0.0;
                 let r2 = if convex { big - r } else { big + r };
-                if r2 <= 10.0 * tol::POINT {
+                if r2 <= 10.0 * tol::point() {
                     return None;
                 }
                 let sweep = e.t[1] - e.t[0];
@@ -1078,7 +1078,7 @@ pub(crate) fn rims(
         };
         let (ca, cb) = (circle_at(pa), circle_at(pb));
         if let (Curve::Circle { r: ra, .. }, Curve::Circle { r: rb, .. }) = (&ca, &cb)
-            && (*ra <= 10.0 * tol::POINT || *rb <= 10.0 * tol::POINT)
+            && (*ra <= 10.0 * tol::point() || *rb <= 10.0 * tol::point())
         {
             return None;
         }
@@ -1108,16 +1108,16 @@ pub(crate) fn rims(
                             // Into the plane face toward or away from the axis.
                             let inward = m.dot(&(oc - p)) > 0.0;
                             if inward {
-                                rx < rq - tol::POINT
+                                rx < rq - tol::point()
                             } else {
-                                rx > rq + tol::POINT
+                                rx > rq + tol::point()
                             }
                         } else {
                             let up = m.dot(&axis) > 0.0;
                             if up {
-                                hx > hq + tol::POINT
+                                hx > hq + tol::point()
                             } else {
-                                hx < hq - tol::POINT
+                                hx < hq - tol::point()
                             }
                         }
                     })

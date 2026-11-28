@@ -502,7 +502,7 @@ fn sweep_spine(
                 // only checked once the run is flushed, so be conservative).
                 run.is_empty()
                     && axis.dot(&place.normal).abs() <= 1e-7
-                    && (c - place.origin).dot(&place.normal).abs() <= tol::POINT
+                    && (c - place.origin).dot(&place.normal).abs() <= tol::point()
             }
             _ => false,
         };
@@ -1023,7 +1023,7 @@ pub(crate) fn glue(a: &Tagged, b: &Tagged) -> Option<Tagged> {
     let mut pairs: Vec<(usize, usize)> = Vec::new();
     for (fa, ca, aa) in &ea {
         for (fb, cb, ab) in &sb {
-            if (ca - cb).norm() < tol::POINT && (aa - ab).abs() < tol::REL_POINT * (1.0 + aa) {
+            if (ca - cb).norm() < tol::point() && (aa - ab).abs() < tol::REL_POINT * (1.0 + aa) {
                 pairs.push((*fa, *fb));
             }
         }
@@ -1051,13 +1051,13 @@ pub(crate) fn glue(a: &Tagged, b: &Tagged) -> Option<Tagged> {
             let found = ea_list.iter().copied().find(|&x| {
                 let o = &body.edges[x];
                 let om = o.point(o.mid_t());
-                (om - m).norm() < tol::POINT
-                    && ((body.verts[o.v[0]].p - body.verts[e.v[0]].p).norm() < tol::POINT
-                        || (body.verts[o.v[0]].p - body.verts[e.v[1]].p).norm() < tol::POINT)
+                (om - m).norm() < tol::point()
+                    && ((body.verts[o.v[0]].p - body.verts[e.v[0]].p).norm() < tol::point()
+                        || (body.verts[o.v[0]].p - body.verts[e.v[1]].p).norm() < tol::point())
             });
             let x = found?;
             let o = &body.edges[x];
-            let same = (body.verts[o.v[0]].p - body.verts[e.v[0]].p).norm() < tol::POINT
+            let same = (body.verts[o.v[0]].p - body.verts[e.v[0]].p).norm() < tol::point()
                 && (o.v[0] != o.v[1]
                     || o.curve.tangent(o.mid_t()).dot(&e.curve.tangent(e.mid_t())) > 0.0);
             emap.insert(c.edge, (x, same));
@@ -1135,7 +1135,7 @@ pub(crate) fn glue_self(t: &Tagged) -> Option<Tagged> {
     let s = caps(t, false);
     for (fe, ce, ae) in &e {
         for (fs, cs, as_) in &s {
-            if (ce - cs).norm() < tol::POINT && (ae - as_).abs() < tol::REL_POINT * (1.0 + ae) {
+            if (ce - cs).norm() < tol::point() && (ae - as_).abs() < tol::REL_POINT * (1.0 + ae) {
                 // A body without the two caps, their edges identified.
                 return glue_within(t, *fe, *fs);
             }
@@ -1160,10 +1160,10 @@ fn glue_within(t: &Tagged, fa: usize, fb: usize) -> Option<Tagged> {
         let m = e.point(e.mid_t());
         let x = ea_list.iter().copied().find(|&x| {
             let o = &body.edges[x];
-            (o.point(o.mid_t()) - m).norm() < tol::POINT
+            (o.point(o.mid_t()) - m).norm() < tol::point()
         })?;
         let o = &body.edges[x];
-        let same = (body.verts[o.v[0]].p - body.verts[e.v[0]].p).norm() < tol::POINT
+        let same = (body.verts[o.v[0]].p - body.verts[e.v[0]].p).norm() < tol::point()
             && (o.v[0] != o.v[1]
                 || o.curve.tangent(o.mid_t()).dot(&e.curve.tangent(e.mid_t())) > 0.0);
         emap.insert(c.edge, (x, same));
@@ -1289,7 +1289,7 @@ fn compound(mut a: Tagged, b: Tagged) -> Tagged {
 /// faces then meet the sleeve they stand on as the same surface.
 fn exact_cylinders(b: &mut crate::native::topo::Body, o: P3, axis: V3) {
     use crate::native::surface::Surface;
-    let tol = crate::native::tol::POINT;
+    let tol = crate::native::tol::point();
     for fi in 0..b.faces.len() {
         let s = b.faces[fi].surf.clone();
         if !matches!(s, Surface::Nurbs(_)) {

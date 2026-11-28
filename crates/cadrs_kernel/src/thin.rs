@@ -30,7 +30,7 @@ const EPS: f64 = 1e-9;
 /// The regions of a thin wall along every curve of `profile` (its regions' loops and its open
 /// chains). Each band and fill keeps the source of the region or chain it came from.
 pub fn thin_profile(profile: &Profile, left: f64, right: f64) -> Result<Profile> {
-    if !(left >= 0.0 && right >= 0.0 && left + right > tol::POINT) {
+    if !(left >= 0.0 && right >= 0.0 && left + right > tol::point()) {
         return Err(KernelError::InvalidParameter(
             "the wall thickness must be greater than zero".into(),
         ));

@@ -98,7 +98,7 @@ fn one_full_round_builds() {
     let v = k.mass_properties(r.bodies[0]).unwrap().volume;
     let want = LENGTH * WIDTH * HEIGHT - 2.0 * (1.0 - PI / 4.0) * R * R * LENGTH;
     assert!(
-        (v - want).abs() < tol::POINT * want,
+        (v - want).abs() < tol::point() * want,
         "volume {v}, want {want}"
     );
 }

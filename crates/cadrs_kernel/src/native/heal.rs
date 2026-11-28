@@ -392,7 +392,7 @@ pub fn fit_edge_ends(b: &mut Body) {
         let (p0, p1) = (b.verts[e.v[0]].p, b.verts[e.v[1]].p);
         let off = |k: usize, p: &P3| (e.point(e.t[k]) - p).norm();
         let (d0, d1) = (off(0, &p0), off(1, &p1));
-        let allowed = e.tol.max(super::tol::POINT);
+        let allowed = e.tol.max(super::tol::point());
         if d0 <= allowed && d1 <= allowed {
             continue;
         }
@@ -482,7 +482,7 @@ pub fn fix_gaps_2d(b: &mut Body) {
                 );
                 let better = Coedge { pc, ..c.clone() };
                 if pc_gap(b, &f.surf, &better) < pc_gap(b, &f.surf, c)
-                    || pc_gap(b, &f.surf, &better) <= e.tol.max(super::tol::POINT)
+                    || pc_gap(b, &f.surf, &better) <= e.tol.max(super::tol::point())
                 {
                     b.faces[fi].loops[li][k] = better;
                 }

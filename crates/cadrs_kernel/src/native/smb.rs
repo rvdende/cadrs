@@ -1084,7 +1084,7 @@ pub fn face_centroids_within(body: &Body, rel: f64) -> Vec<P3> {
     let defl = if bb.is_empty() {
         rel
     } else {
-        (bb.diagonal() * rel).max(tol::POINT)
+        (bb.diagonal() * rel).max(tol::point())
     };
     let es = super::tess::edge_samples(body, defl, 0.3);
     body.faces

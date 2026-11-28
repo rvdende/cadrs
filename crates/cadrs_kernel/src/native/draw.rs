@@ -2255,8 +2255,8 @@ impl NativeKernel {
             super::surface::Surface::Plane { f: fr } => {
                 let n = fr.x.cross(&fr.y);
                 r.lids.iter().any(|(o, up)| {
-                    n.cross(up).norm() < super::tol::POINT
-                        && (fr.o - o).dot(up).abs() < super::tol::POINT * size
+                    n.cross(up).norm() < super::tol::point()
+                        && (fr.o - o).dot(up).abs() < super::tol::point() * size
                 })
             }
             _ => false,
@@ -3564,7 +3564,7 @@ impl NativeKernel {
                 bb.max = bb.max.sup(&p);
             }
         }
-        Ok((bb.max - bb.min).max().max(super::tol::POINT))
+        Ok((bb.max - bb.min).max().max(super::tol::point()))
     }
 
     /// The surface of a feature's limit face.
@@ -3588,7 +3588,7 @@ impl NativeKernel {
         d: V3,
         reach: f64,
     ) -> Result<Vec<(f64, usize)>> {
-        let tol = super::tol::POINT * (1.0 + reach);
+        let tol = super::tol::point() * (1.0 + reach);
         let mut on: Vec<(f64, usize)> = Vec::new();
         let mut all: Vec<(f64, usize)> = Vec::new();
         for (i, &(b, f)) in lims.iter().enumerate() {
@@ -3747,7 +3747,7 @@ impl NativeKernel {
                         z1 = z1.min(apex)
                     }
                 }
-                if z1 - z0 <= super::tol::POINT {
+                if z1 - z0 <= super::tol::point() {
                     return Err(KernelError::Unsupported(
                         "features up to a cone past its apex",
                     ));
@@ -3905,7 +3905,7 @@ impl NativeKernel {
             _ => (0.0, 2.0 * h),
         };
         let mut tool = self.feat_tool(pbase, kind, params, travel, s0, s1)?;
-        let eps = super::tol::POINT * (1.0 + h);
+        let eps = super::tol::point() * (1.0 + h);
         let mut ts_u: Vec<(f64, usize)> = tu.iter().map(|&(t, i)| (t * sens, i)).collect();
         ts_u.sort_by(|a, b| a.0.total_cmp(&b.0));
         let times: Vec<f64> = ts_u.iter().map(|t| t.0).collect();
@@ -4525,7 +4525,7 @@ impl NativeKernel {
         if let Some(t) = stop
             && t < value.abs()
         {
-            let q = c + travel * (t + super::tol::POINT * (1.0 + h));
+            let q = c + travel * (t + super::tol::point() * (1.0 + h));
             tool = self
                 .feat_cut_side(tool, &surf, q, FEAT_REACH * h)?
                 .ok_or_else(|| err("the feature lies past its limit face"))?;
@@ -4573,7 +4573,7 @@ impl NativeKernel {
         let c = self.feat_centre(pbase)?;
         let foot = axis.origin + turn * (c - axis.origin).dot(&turn);
         let r = (c - foot).norm();
-        if r > super::tol::POINT {
+        if r > super::tol::point() {
             let x = (c - foot) / r;
             let circle = Curve::Circle {
                 c: foot,
@@ -4588,11 +4588,12 @@ impl NativeKernel {
             if let Some(&t) = if fuse == 1 { ts.first() } else { ts.last() } {
                 let b = self.body_of(base)?;
                 let h = self.feat_height(b, pbase, &[limit.0])?;
-                let q = circle.point(t + super::tol::POINT * (1.0 + h) / r);
+                let q = circle.point(t + super::tol::point() * (1.0 + h) / r);
                 tool = self
                     .feat_cut_side(tool, &surf, q, FEAT_REACH * h)?
                     .ok_or_else(|| err("the feature lies past its limit face"))?;
-                tool = self.nearest_piece(tool, circle.point(super::tol::POINT * (1.0 + h) / r))?;
+                tool =
+                    self.nearest_piece(tool, circle.point(super::tol::point() * (1.0 + h) / r))?;
             }
         }
         self.feat_apply(base, tool, fuse)

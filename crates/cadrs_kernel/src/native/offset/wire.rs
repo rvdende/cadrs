@@ -870,7 +870,7 @@ fn bracketed_root(
 /// `e` cut at `ts` as OCCT's `MAT2d_CutCurve` does: in order, skipping cuts within 1e-8 in
 /// parameter or 1e-6 in space of the last cut or of the end. Empty when nothing is cut.
 fn cut_at(e: &Piece2, ts: &[f64]) -> Vec<Piece2> {
-    let (ptol, tol) = (1e-8, tol::POINT);
+    let (ptol, tol) = (1e-8, tol::point());
     let (mut uf, ul) = (e.t0, e.t1);
     let (mut pf, pl) = (e.start(), e.end());
     let mut out = Vec::new();
@@ -1449,7 +1449,7 @@ pub fn offset_wire(edges: &[(Curve, f64, f64)], d: f64) -> Result<Vec<Vec<Piece2
     }
     // Slivers (bits of an element between near cuts) close up in the chaining; a whole element
     // stays however short (the offset of a short edge, or of a corner).
-    let sliver = chain_tol.min(tol::POINT);
+    let sliver = chain_tol.min(tol::point());
     kept.retain(|(el, p)| {
         (p.t0 == raw[*el].p.t0 && p.t1 == raw[*el].p.t1)
             || (p.end() - p.start()).norm() > sliver

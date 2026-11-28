@@ -1200,7 +1200,7 @@ impl Body {
                     // p-curve on the edge in 3D, within the edge's tolerance (a read model's
                     // p-curves stray by it): 7 points, or the largest gap searched for (Full).
                     if !ea.degenerate {
-                        let allowed = ea.tol.max(super::tol::POINT);
+                        let allowed = ea.tol.max(super::tol::point());
                         let gap = if fully(fi) {
                             pcurve_gap_kept(ea, &a.pc, &f.surf, &mut surface_key)
                         } else {
@@ -1241,7 +1241,7 @@ impl Body {
                     continue;
                 };
                 let d = (e.point(e.t[k]) - v.p).norm();
-                if d > v.tol.max(e.tol).max(super::tol::POINT) {
+                if d > v.tol.max(e.tol).max(super::tol::point()) {
                     errs.push(format!("edge {ei}: end {k} is {d:.3e} from its vertex"));
                 }
             }
@@ -1886,7 +1886,7 @@ impl Body {
                         let uv = c.pc.point(t);
                         (f.surf.eval(uv.x, uv.y) - self.verts[v].p).norm()
                     };
-                    let allowed = |v: usize| self.verts[v].tol.max(e.tol).max(super::tol::POINT);
+                    let allowed = |v: usize| self.verts[v].tol.max(e.tol).max(super::tol::point());
                     for end in 0..2 {
                         let d = on(e.t[end], e.v[end]);
                         if !(d <= allowed(e.v[end])) {
@@ -2118,7 +2118,7 @@ impl Body {
                         &out,
                         &polys,
                         &v.p,
-                        v.tol.max(super::tol::POINT),
+                        v.tol.max(super::tol::point()),
                     ) == crate::PointClass::Outside
                 });
                 if outside {

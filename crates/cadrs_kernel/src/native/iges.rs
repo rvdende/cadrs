@@ -824,7 +824,7 @@ fn parse(bytes: &[u8]) -> R<File> {
         .get(18)
         .and_then(|t| t.f())
         .filter(|r| *r > 0.0)
-        .unwrap_or(tol::POINT)
+        .unwrap_or(tol::point())
         * scale;
     Ok(File {
         ents,

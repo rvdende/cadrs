@@ -316,7 +316,7 @@ impl Outline {
     /// The loop: closed with a segment back to the start, where the outline hasn't come back
     /// to it.
     pub fn close(mut self) -> Loop {
-        if (self.at - self.start).norm() > crate::native::tol::POINT {
+        if (self.at - self.start).norm() > crate::native::tol::point() {
             self.curves.push(Curve2::line(self.at, self.start));
         }
         Loop {

@@ -63,7 +63,7 @@ fn slab(face: &Body, d: f64) -> Result<Body> {
 }
 
 pub fn thicken(k: &mut NativeKernel, spec: &ThickenSpec) -> Result<OpResult> {
-    if !(spec.along >= 0.0 && spec.against >= 0.0 && spec.along + spec.against > tol::POINT) {
+    if !(spec.along >= 0.0 && spec.against >= 0.0 && spec.along + spec.against > tol::point()) {
         return Err(invalid("The thickness must be greater than zero"));
     }
     let mut sheets: Vec<Body> = Vec::new();
@@ -207,7 +207,7 @@ fn tangent_strip(sheet: &Body, edge: &super::topo::Edge, width: f64) -> Result<B
 /// a cylinder, cone, sphere or torus about it. Its section in every half-plane through the
 /// axis is then the same.
 fn turned_about(s: &Surface, c: &P3, z: &V3) -> bool {
-    let on_axis = |o: &P3| (o - c).cross(z).norm() <= tol::POINT;
+    let on_axis = |o: &P3| (o - c).cross(z).norm() <= tol::point();
     let along = |d: &V3| d.cross(z).norm() <= tol::ANGULAR * d.norm();
     match s {
         Surface::Plane { f } => along(&f.x.cross(&f.y)),
@@ -235,7 +235,7 @@ fn crease_fills(k: &mut NativeKernel, sheets: &[Body], spec: &ThickenSpec) -> Re
         };
         normals.push(n);
     }
-    let Ok(sewn) = sew_faces(all, tol::POINT) else {
+    let Ok(sewn) = sew_faces(all, tol::point()) else {
         return Ok(Vec::new());
     };
     // Faces whose normals don't agree on a side of the sheet (a box's walls facing in and its
@@ -482,7 +482,7 @@ fn crease_fills(k: &mut NativeKernel, sheets: &[Body], spec: &ThickenSpec) -> Re
         let (n1, n2) = (normals[f1], normals[f2]);
         let (a, b) = (edge.curve.point(edge.t[0]), edge.curve.point(edge.t[1]));
         let len = (b - a).norm();
-        if len <= tol::POINT {
+        if len <= tol::point() {
             continue;
         }
         let dir = (b - a) / len;
@@ -570,7 +570,7 @@ fn thicken_sheet(k: &mut NativeKernel, sheets: &[Body], spec: &ThickenSpec) -> O
         all.append(s);
         normals.push(face_normal(s, 0)?);
     }
-    let sewn = sew_faces(all, tol::POINT).ok()?;
+    let sewn = sew_faces(all, tol::point()).ok()?;
     if sewn.faces.len() != sheets.len() {
         return None;
     }
@@ -629,7 +629,7 @@ fn thicken_sheet(k: &mut NativeKernel, sheets: &[Body], spec: &ThickenSpec) -> O
     let fi = (0..solid.faces.len())
         .find(|&f| {
             !caps.contains(&FaceId(f as u64))
-                && face_normal(&solid, f).is_some_and(|(q, _)| (q - p).norm() < tol::POINT)
+                && face_normal(&solid, f).is_some_and(|(q, _)| (q - p).norm() < tol::point())
         })
         .unwrap_or(0);
     let (_, nsolid) = face_normal(&solid, fi)?;

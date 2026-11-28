@@ -1357,7 +1357,7 @@ pub fn wire_body(segs: &[WireSeg], pts: &[P3], tol: f64) -> Body {
     for p in pts {
         b.add_point(*p);
     }
-    b.fit_tolerances(tol.max(tol::POINT));
+    b.fit_tolerances(tol.max(tol::point()));
     b
 }
 

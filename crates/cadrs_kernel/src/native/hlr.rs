@@ -264,7 +264,7 @@ fn make_src(
         lo = lo.inf(p);
         hi = hi.sup(p);
     }
-    if (hi - lo).norm() < tol::POINT {
+    if (hi - lo).norm() < tol::point() {
         return None;
     }
     Some(s)
@@ -543,7 +543,7 @@ impl<'a> Occluders<'a> {
                             // Through an edge of two faces, having crossed material on the way
                             // (a hole's wall grazed lengthwise is not material).
                             if rim.iter().any(|&(t2, b2, f2)| {
-                                (t2 - t).abs() < tol::POINT && (b2, f2) != (*bi, *fi)
+                                (t2 - t).abs() < tol::point() && (b2, f2) != (*bi, *fi)
                             }) {
                                 let hb = &self.bodies[*bi];
                                 let mid = p + rd * (0.5 * t);
@@ -885,7 +885,7 @@ pub fn project(bodies: &[HlrBody], frame: &ViewFrame, opts: &ProjectOptions) -> 
             )
         })
         .collect();
-    let cov = 2.0 * tol + tol::POINT;
+    let cov = 2.0 * tol + tol::point();
     let segs: Vec<(u32, u32)> = polys
         .iter()
         .enumerate()
@@ -960,7 +960,7 @@ pub fn project(bodies: &[HlrBody], frame: &ViewFrame, opts: &ProjectOptions) -> 
                 if o.visible && !pc.visible {
                     return s.class != ProjClass::Outline;
                 }
-                if (od - d).abs() > tol::POINT {
+                if (od - d).abs() > tol::point() {
                     return od < d;
                 }
                 (rank(srcs[o.src].class), oi) < (rank(s.class), pi)
@@ -979,7 +979,7 @@ pub fn project(bodies: &[HlrBody], frame: &ViewFrame, opts: &ProjectOptions) -> 
                     let o = &pieces[oi];
                     srcs[o.src].class == ProjClass::Outline
                         && o.visible == pc.visible
-                        && (od - d).abs() <= tol::POINT
+                        && (od - d).abs() <= tol::point()
                 })
         })
         .collect();

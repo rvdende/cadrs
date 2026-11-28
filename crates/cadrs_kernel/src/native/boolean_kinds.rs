@@ -50,9 +50,9 @@ use super::topo::{Body, Coedge, co_range};
 use crate::*;
 
 /// The distance under which two points of the kinds' booleans are one: the boolean's default
-/// tolerance ([`boolean::VTOL`]) with the margin its merged entities carry.
+/// tolerance ([`boolean::vtol`]) with the margin its merged entities carry.
 fn tol() -> f64 {
-    boolean::VTOL * 10.0
+    boolean::vtol() * 10.0
 }
 
 /// The kernel operation when an input isn't a solid: the target combined with each tool in
@@ -764,7 +764,11 @@ fn crossings_with_pieces(a: &[Piece], b: &[Piece], tol: f64) -> Vec<P3> {
 /// Wire `a` op `b` (any kind but a mixed one).
 fn wire_with(a: &Body, b: &Body, op: BoolOp) -> Result<BoolOut> {
     let mine = pieces_of(a);
-    let size = a.bbox().diagonal().max(b.bbox().diagonal()).max(tol::POINT);
+    let size = a
+        .bbox()
+        .diagonal()
+        .max(b.bbox().diagonal())
+        .max(tol::point());
     let t = (size * 1e-10).max(tol());
     let theirs;
     let other = match kind(b) {

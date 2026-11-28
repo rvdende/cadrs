@@ -906,7 +906,7 @@ pub fn loft(items: &[LoftItem], ruled: bool) -> CqResult<Shape> {
             LoftItem::Wire(w) if k == 0 || k == last => {
                 let pts: Vec<V3> = w.iter().flat_map(|g| g.polyline(1e-9)).collect();
                 super::geom::BoundBox::of_points(pts.iter())
-                    .filter(|b| b.diagonal() <= 4.0 * crate::native::tol::POINT)
+                    .filter(|b| b.diagonal() <= 4.0 * crate::native::tol::point())
                     .map(|b| (b.min + b.max) * 0.5)
             }
             _ => None,

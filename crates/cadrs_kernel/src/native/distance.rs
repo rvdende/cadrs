@@ -742,7 +742,9 @@ struct MeshSide {
 impl MeshSide {
     /// The pieces' mesh: a face's triangles, an edge's segments, the points.
     fn new(pieces: &[Piece], body: Option<&Body>) -> MeshSide {
-        let defl = body.map_or(0.0, |b| (4e-3 * b.bbox().diagonal()).max(10.0 * tol::POINT));
+        let defl = body.map_or(0.0, |b| {
+            (4e-3 * b.bbox().diagonal()).max(10.0 * tol::point())
+        });
         let meshed = body
             .filter(|_| pieces.iter().any(|p| !matches!(p, Piece::Point { .. })))
             .map(|b| mesh_kept(b, defl));
@@ -851,7 +853,9 @@ fn seam_twins(p: &Piece, x: X) -> [Option<X>; 4] {
 
 /// How near two sides polished from where their meshes cross must come for them to meet
 /// ([`seeded_min`]).
-const MET: f64 = tol::POINT * 1e-3;
+fn met() -> f64 {
+    tol::point() * 1e-3
+}
 
 /// The least distance from the pieces' meshes (springrep's method): the nearest pair of mesh
 /// pieces gives it to within the meshes' deflections, and every pair that near seeds the exact
@@ -894,7 +898,7 @@ fn seeded_min(a: &[Piece], ba: Option<&Body>, b: &[Piece], bb: Option<&Body>) ->
         let (_, p, q) = bit_distance(bit_a, bit_b);
         let (xa, xb) = (seed_at(&a[*ia], bit_a, &p), seed_at(&b[*ib], bit_b, &q));
         if let Some((d, xa, xb)) = polish(&a[*ia], xa, &b[*ib], xb, Sense::Min)
-            && d <= MET
+            && d <= met()
         {
             return Some(Extremum {
                 distance: d,
@@ -905,7 +909,7 @@ fn seeded_min(a: &[Piece], ba: Option<&Body>, b: &[Piece], bb: Option<&Body>) ->
             });
         }
     }
-    let margin = 2.0 * (ma.defl + mb.defl) + tol::POINT;
+    let margin = 2.0 * (ma.defl + mb.defl) + tol::point();
     let reach = best + margin;
     let spread = 4.0 * (ma.defl + mb.defl);
     let mut near: Vec<(f64, usize, usize, P3, P3)> = Vec::new();
@@ -1403,8 +1407,8 @@ fn held_between_cores(
         }
     }
     for p in tried {
-        if k.classify(ia, p, super::tol::POINT)? == PointClass::Inside
-            && k.classify(ib, p, super::tol::POINT)? == PointClass::Inside
+        if k.classify(ia, p, super::tol::point())? == PointClass::Inside
+            && k.classify(ib, p, super::tol::point())? == PointClass::Inside
         {
             let at = DistanceLocation::Point;
             return Ok(Some(crate::DistanceResult {
@@ -1497,7 +1501,7 @@ fn held(
             if !bb.contains(&p) {
                 continue;
             }
-            if k.classify(id, p, super::tol::POINT)? == PointClass::Inside {
+            if k.classify(id, p, super::tol::point())? == PointClass::Inside {
                 let at = DistanceLocation::Point;
                 return Ok(Some(crate::DistanceResult {
                     distance: 0.0,

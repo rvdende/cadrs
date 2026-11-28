@@ -111,7 +111,7 @@ fn end_normal(normal: &dyn Fn(f64) -> V3, t: f64, t0: f64, t1: f64) -> V3 {
         return n;
     };
     let m = normal(inner);
-    if (m - n).norm() > tol::POINT { m } else { n }
+    if (m - n).norm() > tol::point() { m } else { n }
 }
 
 /// How closely a fitted offset curve follows the true offset (mm, relative to the distance),
@@ -799,7 +799,7 @@ fn ring_slab(b: &Body, fi: usize, surf: &Surface, sense: bool, d: f64) -> Option
         -1.0
     };
     let (inner, outer) = (rmin.min(rmin + grow), rmin.max(rmin + grow));
-    if inner <= tol::POINT || outer >= *rmaj * (1.0 - tol::REL) {
+    if inner <= tol::point() || outer >= *rmaj * (1.0 - tol::REL) {
         return None;
     }
     let centre = nalgebra::Point2::new(*rmaj, 0.0);
@@ -962,7 +962,7 @@ fn past_centre(b: &Body, fi: usize, surf: &Surface, sense: bool, d: f64) -> Resu
     // (`beyond`: how far past the centre the face is moved; the face moves toward it, as only
     // then does the offset vanish.)
     let wedge = wedge_slab(b, fi, surf, sense, d, &centre)?;
-    if beyond <= tol::POINT.max(tol::REL * r) {
+    if beyond <= tol::point().max(tol::REL * r) {
         return Ok(wedge);
     }
     let k = beyond / r;
@@ -1014,7 +1014,7 @@ fn wedge_slab(
 ) -> Result<Body> {
     let f = &b.faces[fi];
     let size = b.bbox().diagonal();
-    let close = tol::POINT.max(tol::REL * size);
+    let close = tol::point().max(tol::REL * size);
     let mut xb = XBuilder::new();
     let mut vb: HashMap<usize, usize> = HashMap::new();
     let mut vt: HashMap<usize, usize> = HashMap::new();

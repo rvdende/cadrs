@@ -1304,7 +1304,7 @@ fn ray_torus(
                 }
             }
         }
-        if s.distance(&(o + d * t)) < tol::POINT {
+        if s.distance(&(o + d * t)) < tol::point() {
             ts.push(t);
         }
     }
@@ -1561,7 +1561,7 @@ pub(crate) fn ray_hits_kept(
     for &fi in among {
         let f = &body.faces[fi];
         if let Some(bx) = boxes
-            && !line_meets_box(o, d, &bx[fi].grow(tol::POINT + tol::REL * span))
+            && !line_meets_box(o, d, &bx[fi].grow(tol::point() + tol::REL * span))
         {
             continue;
         }
@@ -1912,7 +1912,7 @@ impl<'a> Classifier<'a> {
             .collect();
         // (A margin over any the tests below grow a box by: they test the face's own box
         // again.)
-        let margin = tol::POINT.max(tol::REL_POINT * (1.0 + bbox.diagonal()));
+        let margin = tol::point().max(tol::REL_POINT * (1.0 + bbox.diagonal()));
         let tree = super::bvh::Bvh::new(boxes.iter().map(|b| b.grow(margin)).collect());
         let worst = body
             .edges
@@ -1972,7 +1972,7 @@ impl<'a> Classifier<'a> {
                     }
                     sides.push((fi, sign));
                 }
-                let size = self.bbox.diagonal().max(tol::POINT);
+                let size = self.bbox.diagonal().max(tol::point());
                 let slack = 1e-9 * (size + self.bbox.center().coords.norm());
                 let outside = |q: &P3| {
                     sides.iter().any(|&(fi, sign)| {
