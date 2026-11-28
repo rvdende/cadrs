@@ -1790,9 +1790,9 @@ pub fn blend(
             cur = cur.apply(&tool, &src, BoolOp::Subtract)?;
         }
     }
-    let cur = cur.with_solids_of_input(b.solids.len())?;
     // The tools cut away no more than they hold and fill no more: a result past that went
-    // wrong in a boolean (a chamfer of a louvered loft's every edge left a sixth of it).
+    // wrong in a boolean (a chamfer of a louvered loft's every edge left a sixth of it). (Before
+    // the pieces the blend cuts off are dropped below, which takes their volume too.)
     let (before, after) = (
         super::mass::body_volume(&b),
         super::mass::body_volume(&cur.body),
@@ -1810,6 +1810,7 @@ pub fn blend(
             ),
         });
     }
+    let cur = cur.with_solids_of_input(b.solids.len())?;
     // A solid must stay a solid (an open result means a tool went wrong).
     if !b.solids.is_empty() && cur.body.solids.is_empty() {
         return Err(KernelError::InvalidResult {
