@@ -2698,7 +2698,23 @@ fn build_shapes(
         prof.mark("tolerances");
         // A solid whose faces all point in (a sphere or cylinder band whose loops are only
         // seams and circles, read against the file's own sense): turned round.
+        // A solid with voids, each shell by itself: the outer one pointing out, a void in (a
+        // void read facing out added its volume: Onshape's STEP of a sphere with a lattice
+        // void, CADEvolve 297, read as 6938 mm³ where Parasolid reads 1439).
         for si in 0..b.solids.len() {
+            let shells = b.solids[si].shells.clone();
+            if shells.len() > 1 {
+                for (k, sh) in shells.into_iter().enumerate() {
+                    let faces = b.shells[sh].faces.clone();
+                    let sub = super::kernel::subset(&b, &faces, true);
+                    if super::topo::points_in(&sub) != (k > 0) {
+                        for f in faces {
+                            Body::reverse_face(&mut b.faces[f]);
+                        }
+                    }
+                }
+                continue;
+            }
             let faces = b.solid_faces(si);
             let sub = super::kernel::subset(&b, &faces, true);
             if super::topo::points_in(&sub) {

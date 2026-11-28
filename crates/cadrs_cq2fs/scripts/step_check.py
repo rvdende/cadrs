@@ -13,8 +13,8 @@ each case, which should be one:
          lies in (case k of a batch moved k * slot_mm along X): a check of that reader.
 eval = step (within 1e-7) says the file holds what evalFeatureScript built, read by Parasolid
 itself, not by the kernel under test; step = cadrs (within 1e-7) says cadrs's reader reads it;
-part (the REST mass properties, computed less accurately: 8.6e-7 off on
-CADEvolve 24 where eval and step agree to 2e-8) is held to 1e-6. Writes
+part (the REST mass properties) is reported, not held to anything: it is computed less
+accurately (up to 4e-4 off on hard100's lattices where eval and step agree to 1e-8). Writes
 <dir>/step/<set>-check.json.
 """
 import json
@@ -26,7 +26,6 @@ sys.path.insert(0, os.path.join(HERE, "../../cadrs_py/python"))
 import cadquery as cq  # noqa: E402  (cadrs's)
 
 FLAG = 1e-7
-PART = 1e-6
 
 
 def main():
@@ -82,17 +81,16 @@ def main():
             r = {"i": i, "name": names[i], "batch": k, "eval": ev, "part": pv, "step": sv, "cadrs_read": cv,
                  "eval_vs_step": rel(ev, sv), "eval_vs_part": rel(ev, pv), "step_vs_cadrs_read": rel(sv, cv)}
             r["cadrs_reads_it"] = r["step_vs_cadrs_read"] is not None and r["step_vs_cadrs_read"] <= FLAG
-            r["ok"] = (r["eval_vs_step"] is not None and r["eval_vs_step"] <= FLAG
-                       and r["eval_vs_part"] is not None and r["eval_vs_part"] <= PART)
+            r["ok"] = r["eval_vs_step"] is not None and r["eval_vs_step"] <= FLAG
             rows.append(r)
-            mark = "" if r["ok"] else "  <-"
+            mark = ("" if r["ok"] else "  <- step") + ("" if r["cadrs_reads_it"] else "  <- cadrs read")
             f = lambda x: "-" if x is None else f"{x:.3e}"
             print(f"{i:6} {names[i][:40]:40} eval/step {f(r['eval_vs_step'])}  eval/part {f(r['eval_vs_part'])}  step/cadrs-read {f(r['step_vs_cadrs_read'])}{mark}")
         k += 1
     ok = sum(r["ok"] for r in rows)
     reads = sum(r["cadrs_reads_it"] for r in rows)
     print(f"cadrs's STEP reader reads {reads} of {len(rows)} as Parasolid does (within {FLAG})")
-    print(f"{ok} of {len(rows)} cases: the STEP holds what evalFeatureScript built (within {FLAG}), the Part Studio's parts too (within {PART})")
+    print(f"{ok} of {len(rows)} cases: the STEP holds what evalFeatureScript built (within {FLAG})")
     json.dump({"rows": rows, "ok": ok, "of": len(rows)}, open(os.path.join(d, "step", f"{name}-check.json"), "w"), indent=1)
 
 
