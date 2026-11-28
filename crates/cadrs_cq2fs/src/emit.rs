@@ -148,6 +148,15 @@ pub fn translate(rec: &Value) -> Result<Translated, String> {
         if e.get("guarded").and_then(|g| g.as_bool()) == Some(true) {
             guarded.push(step);
         }
+        // The recorder's marks (try bodies, a replayed failure): comments, nothing to run.
+        if op.starts_with("guard_") || op == "injected_failure" {
+            let _ = writeln!(
+                body,
+                "        // step {step}: {op} {}",
+                e.to_string().replace('\n', " ")
+            );
+            continue;
+        }
         let _ = writeln!(body, "        atStep(st, {step});");
         match op {
             "Workplane" => {
@@ -167,7 +176,7 @@ pub fn translate(rec: &Value) -> Result<Translated, String> {
             _ => {
                 let sig = sigs::find(op).ok_or_else(|| format!("op {op} not ported"))?;
                 let a = args_map(sig, e)?;
-                if op.starts_with("Solid.") {
+                if op.starts_with("Solid.") || op.starts_with("Compound.") {
                     let out = ref_id(&e["out"], "shape")?;
                     let _ = writeln!(body, "        {}(c, st, {out}, {a});", sig.fs);
                 } else if op.starts_with("shape.") {

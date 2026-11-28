@@ -47,8 +47,11 @@ def features(rec):
     for n, e in enumerate(rec["entries"]):
         if e["op"] == "workplane" and n > 0 and any(p["op"] == "faces" for p in rec["entries"][max(0, n - 2):n]):
             f.add("face-workplane")
-        if e["op"] == "transformed" and any(abs(x) > 1e-9 for x in (e["kwargs"].get("rotate") or (e["args"][0] if e["args"] else [0, 0, 0]))):
-            f.add("rotated-workplane")
+        if e["op"] == "transformed":
+            rot = e["kwargs"].get("rotate") or (e["args"][0] if e["args"] else [0, 0, 0])
+            rot = rot["vec"] if isinstance(rot, dict) else rot
+            if any(isinstance(x, (int, float)) and abs(x) > 1e-9 for x in rot):
+                f.add("rotated-workplane")
     if c["intersect"] or c["shape.intersect"]:
         f.add("intersect")
     if c["polarArray"] or c["rotate"] >= 3:

@@ -117,14 +117,28 @@ pub fn load_tapes(path: &Path) -> Result<BTreeMap<i64, Value>> {
 }
 
 /// Run the recorder (recorder/trace.py) on generators `idx` (all when empty) into `out`.
-fn trace(generators: &Path, out: &Path, idx: &[i64]) -> Result<()> {
+/// `fails`: generators to replay with steps raising (each case's injected failures, its
+/// tape.json's `fail_at`).
+fn trace(
+    generators: &Path,
+    out: &Path,
+    idx: &[i64],
+    fails: &BTreeMap<i64, Vec<i64>>,
+) -> Result<()> {
     let mut cmd = std::process::Command::new(python());
+    cmd.env("CQ2FS_BIN", std::env::current_exe()?);
     cmd.arg("-I")
         .arg(Path::new(CRATE).join("recorder/trace.py"))
         .arg(generators)
         .arg(out);
     for i in idx {
         cmd.arg(i.to_string());
+    }
+    for (i, steps) in fails {
+        if !steps.is_empty() {
+            let s: Vec<String> = steps.iter().map(|x| x.to_string()).collect();
+            cmd.arg("--fail").arg(format!("{i}={}", s.join(",")));
+        }
     }
     let st = cmd.status().context("running the recorder")?;
     if !st.success() {
@@ -133,9 +147,34 @@ fn trace(generators: &Path, out: &Path, idx: &[i64]) -> Result<()> {
     Ok(())
 }
 
-fn record_cases(set: &CaseSet, idx: &[i64]) -> Result<()> {
-    let tmp = std::env::temp_dir().join(format!("cq2fs-record-{}.jsonl", std::process::id()));
-    trace(&set.generators, &tmp, idx)?;
+/// Record cases' tapes, each replaying the failures `fails` gives it (or, when it gives none,
+/// those its tape.json already replays).
+pub fn record_cases(set: &CaseSet, idx: &[i64], fails: &BTreeMap<i64, Vec<i64>>) -> Result<()> {
+    let tmp = std::env::temp_dir().join(format!(
+        "cq2fs-record-{}-{}.jsonl",
+        std::process::id(),
+        idx.first().unwrap_or(&0)
+    ));
+    let mut all = BTreeMap::new();
+    for (i, name) in &set.cases {
+        if !idx.contains(i) {
+            continue;
+        }
+        let f = match fails.get(i) {
+            Some(f) => f.clone(),
+            None => set
+                .tape(*i, name)
+                .ok()
+                .and_then(|t| {
+                    t["fail_at"]
+                        .as_array()
+                        .map(|a| a.iter().filter_map(|x| x.as_i64()).collect())
+                })
+                .unwrap_or_default(),
+        };
+        all.insert(*i, f);
+    }
+    trace(&set.generators, &tmp, idx, &all)?;
     let tapes = load_tapes(&tmp)?;
     let gens: Vec<Value> = serde_json::from_str(&std::fs::read_to_string(&set.generators)?)?;
     for i in idx {
@@ -177,7 +216,7 @@ fn main() -> Result<()> {
                     .unwrap_or_else(|| format!("{CRATE}/../../target/cq2fs/tapes.jsonl")),
             );
             std::fs::create_dir_all(out.parent().unwrap())?;
-            trace(&gens, &out, &[])?;
+            trace(&gens, &out, &[], &BTreeMap::new())?;
             println!("{}", out.display());
         }
         "translate" => {
@@ -242,13 +281,13 @@ fn main() -> Result<()> {
                         .push((*i, gens[*i as usize]["name"].as_str().unwrap().to_string()));
                 }
             }
-            record_cases(&set, &idx)?;
+            record_cases(&set, &idx, &BTreeMap::new())?;
             set.save()?;
         }
         "record" => {
             let set = CaseSet::load(Path::new(rest.first().context("set.json")?))?;
             let idx: Vec<i64> = set.cases.iter().map(|(i, _)| *i).collect();
-            record_cases(&set, &idx)?;
+            record_cases(&set, &idx, &BTreeMap::new())?;
         }
         "emit" => {
             let set = CaseSet::load(Path::new(rest.first().context("set.json")?))?;

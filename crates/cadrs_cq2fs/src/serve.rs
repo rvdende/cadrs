@@ -75,7 +75,12 @@ struct State {
     names: BTreeMap<i64, (String, Vec<i64>)>,
     dir: PathBuf,
     set: PathBuf,
+    next_job: usize,
 }
+
+/// How many failures a case may be replayed with (each one a step Parasolid failed at inside
+/// the generator's own `try`) before it is left as it is.
+const MAX_REPLAYS: usize = 10;
 
 const CLIENT_JS: &str = r#"
 (async () => {
@@ -141,8 +146,52 @@ fn record_result(st: &mut State, job: &Job, status: i64, text: &str, now: u64) -
             m.insert("evaluated".into(), json!(now));
             m.insert("guarded_steps".into(), json!(guarded));
         }
+        let dir = st.dir.join(format!("{i}_{name}"));
+        // Parasolid failed inside the generator's own `try`: CadQuery's caller would have
+        // caught it there, so replay the generator with that call raising and run the path its
+        // handler takes (the recorder's CQFailure; trace.py --fail).
+        let at = r["at"].as_f64().map(|x| x as i64);
+        let err = r["err"].as_str().unwrap_or("").to_string();
+        if r["status"] == "error"
+            && let Some(at) = at
+            && !err.contains("cq-unsupported")
+            && let Ok(tape) = std::fs::read_to_string(dir.join("tape.json"))
+                .map(|t| serde_json::from_str::<Value>(&t).unwrap_or(json!({})))
+            && tape["entries"][(at - 1) as usize]["guarded"] == true
+        {
+            let mut fails: Vec<i64> = tape["fail_at"]
+                .as_array()
+                .map(|a| a.iter().filter_map(|x| x.as_i64()).collect())
+                .unwrap_or_default();
+            if fails.len() < MAX_REPLAYS && !fails.contains(&at) {
+                fails.push(at);
+                let set = CaseSet::load(&st.set)?;
+                crate::record_cases(&set, &[*i], &BTreeMap::from([(*i, fails.clone())]))?;
+                let rec = set.tape(*i, name)?;
+                eprintln!(
+                    "case {i}: Parasolid failed at guarded step {at} ({err}); replaying with failures at {fails:?}"
+                );
+                match emit::translate(&rec) {
+                    Ok(t) => {
+                        std::fs::write(dir.join("case.fs"), emit::batch(&[&t]))?;
+                        let id = st.next_job;
+                        st.next_job += 1;
+                        st.names.insert(*i, (name.clone(), t.guarded.clone()));
+                        st.queue.push_back(Job {
+                            id,
+                            cases: vec![*i],
+                            script: emit::batch(&[&t]),
+                        });
+                        continue;
+                    }
+                    Err(e) => {
+                        r = json!({"status": "untranslated", "err": e, "after_replaying": fails});
+                    }
+                }
+            }
+        }
         std::fs::write(
-            st.dir.join(format!("{i}_{name}")).join("parasolid.json"),
+            dir.join("parasolid.json"),
             serde_json::to_string_pretty(&tidy(r))? + "\n",
         )?;
     }
@@ -329,7 +378,9 @@ pub fn run(args: &[String]) -> Result<()> {
         }
     }
     let mut queue = VecDeque::new();
+    let mut next_job = 0;
     for (n, chunk) in todo.chunks(batch.max(1)).enumerate() {
+        next_job = n + 1;
         let ts: Vec<&emit::Translated> = chunk.iter().map(|i| &translated[i]).collect();
         queue.push_back(Job {
             id: n,
@@ -352,6 +403,7 @@ pub fn run(args: &[String]) -> Result<()> {
         names,
         dir: set.dir.clone(),
         set: set.path.clone(),
+        next_job,
     }));
     let listener = TcpListener::bind(("127.0.0.1", port))?;
     for stream in listener.incoming() {

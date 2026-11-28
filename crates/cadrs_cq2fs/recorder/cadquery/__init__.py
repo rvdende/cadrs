@@ -24,17 +24,74 @@ __version__ = "2.8.0-recorder"
 # AttributeError exactly as CadQuery would, so a generator's `except` path is the one CadQuery takes.
 _CQ_NAMES = {k: set(v) for k, v in _json.load(open(_os.path.join(_os.path.dirname(__file__), "_cq_names.json"))).items()}
 
+# Workplane's method signatures in CadQuery 2.8 (cq.py): a call binds as Python binds it there,
+# so a call CadQuery would reject raises the TypeError it would, inside the generator.
+import inspect as _inspect
 
-class Dynamic(Exception):
-    """The generator needs a geometric answer while it runs."""
+_SIGS = {}
+for _name, _d in _json.load(open(_os.path.join(_os.path.dirname(__file__), "_cq_sigs.json")))["Workplane"].items():
+    _P = _inspect.Parameter
+    _ps = [_P(n, _P.POSITIONAL_OR_KEYWORD, default=None if n in _d["defaults"] else _P.empty) for n in _d["pos"]]
+    if _d["varargs"]:
+        _ps.append(_P("args", _P.VAR_POSITIONAL))
+    _ps += [_P(n, _P.KEYWORD_ONLY, default=None if has else _P.empty) for n, has in _d["kwonly"]]
+    if _d["varkw"]:
+        _ps.append(_P("kwargs", _P.VAR_KEYWORD))
+    _SIGS[_name] = _inspect.Signature(_ps)
 
 
-class Unsupported(Exception):
-    """The generator uses CadQuery API the recorder does not port."""
+class SelectorParseError(Exception):
+    """pyparsing's ParseException, as CadQuery raises it for a selector string its grammar
+    rejects (an Exception, not a ValueError)."""
+
+
+_SEL_OK = {}
+
+
+def _check_selector(sel):
+    """Parse a selector string with CadQuery's grammar (cq2fs's port, checked against pyparsing:
+    tests/selector_grammar_check.py), raising where CadQuery would."""
+    if sel not in _SEL_OK:
+        import subprocess
+        exe = _os.environ.get("CQ2FS_BIN")
+        if not exe:
+            raise Unsupported("selector strings need CQ2FS_BIN (cq2fs's path) to be checked")
+        out = subprocess.run([exe, "selectors"], input=_json.dumps(sel), capture_output=True, text=True).stdout
+        _SEL_OK[sel] = "error" not in _json.loads(out)
+    if not _SEL_OK[sel]:
+        raise SelectorParseError(f"Expected end of text, selector {sel!r}")
+
+
+def _check_call(name, args, kwargs):
+    if name in ("faces", "edges", "vertices", "solids", "wires", "shells", "compounds"):
+        sel = kwargs.get("selector", args[0] if args else None)
+        if isinstance(sel, str):
+            _check_selector(sel)
+    sig = _SIGS.get(name)
+    if sig is not None:
+        try:
+            sig.bind(*args, **kwargs)
+        except TypeError as e:
+            raise TypeError(f"{name}() {e}") from None
+
+
+class Dynamic(BaseException):
+    """The generator needs a geometric answer while it runs. (A BaseException, so a generator's
+    own `except Exception:` can't swallow it and go down a path CadQuery wouldn't take.)"""
+
+
+class Unsupported(BaseException):
+    """The generator uses CadQuery API the recorder does not port (a BaseException, as Dynamic)."""
 
 
 # ----------------------------------------------------------------------------------------------
 # the tape
+
+class CQFailure(ValueError, RuntimeError):
+    """Raised where Parasolid failed (a replay with injected failures, trace.py --fail): what
+    CadQuery's own call would raise there, so the generator's handlers take the path CadQuery's
+    caller would. A ValueError (CadQuery's own checks) and a RuntimeError (OCP's failures)."""
+
 
 class _Tape:
     def __init__(self):
@@ -43,6 +100,8 @@ class _Tape:
         self.nshape = 0
         self.try_lines = []  # [(first, last)] line ranges of try bodies in the generator
         self.filename = None
+        self.guards = []
+        self.fail_at = set()  # tape steps (1-based) whose call raises CQFailure
 
     def caller_line(self):
         f = sys._getframe(1)
@@ -53,11 +112,15 @@ class _Tape:
         return None
 
     def add(self, entry):
+        step = len(self.entries) + 1
+        if step in self.fail_at:
+            self.entries.append({"op": "injected_failure", "at": step, "was": entry.get("op")})
+            raise CQFailure(f"Parasolid failed at step {step} ({entry.get('op')})")
         line = self.caller_line()
         if line is not None:
             entry["line"] = line
-            if any(a <= line <= b for a, b in self.try_lines):
-                entry["guarded"] = True
+        if self.guards:
+            entry["guarded"] = True
         self.entries.append(entry)
         return entry
 
@@ -65,11 +128,46 @@ class _Tape:
 TAPE = _Tape()
 
 
-def _reset(filename=None, try_lines=()):
+def _guard_begin(k, skippable, before):
+    """trace.py puts this first in each `try:` body: where a failure inside would be caught.
+    `before` gives the value the body's one assignment target had (skippable bodies only)."""
+    TAPE.nguard = getattr(TAPE, "nguard", 0) + 1
+    g = TAPE.nguard
+    TAPE.guards.append(g)
+    e = {"op": "guard_begin", "g": g, "block": k, "skippable": bool(skippable)}
+    if skippable:
+        try:
+            v = before()
+        except NameError:
+            v = None
+        if isinstance(v, (Workplane, Shape)):
+            e["before"] = _enc(v)
+        else:
+            e["skippable"] = False
+            e["why"] = "the assigned name held no Workplane or Shape before"
+    TAPE.entries.append(e)
+
+
+def _guard_exit(k, after, how):
+    """Last, however the body was left: "end" (it ran to its end, or a return, break or continue
+    left it) with `after` giving what a skippable body assigned; "caught" when an exception left
+    it (a name CadQuery lacks, the generator's own check): the calls recorded inside ran, and
+    the handler's path follows on the tape."""
+    g = TAPE.guards.pop()
+    e = {"op": "guard_" + how, "g": g, "block": k}
+    if how == "end" and after is not None:
+        v = after()
+        if isinstance(v, (Workplane, Shape)):
+            e["after"] = _enc(v)
+    TAPE.entries.append(e)
+
+
+def _reset(filename=None, try_lines=(), fail_at=()):
     global TAPE
     TAPE = _Tape()
     TAPE.filename = filename
     TAPE.try_lines = list(try_lines)
+    TAPE.fail_at = set(fail_at)
     return TAPE
 
 
@@ -704,6 +802,7 @@ class Workplane:
         return self
 
     def _call(self, op, args, kwargs):
+        _check_call(op, args, kwargs)
         e = {"op": op, "self": {"wp": self._id}, "args": [_enc(a, f"argument of {op}") for a in args],
              "kwargs": {k: _enc(v, f"argument {k} of {op}") for k, v in kwargs.items()}}
         if op in _RETURNS_SELF:

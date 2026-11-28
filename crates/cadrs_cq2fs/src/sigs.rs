@@ -356,6 +356,66 @@ pub const WORKPLANE: &[Sig] = &[
         solid: true,
     },
     Sig {
+        op: "loft",
+        fs: "cqLoft",
+        params: &[
+            p!("ruled" = "false"),
+            p!("combine" = "true"),
+            p!("clean" = "true"),
+        ],
+        varargs: false,
+        solid: true,
+    },
+    Sig {
+        op: "newObject",
+        fs: "cqNewObject",
+        params: &[p!("objlist")],
+        varargs: false,
+        solid: false,
+    },
+    Sig {
+        op: "slot2D",
+        fs: "cqSlot2D",
+        params: &[p!("length"), p!("diameter"), p!("angle" = "0")],
+        varargs: false,
+        solid: false,
+    },
+    Sig {
+        op: "spline",
+        fs: "cqSpline",
+        params: &[
+            p!("listOfXYTuple"),
+            p!("tangents" = "null"),
+            p!("periodic" = "false"),
+            p!("parameters" = "null"),
+            p!("scale" = "true"),
+            p!("tol" = "null"),
+            p!("forConstruction" = "false"),
+            p!("includeCurrent" = "false"),
+            p!("makeWire" = "false"),
+        ],
+        varargs: false,
+        solid: false,
+    },
+    Sig {
+        op: "sweep",
+        fs: "cqSweep",
+        params: &[
+            p!("path"),
+            p!("multisection" = "false"),
+            p!("sweepAlongWires" = "null"),
+            p!("makeSolid" = "true"),
+            p!("isFrenet" = "false"),
+            p!("combine" = "true"),
+            p!("clean" = "true"),
+            p!("transition" = "\"right\""),
+            p!("normal" = "null"),
+            p!("auxSpine" = "null"),
+        ],
+        varargs: false,
+        solid: true,
+    },
+    Sig {
         op: "union",
         fs: "cqUnion",
         params: &[
@@ -546,6 +606,13 @@ pub const WORKPLANE: &[Sig] = &[
 ];
 
 pub const SHAPE: &[Sig] = &[
+    Sig {
+        op: "Compound.makeCompound",
+        fs: "shCompoundMake",
+        params: &[p!("listOfShapes")],
+        varargs: false,
+        solid: true,
+    },
     Sig {
         op: "Solid.makeBox",
         fs: "shSolidMakeBox",
