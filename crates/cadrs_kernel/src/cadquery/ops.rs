@@ -1001,8 +1001,12 @@ fn face_ids(body: &BodyRef, faces: &[Shape]) -> CqResult<Vec<FaceId>> {
 pub fn fillet(s: &Shape, r: f64, edges: &[Shape]) -> CqResult<Shape> {
     let body = s.body()?;
     let ids = edge_ids(&body, edges)?;
+    // (Edges were picked, the workplane saw to that: all of them seams, which OCCT's fillet
+    // passes over.)
     if ids.is_empty() {
-        return value_err!("Fillets requires that edges be selected");
+        return Err(CqError::Failure(
+            "There are no suitable edges for chamfer or fillet".into(),
+        ));
     }
     Ok(Shape::of_body(super::op_ordered(&[body.0], |k| {
         k.fillet(body.0, &ids, r)
@@ -1014,7 +1018,9 @@ pub fn chamfer(s: &Shape, d1: f64, d2: Option<f64>, edges: &[Shape]) -> CqResult
     let body = s.body()?;
     let ids = edge_ids(&body, edges)?;
     if ids.is_empty() {
-        return value_err!("Chamfer requires that edges be selected");
+        return Err(CqError::Failure(
+            "There are no suitable edges for chamfer or fillet".into(),
+        ));
     }
     let spec = match d2 {
         Some(d2) if d2 != d1 => crate::ChamferSpec::TwoDistances(d1, d2),

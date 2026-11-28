@@ -380,13 +380,26 @@ impl EdgeGeom {
         BoundBox::of_points(pts.iter()).expect("an edge has points")
     }
 
-    /// Its geometric kind.
+    /// Its geometric kind. A B-spline that is exactly an arc of a circle is a circle (OCCT keeps a
+    /// loft's sections as the circles they were; ours are rational B-splines on its faces).
     pub fn geom_type(&self) -> GeomType {
         match &self.curve {
             Curve::Line { .. } => GeomType::Line,
             Curve::Circle { .. } => GeomType::Circle,
             Curve::Ellipse { .. } => GeomType::Ellipse,
+            Curve::Nurbs(_) if self.circle().is_some() => GeomType::Circle,
             Curve::Nurbs(_) => GeomType::BSpline,
+        }
+    }
+
+    /// The circle it lies on, when it is one: centre, unit normal, radius.
+    pub fn circle(&self) -> Option<(V3, V3, f64)> {
+        match &self.curve {
+            Curve::Circle { c, x, y, r } => Some((c.coords, x.cross(y).normalize(), *r)),
+            Curve::Nurbs(nc) => {
+                crate::native::loft_build::circle_of(nc).map(|(c, n, r)| (c.coords, n, r))
+            }
+            _ => None,
         }
     }
 
@@ -1349,16 +1362,18 @@ impl Shape {
 
     /// `radius()`: a circular edge's (a wire's first edge's).
     pub fn radius(&self) -> CqResult<f64> {
-        match self.first_edge()?.curve {
-            Curve::Circle { r, .. } => Ok(r),
-            _ => value_err!("Shape could not be reduced to a circle"),
+        match self.first_edge()?.circle() {
+            Some((_, _, r)) => Ok(r),
+            None => value_err!("Shape could not be reduced to a circle"),
         }
     }
 
     /// `arcCenter()`.
     pub fn arc_center(&self) -> CqResult<V3> {
-        match self.first_edge()?.curve {
-            Curve::Circle { c, .. } | Curve::Ellipse { c, .. } => Ok(c.coords),
+        let e = self.first_edge()?;
+        match (&e.curve, e.circle()) {
+            (Curve::Ellipse { c, .. }, _) => Ok(c.coords),
+            (_, Some((c, _, _))) => Ok(c),
             _ => value_err!("{} has no arc center", self.geom_type().name()),
         }
     }

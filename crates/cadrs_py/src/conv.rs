@@ -18,10 +18,23 @@ pub fn err(e: CqError) -> PyErr {
         CqError::Value(m) => PyValueError::new_err(m),
         CqError::Index(m) => PyIndexError::new_err(m),
         CqError::NotImplemented(m) => PyNotImplementedError::new_err(m),
-        CqError::Kernel(m) | CqError::Empty(m) => {
-            PyRuntimeError::new_err(format!("StdFail_NotDone: {m}"))
-        }
+        // As OCP's: StdFail_NotDone and Standard_Failure (each straight from Exception), so a
+        // program's `except OCP.Standard.Standard_Failure` catches what it catches of OCCT's.
+        CqError::Kernel(m) | CqError::Empty(m) => ocp_err("StdFail", "StdFail_NotDone", m),
+        CqError::Failure(m) => ocp_err("Standard", "Standard_Failure", m),
     }
+}
+
+/// The shim's exception `OCP.<module>.<name>` with message `m` (a RuntimeError where the shim
+/// can't be imported).
+fn ocp_err(module: &str, name: &str, m: String) -> PyErr {
+    Python::attach(|py| {
+        py.import(format!("OCP.{module}"))
+            .and_then(|md| md.getattr(name))
+            .and_then(|t| t.call1((m.clone(),)))
+            .map(PyErr::from_value)
+            .unwrap_or_else(|_| PyRuntimeError::new_err(format!("{name}: {m}")))
+    })
 }
 
 /// `Result` of the module into Python's.

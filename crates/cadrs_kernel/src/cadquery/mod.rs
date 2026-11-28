@@ -44,8 +44,11 @@ pub enum CqError {
     Index(String),
     /// `NotImplementedError`: what this module doesn't do (yet).
     NotImplemented(String),
-    /// `RuntimeError` (StdFail_NotDone): the kernel refused the operation.
+    /// `StdFail_NotDone`: the kernel refused the operation.
     Kernel(String),
+    /// `Standard_Failure`: what OCCT's own checks refuse before the kernel works (a fillet of
+    /// seam edges only: "There are no suitable edges for chamfer or fillet").
+    Failure(String),
     /// An operation whose result is empty (a cut taking everything; OCCT gives an empty
     /// compound, which the module's booleans give too).
     Empty(String),
@@ -56,6 +59,7 @@ impl std::fmt::Display for CqError {
         match self {
             CqError::Value(m) | CqError::Index(m) | CqError::NotImplemented(m) => f.write_str(m),
             CqError::Kernel(m) => write!(f, "kernel: {m}"),
+            CqError::Failure(m) => write!(f, "failure: {m}"),
             CqError::Empty(m) => write!(f, "empty: {m}"),
         }
     }

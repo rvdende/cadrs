@@ -1045,7 +1045,7 @@ fn chain_periodic_pcurves(b: &Body, lp: &mut [Coedge]) {
 /// radius. Exact, not sampled: on each Bézier piece of degree d the squared distance from the
 /// centre and the height above its plane are rational of degree at most 2d, so 2d + 1 points
 /// where they hold make them hold all along.
-fn circle_of(c: &NurbsCurve) -> Option<(P3, V3, f64)> {
+pub(crate) fn circle_of(c: &NurbsCurve) -> Option<(P3, V3, f64)> {
     let (t0, t1) = c.range();
     let (a, m, e) = (c.point(t0), c.point(0.5 * (t0 + t1)), c.point(t1));
     // Three points apart: the ends and the middle, or a quarter for a whole circle.
