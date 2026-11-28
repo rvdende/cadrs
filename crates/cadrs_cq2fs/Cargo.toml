@@ -1,0 +1,16 @@
+[package]
+name = "cadrs_cq2fs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "CADEvolve (CadQuery) generators translated to FeatureScript and run on Parasolid through Onshape: reference answers to hold cadrs's kernel to"
+
+[[bin]]
+name = "cq2fs"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+serde_json.workspace = true

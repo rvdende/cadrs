@@ -880,7 +880,7 @@ fn patch_boundary_in_plane(a: &Surface, b: &Surface, p0: &P3, p1: &P3) -> Option
     };
     let ((u0, u1), (v0, v1)) = n.range();
     let size = 1.0 + p0.coords.norm() + p1.coords.norm();
-    let near = |p: &P3, q: &P3| (p - q).norm() < tol::POINT;
+    let near = |p: &P3, q: &P3| (p - q).norm() < tol::point();
     for (t, along_v) in [(u0, true), (u1, true), (v0, false), (v1, false)] {
         let iso = nurbs_iso(n, t, along_v);
         let flat = iso.cps.iter().all(|h| {
@@ -1209,7 +1209,7 @@ pub(crate) fn replace_surfaces_checked(
                 );
             }
             match best {
-                Some((d, c)) if d <= tol::POINT => c,
+                Some((d, c)) if d <= tol::point() => c,
                 // None through both ends (the general intersection's sampling stepped over a
                 // sliver of it: a huge drafted cylinder's arc): traced between them.
                 _ => trace_between(sa, sb, ed, (b.verts[ed.v[0]].p, b.verts[ed.v[1]].p), p0, p1)
@@ -1744,7 +1744,7 @@ fn split_vertex(b: &Body, v: usize, way: usize, surfs: &[Surface]) -> Option<Bod
     let p = b.verts[v].p;
     let to = meet(&[&surfs[a], &surfs[c], &surfs[d]], p)?;
     let along = (to - p).try_normalize(tol::DEGENERATE)?;
-    let hair = tol::REL_POINT * b.bbox().diagonal().max(tol::POINT) * 10.0;
+    let hair = tol::REL_POINT * b.bbox().diagonal().max(tol::point()) * 10.0;
     let mut nb = b.clone();
     let v2 = nb.add_vertex(p + along * hair);
     for e in [e_cd, e_da] {
@@ -1944,7 +1944,7 @@ fn contract_edge(b: &Body, e: usize) -> Option<(Body, Vec<usize>)> {
 pub(crate) fn planes_bound(b: &Body, surfs: &[Surface]) -> Option<Result<(Body, Vec<usize>)>> {
     let bb = b.bbox();
     let size = bb.diagonal();
-    let close = tol::POINT.max(tol::REL * size);
+    let close = tol::point().max(tol::REL * size);
     // Each face's plane: a point on it and its outward normal, before and after.
     let plane = |s: &Surface, sense: bool| match s {
         Surface::Plane { f } => Some((
@@ -1970,7 +1970,7 @@ pub(crate) fn planes_bound(b: &Body, surfs: &[Surface]) -> Option<Result<(Body, 
         // cut down by every other plane's half-space. What is left of it is the face (nothing,
         // where the others close over it), and the faces together a triangle mesh's solid.
         // No boolean, so nothing to retry and nothing that fails half way.
-        let wide = 4.0 * size.max(tol::POINT);
+        let wide = 4.0 * size.max(tol::point());
         let centre = bb.center();
         let same = |j: usize, k: usize| {
             let ((oj, nj), (ok, nk)) = (after[j], after[k]);
@@ -2067,7 +2067,7 @@ pub(crate) fn prism_planes_bound(
 ) -> Option<Result<(Body, Vec<usize>)>> {
     let bb = b.bbox();
     let size = bb.diagonal();
-    let close = tol::POINT.max(tol::REL * size);
+    let close = tol::point().max(tol::REL * size);
     let plane = |s: &Surface, sense: bool| match s {
         Surface::Plane { f } => Some((
             f.o,
@@ -2843,7 +2843,7 @@ fn two_rulings(b: &Body, fi: usize, spec: &DraftSpec, pull: &V3) -> Option<f64> 
     }
     let ((u0, u1), _) = super::heal_split::face_uv_box(b, fi)?;
     let level = |u: f64| (fr.o + (fr.x * u.cos() + fr.y * u.sin()) * *r - spec.neutral).dot(pull);
-    let on = tol::POINT.max(tol::REL_POINT * r);
+    let on = tol::point().max(tol::REL_POINT * r);
     if level(u0).abs() > on || level(u1).abs() > on || (u1 - u0).abs() < tol::ANGULAR_POINT {
         return None;
     }
@@ -2876,7 +2876,7 @@ fn cylinder_across(
     let ((u0, u1), _) = super::heal_split::face_uv_box(b, fi).ok_or_else(no_reach)?;
     let sign = if f.sense { 1.0 } else { -1.0 };
     let (sa, ca) = spec.angle.sin_cos();
-    let reach = 4.0 * b.bbox().diagonal().max(tol::POINT);
+    let reach = 4.0 * b.bbox().diagonal().max(tol::point());
     // The cylinder's point at angle u, v along its axis, and its outward normal there.
     let radial = |u: f64| fr.x * u.cos() + fr.y * u.sin();
     // The ruling at a point of the neutral curve: the pull leant against the outward normal's
@@ -2894,7 +2894,7 @@ fn cylinder_across(
         let (l0, l1) = (level(u0), level(u1));
         // (One ruling only: a face level with the plane at both its sides, a groove cut
         // down from it, has two, and no one plane through both.)
-        let near = tol::POINT.max(tol::REL_POINT * r);
+        let near = tol::point().max(tol::REL_POINT * r);
         // (A side level with the plane is its ruling, whichever way rounding leaves it.)
         let u = match (l0.abs() <= near, l1.abs() <= near) {
             (true, true) => return Err(no_reach()),
@@ -3230,7 +3230,7 @@ fn draft_by_cut(k: &mut NativeKernel, body: BodyId, spec: &DraftSpec) -> Option<
         .dot(&pull);
         (low, high) = (low.min(h), high.max(h));
     }
-    let past = 0.1 * (high - low) + tol::POINT;
+    let past = 0.1 * (high - low) + tol::point();
     // (How far along a leant ruling from the neutral plane to each end.)
     let ends = [(low - past - level) / ca, (high + past - level) / ca];
     let across = any_perpendicular(&pull).normalize();
@@ -3579,7 +3579,7 @@ fn draft_moved(k: &mut NativeKernel, body: BodyId, spec: &DraftSpec) -> Result<O
                 )?;
                 let whole = c.is_periodic() && (u1 - u0).abs() >= TAU - tol::ROUNDOFF;
                 let sign = if f.sense { 1.0 } else { -1.0 };
-                let reach = 4.0 * b.bbox().diagonal().max(tol::POINT);
+                let reach = 4.0 * b.bbox().diagonal().max(tol::point());
                 let (sa, ca) = spec.angle.sin_cos();
                 // The two rims' points at a parameter of the curve.
                 let rims = |u: f64| -> [P3; 2] {
@@ -3646,7 +3646,7 @@ fn draft_moved(k: &mut NativeKernel, body: BodyId, spec: &DraftSpec) -> Result<O
             })
             .fold(0.0f64, |m, h| m.max((h - level).abs()));
         let room =
-            2.0 * height * spec.angle.tan().abs() + tol::REL_POINT * was.diagonal() + tol::POINT;
+            2.0 * height * spec.angle.tan().abs() + tol::REL_POINT * was.diagonal() + tol::point();
         let now = out.bbox();
         let held = was.grow(room);
         if !(held.contains(&now.min) && held.contains(&now.max)) {

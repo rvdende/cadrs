@@ -37,7 +37,7 @@ pub(crate) fn ball_mill(b: &Body, on: &P3, up: &V3) -> Option<(f64, f64, f64)> {
     if b.faces.len() != 3 || b.solids.len() != 1 {
         return None;
     }
-    let size = b.bbox().diagonal().max(tol::POINT);
+    let size = b.bbox().diagonal().max(tol::point());
     let near = tol::REL_POINT * size;
     let off = |p: &P3| {
         let d = p - on;
@@ -74,7 +74,7 @@ pub(crate) fn ball_pass(centres: &[P3], r: f64, up: &V3, top: f64) -> Option<Bod
     let up = up.try_normalize(tol::TINY)?;
     let (first, last) = (*centres.first()?, *centres.last()?);
     let span = last - first;
-    let d = (span - up * span.dot(&up)).try_normalize(tol::POINT)?;
+    let d = (span - up * span.dot(&up)).try_normalize(tol::point())?;
     // To the side: (d, w, up) right-handed.
     let w = up.cross(&d);
     let size = span.norm().max(r);

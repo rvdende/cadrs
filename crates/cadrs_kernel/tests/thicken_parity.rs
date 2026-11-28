@@ -101,16 +101,16 @@ fn faces_facing_different_ways_thicken_each_along_its_own_normal() {
     let v = k.mass_properties(id).unwrap().volume;
     let want = 4.0 * SIDE * HEIGHT * WALL + SIDE * SIDE * WALL;
     assert!(
-        (v - want).abs() < tol::POINT * want,
+        (v - want).abs() < tol::point() * want,
         "volume {v}, want {want}"
     );
     let (lo, hi) = bounds(&k, id);
     assert!(
-        (lo.x + WALL).abs() < tol::POINT && (hi.x - SIDE - WALL).abs() < tol::POINT,
+        (lo.x + WALL).abs() < tol::point() && (hi.x - SIDE - WALL).abs() < tol::point(),
         "{lo} {hi}"
     );
     assert!(
-        (hi.z - HEIGHT).abs() < tol::POINT,
+        (hi.z - HEIGHT).abs() < tol::point(),
         "the lid grows down: {hi}"
     );
 }

@@ -1,0 +1,3763 @@
+{
+  "adopted": true,
+  "area": 3111.578427841502,
+  "bbox": [
+    0,
+    -20,
+    -4.336808689942018e-15,
+    30.000000000000007,
+    0,
+    15
+  ],
+  "edges": 246,
+  "evaluated": 1795850747,
+  "faces": 84,
+  "guarded_steps": [],
+  "i": 3837,
+  "log": [
+    {
+      "id": 4,
+      "msg": {
+        "solids": 1,
+        "vol": 4500
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 6,
+      "msg": {
+        "solids": 1,
+        "vol": 2593.312629199899
+      },
+      "op": "shell"
+    },
+    {
+      "id": 10,
+      "msg": {
+        "solids": 1,
+        "vol": 32.18452995240122
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 11,
+      "msg": {
+        "solids": 1,
+        "vol": 32.18452995240121
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 12,
+      "msg": {
+        "solids": 1,
+        "vol": 32.18452995240122
+      },
+      "op": "translate"
+    },
+    {
+      "id": 13,
+      "msg": {
+        "solids": 1,
+        "vol": 32.18452995240122
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 17,
+      "msg": {
+        "solids": 1,
+        "vol": 48.384643654718005
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 18,
+      "msg": {
+        "solids": 1,
+        "vol": 48.38464365471801
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 19,
+      "msg": {
+        "solids": 1,
+        "vol": 48.384643654718005
+      },
+      "op": "translate"
+    },
+    {
+      "id": 20,
+      "msg": {
+        "solids": 1,
+        "vol": 48.384643654718005
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 21,
+      "msg": {
+        "solids": 1,
+        "vol": 71.95181994850681
+      },
+      "op": "union"
+    },
+    {
+      "id": 25,
+      "msg": {
+        "solids": 1,
+        "vol": 54.2314185680187
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 26,
+      "msg": {
+        "solids": 1,
+        "vol": 54.23141856801871
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 27,
+      "msg": {
+        "solids": 1,
+        "vol": 54.23141856801867
+      },
+      "op": "translate"
+    },
+    {
+      "id": 28,
+      "msg": {
+        "solids": 1,
+        "vol": 54.23141856801867
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 29,
+      "msg": {
+        "solids": 1,
+        "vol": 124.9054733411403
+      },
+      "op": "union"
+    },
+    {
+      "id": 33,
+      "msg": {
+        "solids": 1,
+        "vol": 55.49889657514695
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 34,
+      "msg": {
+        "solids": 1,
+        "vol": 55.49889657514695
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 35,
+      "msg": {
+        "solids": 1,
+        "vol": 55.49889657514694
+      },
+      "op": "translate"
+    },
+    {
+      "id": 36,
+      "msg": {
+        "solids": 1,
+        "vol": 55.49889657514694
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 37,
+      "msg": {
+        "solids": 2,
+        "vol": 180.40436991628724
+      },
+      "op": "union"
+    },
+    {
+      "id": 41,
+      "msg": {
+        "solids": 1,
+        "vol": 67.44075417627793
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 42,
+      "msg": {
+        "solids": 1,
+        "vol": 67.44075417627792
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 43,
+      "msg": {
+        "solids": 1,
+        "vol": 67.44075417627792
+      },
+      "op": "translate"
+    },
+    {
+      "id": 44,
+      "msg": {
+        "solids": 1,
+        "vol": 67.44075417627793
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 45,
+      "msg": {
+        "solids": 3,
+        "vol": 247.8451240925652
+      },
+      "op": "union"
+    },
+    {
+      "id": 49,
+      "msg": {
+        "solids": 1,
+        "vol": 73.54807300845403
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 50,
+      "msg": {
+        "solids": 1,
+        "vol": 73.54807300845403
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 51,
+      "msg": {
+        "solids": 1,
+        "vol": 73.548073008454
+      },
+      "op": "translate"
+    },
+    {
+      "id": 52,
+      "msg": {
+        "solids": 1,
+        "vol": 73.548073008454
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 53,
+      "msg": {
+        "solids": 2,
+        "vol": 284.3770893933797
+      },
+      "op": "union"
+    },
+    {
+      "id": 57,
+      "msg": {
+        "solids": 1,
+        "vol": 9.369005271218294
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 58,
+      "msg": {
+        "solids": 1,
+        "vol": 9.369005271218294
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 59,
+      "msg": {
+        "solids": 1,
+        "vol": 9.369005271218318
+      },
+      "op": "translate"
+    },
+    {
+      "id": 60,
+      "msg": {
+        "solids": 1,
+        "vol": 9.369005271218318
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 61,
+      "msg": {
+        "solids": 3,
+        "vol": 293.74609466459805
+      },
+      "op": "union"
+    },
+    {
+      "id": 65,
+      "msg": {
+        "solids": 1,
+        "vol": 40.64383021800969
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 66,
+      "msg": {
+        "solids": 1,
+        "vol": 40.64383021800966
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 67,
+      "msg": {
+        "solids": 1,
+        "vol": 40.6438302180097
+      },
+      "op": "translate"
+    },
+    {
+      "id": 68,
+      "msg": {
+        "solids": 1,
+        "vol": 40.37536742863405
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 69,
+      "msg": {
+        "solids": 3,
+        "vol": 327.84431173827795
+      },
+      "op": "union"
+    },
+    {
+      "id": 73,
+      "msg": {
+        "solids": 1,
+        "vol": 103.97138279986576
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 74,
+      "msg": {
+        "solids": 1,
+        "vol": 103.97138279986578
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 75,
+      "msg": {
+        "solids": 1,
+        "vol": 103.97138279986584
+      },
+      "op": "translate"
+    },
+    {
+      "id": 76,
+      "msg": {
+        "solids": 1,
+        "vol": 94.70692926558677
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 77,
+      "msg": {
+        "solids": 2,
+        "vol": 415.7559703002798
+      },
+      "op": "union"
+    },
+    {
+      "id": 81,
+      "msg": {
+        "solids": 1,
+        "vol": 49.66418657092279
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 82,
+      "msg": {
+        "solids": 1,
+        "vol": 49.66418657092279
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 83,
+      "msg": {
+        "solids": 1,
+        "vol": 49.664186570922816
+      },
+      "op": "translate"
+    },
+    {
+      "id": 84,
+      "msg": {
+        "solids": 1,
+        "vol": 49.66418657092281
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 85,
+      "msg": {
+        "solids": 3,
+        "vol": 465.42015687120255
+      },
+      "op": "union"
+    },
+    {
+      "id": 89,
+      "msg": {
+        "solids": 1,
+        "vol": 52.9000591708725
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 90,
+      "msg": {
+        "solids": 1,
+        "vol": 52.900059170872495
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 91,
+      "msg": {
+        "solids": 1,
+        "vol": 52.900059170872495
+      },
+      "op": "translate"
+    },
+    {
+      "id": 92,
+      "msg": {
+        "solids": 1,
+        "vol": 52.900059170872495
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 93,
+      "msg": {
+        "solids": 3,
+        "vol": 472.87276959871593
+      },
+      "op": "union"
+    },
+    {
+      "id": 97,
+      "msg": {
+        "solids": 1,
+        "vol": 54.15310022199874
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 98,
+      "msg": {
+        "solids": 1,
+        "vol": 54.15310022199874
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 99,
+      "msg": {
+        "solids": 1,
+        "vol": 54.15310022199873
+      },
+      "op": "translate"
+    },
+    {
+      "id": 100,
+      "msg": {
+        "solids": 1,
+        "vol": 54.15310022199873
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 101,
+      "msg": {
+        "solids": 3,
+        "vol": 516.9653934041463
+      },
+      "op": "union"
+    },
+    {
+      "id": 105,
+      "msg": {
+        "solids": 1,
+        "vol": 33.48884722721575
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 106,
+      "msg": {
+        "solids": 1,
+        "vol": 33.48884722721575
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 107,
+      "msg": {
+        "solids": 1,
+        "vol": 33.48884722721577
+      },
+      "op": "translate"
+    },
+    {
+      "id": 108,
+      "msg": {
+        "solids": 1,
+        "vol": 32.60160354194349
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 109,
+      "msg": {
+        "solids": 3,
+        "vol": 518.8512464705711
+      },
+      "op": "union"
+    },
+    {
+      "id": 113,
+      "msg": {
+        "solids": 1,
+        "vol": 100.95896213503346
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 114,
+      "msg": {
+        "solids": 1,
+        "vol": 100.95896213503346
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 115,
+      "msg": {
+        "solids": 1,
+        "vol": 100.95896213503354
+      },
+      "op": "translate"
+    },
+    {
+      "id": 116,
+      "msg": {
+        "solids": 1,
+        "vol": 87.4294701565148
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 117,
+      "msg": {
+        "solids": 3,
+        "vol": 524.6540381867893
+      },
+      "op": "union"
+    },
+    {
+      "id": 121,
+      "msg": {
+        "solids": 1,
+        "vol": 99.29494837572656
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 122,
+      "msg": {
+        "solids": 1,
+        "vol": 99.29494837572656
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 123,
+      "msg": {
+        "solids": 1,
+        "vol": 99.29494837572643
+      },
+      "op": "translate"
+    },
+    {
+      "id": 124,
+      "msg": {
+        "solids": 1,
+        "vol": 99.29494837572643
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 125,
+      "msg": {
+        "solids": 3,
+        "vol": 571.7505055885802
+      },
+      "op": "union"
+    },
+    {
+      "id": 129,
+      "msg": {
+        "solids": 1,
+        "vol": 27.23163282769075
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 130,
+      "msg": {
+        "solids": 1,
+        "vol": 27.23163282769075
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 131,
+      "msg": {
+        "solids": 1,
+        "vol": 27.231632827690763
+      },
+      "op": "translate"
+    },
+    {
+      "id": 132,
+      "msg": {
+        "solids": 1,
+        "vol": 27.231632827690763
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 133,
+      "msg": {
+        "solids": 4,
+        "vol": 598.9821384162709
+      },
+      "op": "union"
+    },
+    {
+      "id": 137,
+      "msg": {
+        "solids": 1,
+        "vol": 73.02559277434081
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 138,
+      "msg": {
+        "solids": 1,
+        "vol": 73.02559277434081
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 139,
+      "msg": {
+        "solids": 1,
+        "vol": 73.02559277434081
+      },
+      "op": "translate"
+    },
+    {
+      "id": 140,
+      "msg": {
+        "solids": 1,
+        "vol": 73.02559277434081
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 141,
+      "msg": {
+        "solids": 4,
+        "vol": 668.610805580926
+      },
+      "op": "union"
+    },
+    {
+      "id": 145,
+      "msg": {
+        "solids": 1,
+        "vol": 72.50263930091656
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 146,
+      "msg": {
+        "solids": 1,
+        "vol": 72.50263930091658
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 147,
+      "msg": {
+        "solids": 1,
+        "vol": 72.50263930091656
+      },
+      "op": "translate"
+    },
+    {
+      "id": 148,
+      "msg": {
+        "solids": 1,
+        "vol": 72.50263930091656
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 149,
+      "msg": {
+        "solids": 4,
+        "vol": 685.6303035488542
+      },
+      "op": "union"
+    },
+    {
+      "id": 153,
+      "msg": {
+        "solids": 1,
+        "vol": 33.78315096856168
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 154,
+      "msg": {
+        "solids": 1,
+        "vol": 33.783150968561685
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 155,
+      "msg": {
+        "solids": 1,
+        "vol": 33.783150968561706
+      },
+      "op": "translate"
+    },
+    {
+      "id": 156,
+      "msg": {
+        "solids": 1,
+        "vol": 30.345189290058073
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 157,
+      "msg": {
+        "solids": 5,
+        "vol": 715.9754928389121
+      },
+      "op": "union"
+    },
+    {
+      "id": 161,
+      "msg": {
+        "solids": 1,
+        "vol": 37.185583183060146
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 162,
+      "msg": {
+        "solids": 1,
+        "vol": 37.18558318306015
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 163,
+      "msg": {
+        "solids": 1,
+        "vol": 37.18558318306015
+      },
+      "op": "translate"
+    },
+    {
+      "id": 164,
+      "msg": {
+        "solids": 1,
+        "vol": 37.172963091197374
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 165,
+      "msg": {
+        "solids": 5,
+        "vol": 739.4178914600303
+      },
+      "op": "union"
+    },
+    {
+      "id": 169,
+      "msg": {
+        "solids": 1,
+        "vol": 77.64554008083252
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 170,
+      "msg": {
+        "solids": 1,
+        "vol": 77.6455400808325
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 171,
+      "msg": {
+        "solids": 1,
+        "vol": 77.64554008083252
+      },
+      "op": "translate"
+    },
+    {
+      "id": 172,
+      "msg": {
+        "solids": 1,
+        "vol": 77.64554008083252
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 173,
+      "msg": {
+        "solids": 5,
+        "vol": 797.7290984433865
+      },
+      "op": "union"
+    },
+    {
+      "id": 177,
+      "msg": {
+        "solids": 1,
+        "vol": 70.70199077018701
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 178,
+      "msg": {
+        "solids": 1,
+        "vol": 70.70199077018704
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 179,
+      "msg": {
+        "solids": 1,
+        "vol": 70.70199077018705
+      },
+      "op": "translate"
+    },
+    {
+      "id": 180,
+      "msg": {
+        "solids": 1,
+        "vol": 70.70199077018705
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 181,
+      "msg": {
+        "solids": 5,
+        "vol": 852.3524974171494
+      },
+      "op": "union"
+    },
+    {
+      "id": 185,
+      "msg": {
+        "solids": 1,
+        "vol": 80.79192519483377
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 186,
+      "msg": {
+        "solids": 1,
+        "vol": 80.79192519483374
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 187,
+      "msg": {
+        "solids": 1,
+        "vol": 80.79192519483367
+      },
+      "op": "translate"
+    },
+    {
+      "id": 188,
+      "msg": {
+        "solids": 1,
+        "vol": 80.79192519483367
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 189,
+      "msg": {
+        "solids": 5,
+        "vol": 896.4426221595977
+      },
+      "op": "union"
+    },
+    {
+      "id": 193,
+      "msg": {
+        "solids": 1,
+        "vol": 73.49598566924213
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 194,
+      "msg": {
+        "solids": 1,
+        "vol": 73.49598566924213
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 195,
+      "msg": {
+        "solids": 1,
+        "vol": 73.49598566924219
+      },
+      "op": "translate"
+    },
+    {
+      "id": 196,
+      "msg": {
+        "solids": 1,
+        "vol": 70.5720557404639
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 197,
+      "msg": {
+        "solids": 4,
+        "vol": 926.7636663819884
+      },
+      "op": "union"
+    },
+    {
+      "id": 201,
+      "msg": {
+        "solids": 1,
+        "vol": 7.928586147377778
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 202,
+      "msg": {
+        "solids": 1,
+        "vol": 7.9285861473777794
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 203,
+      "msg": {
+        "solids": 1,
+        "vol": 7.928586147377781
+      },
+      "op": "translate"
+    },
+    {
+      "id": 204,
+      "msg": {
+        "solids": 1,
+        "vol": 7.910231170429945
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 205,
+      "msg": {
+        "solids": 5,
+        "vol": 934.6738975524185
+      },
+      "op": "union"
+    },
+    {
+      "id": 209,
+      "msg": {
+        "solids": 1,
+        "vol": 90.35316394997962
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 210,
+      "msg": {
+        "solids": 1,
+        "vol": 90.3531639499796
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 211,
+      "msg": {
+        "solids": 1,
+        "vol": 90.35316394997956
+      },
+      "op": "translate"
+    },
+    {
+      "id": 212,
+      "msg": {
+        "solids": 1,
+        "vol": 52.16812055195794
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 213,
+      "msg": {
+        "solids": 5,
+        "vol": 982.414818229079
+      },
+      "op": "union"
+    },
+    {
+      "id": 217,
+      "msg": {
+        "solids": 1,
+        "vol": 85.91033283016687
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 218,
+      "msg": {
+        "solids": 1,
+        "vol": 85.91033283016681
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 219,
+      "msg": {
+        "solids": 1,
+        "vol": 85.91033283016682
+      },
+      "op": "translate"
+    },
+    {
+      "id": 220,
+      "msg": {
+        "solids": 1,
+        "vol": 82.19110890081859
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 221,
+      "msg": {
+        "solids": 5,
+        "vol": 1064.22572035838
+      },
+      "op": "union"
+    },
+    {
+      "id": 225,
+      "msg": {
+        "solids": 1,
+        "vol": 85.96207557433172
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 226,
+      "msg": {
+        "solids": 1,
+        "vol": 85.96207557433168
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 227,
+      "msg": {
+        "solids": 1,
+        "vol": 85.96207557433168
+      },
+      "op": "translate"
+    },
+    {
+      "id": 228,
+      "msg": {
+        "solids": 1,
+        "vol": 85.33636096683094
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 229,
+      "msg": {
+        "solids": 4,
+        "vol": 1071.4809566907848
+      },
+      "op": "union"
+    },
+    {
+      "id": 233,
+      "msg": {
+        "solids": 1,
+        "vol": 75.62110612039338
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 234,
+      "msg": {
+        "solids": 1,
+        "vol": 75.62110612039339
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 235,
+      "msg": {
+        "solids": 1,
+        "vol": 75.62110612039339
+      },
+      "op": "translate"
+    },
+    {
+      "id": 236,
+      "msg": {
+        "solids": 1,
+        "vol": 75.62110612039339
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 237,
+      "msg": {
+        "solids": 4,
+        "vol": 1096.2660301780554
+      },
+      "op": "union"
+    },
+    {
+      "id": 241,
+      "msg": {
+        "solids": 1,
+        "vol": 100.828842924114
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 242,
+      "msg": {
+        "solids": 1,
+        "vol": 100.82884292411396
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 243,
+      "msg": {
+        "solids": 1,
+        "vol": 100.828842924114
+      },
+      "op": "translate"
+    },
+    {
+      "id": 244,
+      "msg": {
+        "solids": 1,
+        "vol": 100.828842924114
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 245,
+      "msg": {
+        "solids": 4,
+        "vol": 1142.6078174041952
+      },
+      "op": "union"
+    },
+    {
+      "id": 249,
+      "msg": {
+        "solids": 1,
+        "vol": 69.13554981499811
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 250,
+      "msg": {
+        "solids": 1,
+        "vol": 69.13554981499811
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 251,
+      "msg": {
+        "solids": 1,
+        "vol": 69.13554981499809
+      },
+      "op": "translate"
+    },
+    {
+      "id": 252,
+      "msg": {
+        "solids": 1,
+        "vol": 61.80298804043713
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 253,
+      "msg": {
+        "solids": 4,
+        "vol": 1146.8023119535328
+      },
+      "op": "union"
+    },
+    {
+      "id": 257,
+      "msg": {
+        "solids": 1,
+        "vol": 75.38107658374113
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 258,
+      "msg": {
+        "solids": 1,
+        "vol": 75.38107658374113
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 259,
+      "msg": {
+        "solids": 1,
+        "vol": 75.38107658374115
+      },
+      "op": "translate"
+    },
+    {
+      "id": 260,
+      "msg": {
+        "solids": 1,
+        "vol": 75.38107658374115
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 261,
+      "msg": {
+        "solids": 4,
+        "vol": 1151.4753369446958
+      },
+      "op": "union"
+    },
+    {
+      "id": 265,
+      "msg": {
+        "solids": 1,
+        "vol": 126.56726514815642
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 266,
+      "msg": {
+        "solids": 1,
+        "vol": 126.56726514815642
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 267,
+      "msg": {
+        "solids": 1,
+        "vol": 126.56726514815632
+      },
+      "op": "translate"
+    },
+    {
+      "id": 268,
+      "msg": {
+        "solids": 1,
+        "vol": 85.43263365546129
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 269,
+      "msg": {
+        "solids": 4,
+        "vol": 1170.9041808032105
+      },
+      "op": "union"
+    },
+    {
+      "id": 273,
+      "msg": {
+        "solids": 1,
+        "vol": 16.879550437739997
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 274,
+      "msg": {
+        "solids": 1,
+        "vol": 16.87955043774
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 275,
+      "msg": {
+        "solids": 1,
+        "vol": 16.879550437740008
+      },
+      "op": "translate"
+    },
+    {
+      "id": 276,
+      "msg": {
+        "solids": 1,
+        "vol": 16.879550437740008
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 277,
+      "msg": {
+        "solids": 3,
+        "vol": 1177.693264090017
+      },
+      "op": "union"
+    },
+    {
+      "id": 281,
+      "msg": {
+        "solids": 1,
+        "vol": 52.917957274897134
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 282,
+      "msg": {
+        "solids": 1,
+        "vol": 52.91795727489715
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 283,
+      "msg": {
+        "solids": 1,
+        "vol": 52.91795727489711
+      },
+      "op": "translate"
+    },
+    {
+      "id": 284,
+      "msg": {
+        "solids": 1,
+        "vol": 52.91795727489711
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 285,
+      "msg": {
+        "solids": 3,
+        "vol": 1194.094727157555
+      },
+      "op": "union"
+    },
+    {
+      "id": 289,
+      "msg": {
+        "solids": 1,
+        "vol": 93.37583053162815
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 290,
+      "msg": {
+        "solids": 1,
+        "vol": 93.37583053162815
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 291,
+      "msg": {
+        "solids": 1,
+        "vol": 93.37583053162815
+      },
+      "op": "translate"
+    },
+    {
+      "id": 292,
+      "msg": {
+        "solids": 1,
+        "vol": 93.37583053162815
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 293,
+      "msg": {
+        "solids": 3,
+        "vol": 1204.943443906853
+      },
+      "op": "union"
+    },
+    {
+      "id": 297,
+      "msg": {
+        "solids": 1,
+        "vol": 18.452851748818123
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 298,
+      "msg": {
+        "solids": 1,
+        "vol": 18.452851748818127
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 299,
+      "msg": {
+        "solids": 1,
+        "vol": 18.45285174881812
+      },
+      "op": "translate"
+    },
+    {
+      "id": 300,
+      "msg": {
+        "solids": 1,
+        "vol": 18.45285174881812
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 301,
+      "msg": {
+        "solids": 4,
+        "vol": 1223.3962956556709
+      },
+      "op": "union"
+    },
+    {
+      "id": 305,
+      "msg": {
+        "solids": 1,
+        "vol": 38.26345674196707
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 306,
+      "msg": {
+        "solids": 1,
+        "vol": 38.26345674196707
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 307,
+      "msg": {
+        "solids": 1,
+        "vol": 38.26345674196705
+      },
+      "op": "translate"
+    },
+    {
+      "id": 308,
+      "msg": {
+        "solids": 1,
+        "vol": 38.26345674196705
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 309,
+      "msg": {
+        "solids": 3,
+        "vol": 1250.7785104996008
+      },
+      "op": "union"
+    },
+    {
+      "id": 313,
+      "msg": {
+        "solids": 1,
+        "vol": 67.97652152770782
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 314,
+      "msg": {
+        "solids": 1,
+        "vol": 67.97652152770783
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 315,
+      "msg": {
+        "solids": 1,
+        "vol": 67.97652152770787
+      },
+      "op": "translate"
+    },
+    {
+      "id": 316,
+      "msg": {
+        "solids": 1,
+        "vol": 65.12224261282893
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 317,
+      "msg": {
+        "solids": 3,
+        "vol": 1300.7264260820584
+      },
+      "op": "union"
+    },
+    {
+      "id": 321,
+      "msg": {
+        "solids": 1,
+        "vol": 100.78001645731452
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 322,
+      "msg": {
+        "solids": 1,
+        "vol": 100.78001645731447
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 323,
+      "msg": {
+        "solids": 1,
+        "vol": 100.78001645731452
+      },
+      "op": "translate"
+    },
+    {
+      "id": 324,
+      "msg": {
+        "solids": 1,
+        "vol": 100.78001645731452
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 325,
+      "msg": {
+        "solids": 3,
+        "vol": 1336.193425154239
+      },
+      "op": "union"
+    },
+    {
+      "id": 329,
+      "msg": {
+        "solids": 1,
+        "vol": 154.1016057476715
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 330,
+      "msg": {
+        "solids": 1,
+        "vol": 154.10160574767153
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 331,
+      "msg": {
+        "solids": 1,
+        "vol": 154.10160574767156
+      },
+      "op": "translate"
+    },
+    {
+      "id": 332,
+      "msg": {
+        "solids": 1,
+        "vol": 127.3796373621668
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 333,
+      "msg": {
+        "solids": 3,
+        "vol": 1373.2956815002788
+      },
+      "op": "union"
+    },
+    {
+      "id": 337,
+      "msg": {
+        "solids": 1,
+        "vol": 128.65006751651418
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 338,
+      "msg": {
+        "solids": 1,
+        "vol": 128.65006751651416
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 339,
+      "msg": {
+        "solids": 1,
+        "vol": 128.6500675165141
+      },
+      "op": "translate"
+    },
+    {
+      "id": 340,
+      "msg": {
+        "solids": 1,
+        "vol": 128.6500675165141
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 341,
+      "msg": {
+        "solids": 3,
+        "vol": 1401.8707728919442
+      },
+      "op": "union"
+    },
+    {
+      "id": 345,
+      "msg": {
+        "solids": 1,
+        "vol": 88.17418143477178
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 346,
+      "msg": {
+        "solids": 1,
+        "vol": 88.17418143477181
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 347,
+      "msg": {
+        "solids": 1,
+        "vol": 88.17418143477181
+      },
+      "op": "translate"
+    },
+    {
+      "id": 348,
+      "msg": {
+        "solids": 1,
+        "vol": 57.15903675020791
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 349,
+      "msg": {
+        "solids": 3,
+        "vol": 1407.9175885771083
+      },
+      "op": "union"
+    },
+    {
+      "id": 353,
+      "msg": {
+        "solids": 1,
+        "vol": 122.08594365027
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 354,
+      "msg": {
+        "solids": 1,
+        "vol": 122.08594365026995
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 355,
+      "msg": {
+        "solids": 1,
+        "vol": 122.08594365027
+      },
+      "op": "translate"
+    },
+    {
+      "id": 356,
+      "msg": {
+        "solids": 1,
+        "vol": 122.08594365027
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 357,
+      "msg": {
+        "solids": 3,
+        "vol": 1486.1273759922922
+      },
+      "op": "union"
+    },
+    {
+      "id": 361,
+      "msg": {
+        "solids": 1,
+        "vol": 130.7775017514895
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 362,
+      "msg": {
+        "solids": 1,
+        "vol": 130.77750175148947
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 363,
+      "msg": {
+        "solids": 1,
+        "vol": 130.7775017514895
+      },
+      "op": "translate"
+    },
+    {
+      "id": 364,
+      "msg": {
+        "solids": 1,
+        "vol": 130.7775017514895
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 365,
+      "msg": {
+        "solids": 3,
+        "vol": 1490.40171817416
+      },
+      "op": "union"
+    },
+    {
+      "id": 369,
+      "msg": {
+        "solids": 1,
+        "vol": 33.92641145563012
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 370,
+      "msg": {
+        "solids": 1,
+        "vol": 33.9264114556301
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 371,
+      "msg": {
+        "solids": 1,
+        "vol": 33.9264114556301
+      },
+      "op": "translate"
+    },
+    {
+      "id": 372,
+      "msg": {
+        "solids": 1,
+        "vol": 33.926411455630095
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 373,
+      "msg": {
+        "solids": 3,
+        "vol": 1490.4031147692572
+      },
+      "op": "union"
+    },
+    {
+      "id": 377,
+      "msg": {
+        "solids": 1,
+        "vol": 52.86342288030872
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 378,
+      "msg": {
+        "solids": 1,
+        "vol": 52.863422880308704
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 379,
+      "msg": {
+        "solids": 1,
+        "vol": 52.863422880308654
+      },
+      "op": "translate"
+    },
+    {
+      "id": 380,
+      "msg": {
+        "solids": 1,
+        "vol": 52.786237507156414
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 381,
+      "msg": {
+        "solids": 3,
+        "vol": 1498.8488813569888
+      },
+      "op": "union"
+    },
+    {
+      "id": 385,
+      "msg": {
+        "solids": 1,
+        "vol": 136.34092816627864
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 386,
+      "msg": {
+        "solids": 1,
+        "vol": 136.34092816627867
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 387,
+      "msg": {
+        "solids": 1,
+        "vol": 136.34092816627867
+      },
+      "op": "translate"
+    },
+    {
+      "id": 388,
+      "msg": {
+        "solids": 1,
+        "vol": 136.34092816627867
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 389,
+      "msg": {
+        "solids": 3,
+        "vol": 1529.384915465133
+      },
+      "op": "union"
+    },
+    {
+      "id": 393,
+      "msg": {
+        "solids": 1,
+        "vol": 80.31178204244019
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 394,
+      "msg": {
+        "solids": 1,
+        "vol": 80.31178204244014
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 395,
+      "msg": {
+        "solids": 1,
+        "vol": 80.31178204244021
+      },
+      "op": "translate"
+    },
+    {
+      "id": 396,
+      "msg": {
+        "solids": 1,
+        "vol": 80.31178204244021
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 397,
+      "msg": {
+        "solids": 3,
+        "vol": 1544.630851290682
+      },
+      "op": "union"
+    },
+    {
+      "id": 401,
+      "msg": {
+        "solids": 1,
+        "vol": 101.67580408150948
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 402,
+      "msg": {
+        "solids": 1,
+        "vol": 101.67580408150948
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 403,
+      "msg": {
+        "solids": 1,
+        "vol": 101.67580408150953
+      },
+      "op": "translate"
+    },
+    {
+      "id": 404,
+      "msg": {
+        "solids": 1,
+        "vol": 101.67580408150953
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 405,
+      "msg": {
+        "solids": 3,
+        "vol": 1619.921912348125
+      },
+      "op": "union"
+    },
+    {
+      "id": 409,
+      "msg": {
+        "solids": 1,
+        "vol": 210.6092333115379
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 410,
+      "msg": {
+        "solids": 1,
+        "vol": 210.60923331153788
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 411,
+      "msg": {
+        "solids": 1,
+        "vol": 210.60923331153785
+      },
+      "op": "translate"
+    },
+    {
+      "id": 412,
+      "msg": {
+        "solids": 1,
+        "vol": 203.0659250715461
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 413,
+      "msg": {
+        "solids": 3,
+        "vol": 1686.2022314169374
+      },
+      "op": "union"
+    },
+    {
+      "id": 417,
+      "msg": {
+        "solids": 1,
+        "vol": 50.05565872270241
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 418,
+      "msg": {
+        "solids": 1,
+        "vol": 50.055658722702425
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 419,
+      "msg": {
+        "solids": 1,
+        "vol": 50.055658722702425
+      },
+      "op": "translate"
+    },
+    {
+      "id": 420,
+      "msg": {
+        "solids": 1,
+        "vol": 46.03662483173409
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 421,
+      "msg": {
+        "solids": 3,
+        "vol": 1689.8548640323395
+      },
+      "op": "union"
+    },
+    {
+      "id": 425,
+      "msg": {
+        "solids": 1,
+        "vol": 131.44004192028572
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 426,
+      "msg": {
+        "solids": 1,
+        "vol": 131.4400419202857
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 427,
+      "msg": {
+        "solids": 1,
+        "vol": 131.4400419202856
+      },
+      "op": "translate"
+    },
+    {
+      "id": 428,
+      "msg": {
+        "solids": 1,
+        "vol": 124.63780976102473
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 429,
+      "msg": {
+        "solids": 3,
+        "vol": 1732.0368330169863
+      },
+      "op": "union"
+    },
+    {
+      "id": 433,
+      "msg": {
+        "solids": 1,
+        "vol": 223.9571447908508
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 434,
+      "msg": {
+        "solids": 1,
+        "vol": 223.95714479085083
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 435,
+      "msg": {
+        "solids": 1,
+        "vol": 223.9571447908509
+      },
+      "op": "translate"
+    },
+    {
+      "id": 436,
+      "msg": {
+        "solids": 1,
+        "vol": 156.56768680866406
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 437,
+      "msg": {
+        "solids": 3,
+        "vol": 1760.4389201174267
+      },
+      "op": "union"
+    },
+    {
+      "id": 441,
+      "msg": {
+        "solids": 1,
+        "vol": 39.69651007824671
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 442,
+      "msg": {
+        "solids": 1,
+        "vol": 39.69651007824671
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 443,
+      "msg": {
+        "solids": 1,
+        "vol": 39.696510078246696
+      },
+      "op": "translate"
+    },
+    {
+      "id": 444,
+      "msg": {
+        "solids": 1,
+        "vol": 39.696510078246696
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 445,
+      "msg": {
+        "solids": 4,
+        "vol": 1800.135430195673
+      },
+      "op": "union"
+    },
+    {
+      "id": 449,
+      "msg": {
+        "solids": 1,
+        "vol": 54.36010347351928
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 450,
+      "msg": {
+        "solids": 1,
+        "vol": 54.36010347351928
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 451,
+      "msg": {
+        "solids": 1,
+        "vol": 54.360103473519274
+      },
+      "op": "translate"
+    },
+    {
+      "id": 452,
+      "msg": {
+        "solids": 1,
+        "vol": 54.360103473519274
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 453,
+      "msg": {
+        "solids": 3,
+        "vol": 1825.3655223714004
+      },
+      "op": "union"
+    },
+    {
+      "id": 457,
+      "msg": {
+        "solids": 1,
+        "vol": 57.64680786988402
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 458,
+      "msg": {
+        "solids": 1,
+        "vol": 57.64680786988405
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 459,
+      "msg": {
+        "solids": 1,
+        "vol": 57.64680786988407
+      },
+      "op": "translate"
+    },
+    {
+      "id": 460,
+      "msg": {
+        "solids": 1,
+        "vol": 57.64680786988407
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 461,
+      "msg": {
+        "solids": 3,
+        "vol": 1828.8380588998757
+      },
+      "op": "union"
+    },
+    {
+      "id": 465,
+      "msg": {
+        "solids": 1,
+        "vol": 69.54458321998183
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 466,
+      "msg": {
+        "solids": 1,
+        "vol": 69.54458321998185
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 467,
+      "msg": {
+        "solids": 1,
+        "vol": 69.54458321998187
+      },
+      "op": "translate"
+    },
+    {
+      "id": 468,
+      "msg": {
+        "solids": 1,
+        "vol": 69.54458321998186
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 469,
+      "msg": {
+        "solids": 3,
+        "vol": 1830.150683209872
+      },
+      "op": "union"
+    },
+    {
+      "id": 473,
+      "msg": {
+        "solids": 1,
+        "vol": 70.76420959018996
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 474,
+      "msg": {
+        "solids": 1,
+        "vol": 70.76420959018996
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 475,
+      "msg": {
+        "solids": 1,
+        "vol": 70.76420959018998
+      },
+      "op": "translate"
+    },
+    {
+      "id": 476,
+      "msg": {
+        "solids": 1,
+        "vol": 70.76420959018998
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 477,
+      "msg": {
+        "solids": 3,
+        "vol": 1900.256447292964
+      },
+      "op": "union"
+    },
+    {
+      "id": 481,
+      "msg": {
+        "solids": 1,
+        "vol": 76.0048799632033
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 482,
+      "msg": {
+        "solids": 1,
+        "vol": 76.00487996320328
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 483,
+      "msg": {
+        "solids": 1,
+        "vol": 76.00487996320331
+      },
+      "op": "translate"
+    },
+    {
+      "id": 484,
+      "msg": {
+        "solids": 1,
+        "vol": 76.00487996320331
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 485,
+      "msg": {
+        "solids": 2,
+        "vol": 1908.7825340300324
+      },
+      "op": "union"
+    },
+    {
+      "id": 489,
+      "msg": {
+        "solids": 1,
+        "vol": 102.63313786971618
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 490,
+      "msg": {
+        "solids": 1,
+        "vol": 102.63313786971617
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 491,
+      "msg": {
+        "solids": 1,
+        "vol": 102.6331378697162
+      },
+      "op": "translate"
+    },
+    {
+      "id": 492,
+      "msg": {
+        "solids": 1,
+        "vol": 101.56248321163471
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 493,
+      "msg": {
+        "solids": 2,
+        "vol": 1976.5536744061023
+      },
+      "op": "union"
+    },
+    {
+      "id": 497,
+      "msg": {
+        "solids": 1,
+        "vol": 108.24170886503074
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 498,
+      "msg": {
+        "solids": 1,
+        "vol": 108.24170886503074
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 499,
+      "msg": {
+        "solids": 1,
+        "vol": 108.24170886503072
+      },
+      "op": "translate"
+    },
+    {
+      "id": 500,
+      "msg": {
+        "solids": 1,
+        "vol": 102.55536717877924
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 501,
+      "msg": {
+        "solids": 2,
+        "vol": 2047.3298619496984
+      },
+      "op": "union"
+    },
+    {
+      "id": 505,
+      "msg": {
+        "solids": 1,
+        "vol": 174.43930535609957
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 506,
+      "msg": {
+        "solids": 1,
+        "vol": 174.43930535609954
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 507,
+      "msg": {
+        "solids": 1,
+        "vol": 174.43930535609954
+      },
+      "op": "translate"
+    },
+    {
+      "id": 508,
+      "msg": {
+        "solids": 1,
+        "vol": 169.04227372007122
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 509,
+      "msg": {
+        "solids": 2,
+        "vol": 2181.2853299547933
+      },
+      "op": "union"
+    },
+    {
+      "id": 513,
+      "msg": {
+        "solids": 1,
+        "vol": 90.38784920011696
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 514,
+      "msg": {
+        "solids": 1,
+        "vol": 90.38784920011696
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 515,
+      "msg": {
+        "solids": 1,
+        "vol": 90.38784920011696
+      },
+      "op": "translate"
+    },
+    {
+      "id": 516,
+      "msg": {
+        "solids": 1,
+        "vol": 90.38784920011696
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 517,
+      "msg": {
+        "solids": 2,
+        "vol": 2258.2301749892777
+      },
+      "op": "union"
+    },
+    {
+      "id": 521,
+      "msg": {
+        "solids": 1,
+        "vol": 88.86201219902765
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 522,
+      "msg": {
+        "solids": 1,
+        "vol": 88.86201219902765
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 523,
+      "msg": {
+        "solids": 1,
+        "vol": 88.86201219902766
+      },
+      "op": "translate"
+    },
+    {
+      "id": 524,
+      "msg": {
+        "solids": 1,
+        "vol": 88.86201219902766
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 525,
+      "msg": {
+        "solids": 2,
+        "vol": 2316.6230650285925
+      },
+      "op": "union"
+    },
+    {
+      "id": 529,
+      "msg": {
+        "solids": 1,
+        "vol": 95.3473128770256
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 530,
+      "msg": {
+        "solids": 1,
+        "vol": 95.3473128770256
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 531,
+      "msg": {
+        "solids": 1,
+        "vol": 95.34731287702556
+      },
+      "op": "translate"
+    },
+    {
+      "id": 532,
+      "msg": {
+        "solids": 1,
+        "vol": 95.34731287702556
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 533,
+      "msg": {
+        "solids": 2,
+        "vol": 2325.084069118636
+      },
+      "op": "union"
+    },
+    {
+      "id": 537,
+      "msg": {
+        "solids": 1,
+        "vol": 114.416839273834
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 538,
+      "msg": {
+        "solids": 1,
+        "vol": 114.41683927383404
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 539,
+      "msg": {
+        "solids": 1,
+        "vol": 114.416839273834
+      },
+      "op": "translate"
+    },
+    {
+      "id": 540,
+      "msg": {
+        "solids": 1,
+        "vol": 111.52819948163555
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 541,
+      "msg": {
+        "solids": 2,
+        "vol": 2325.0840691186363
+      },
+      "op": "union"
+    },
+    {
+      "id": 545,
+      "msg": {
+        "solids": 1,
+        "vol": 163.4780078954638
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 546,
+      "msg": {
+        "solids": 1,
+        "vol": 163.47800789546378
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 547,
+      "msg": {
+        "solids": 1,
+        "vol": 163.47800789546378
+      },
+      "op": "translate"
+    },
+    {
+      "id": 548,
+      "msg": {
+        "solids": 1,
+        "vol": 163.47800789546375
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 549,
+      "msg": {
+        "solids": 2,
+        "vol": 2326.4695016418864
+      },
+      "op": "union"
+    },
+    {
+      "id": 553,
+      "msg": {
+        "solids": 1,
+        "vol": 463.71939374472447
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 554,
+      "msg": {
+        "solids": 1,
+        "vol": 463.7193937447245
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 555,
+      "msg": {
+        "solids": 1,
+        "vol": 463.71939374472447
+      },
+      "op": "translate"
+    },
+    {
+      "id": 556,
+      "msg": {
+        "solids": 1,
+        "vol": 263.4341552283441
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 557,
+      "msg": {
+        "solids": 2,
+        "vol": 2495.9784458850795
+      },
+      "op": "union"
+    },
+    {
+      "id": 561,
+      "msg": {
+        "solids": 1,
+        "vol": 6.540264806145848
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 562,
+      "msg": {
+        "solids": 1,
+        "vol": 6.540264806145848
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 563,
+      "msg": {
+        "solids": 1,
+        "vol": 6.54026480614584
+      },
+      "op": "translate"
+    },
+    {
+      "id": 564,
+      "msg": {
+        "solids": 1,
+        "vol": 6.54026480614584
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 565,
+      "msg": {
+        "solids": 2,
+        "vol": 2498.924690612391
+      },
+      "op": "union"
+    },
+    {
+      "id": 569,
+      "msg": {
+        "solids": 1,
+        "vol": 62.08972321439043
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 570,
+      "msg": {
+        "solids": 1,
+        "vol": 62.08972321439041
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 571,
+      "msg": {
+        "solids": 1,
+        "vol": 62.08972321439037
+      },
+      "op": "translate"
+    },
+    {
+      "id": 572,
+      "msg": {
+        "solids": 1,
+        "vol": 62.08972321439037
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 573,
+      "msg": {
+        "solids": 2,
+        "vol": 2505.0435736016634
+      },
+      "op": "union"
+    },
+    {
+      "id": 577,
+      "msg": {
+        "solids": 1,
+        "vol": 66.59154763691784
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 578,
+      "msg": {
+        "solids": 1,
+        "vol": 66.59154763691787
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 579,
+      "msg": {
+        "solids": 1,
+        "vol": 66.59154763691782
+      },
+      "op": "translate"
+    },
+    {
+      "id": 580,
+      "msg": {
+        "solids": 1,
+        "vol": 66.59154763691784
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 581,
+      "msg": {
+        "solids": 2,
+        "vol": 2541.56493881663
+      },
+      "op": "union"
+    },
+    {
+      "id": 585,
+      "msg": {
+        "solids": 1,
+        "vol": 358.7508648213947
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 586,
+      "msg": {
+        "solids": 1,
+        "vol": 358.75086482139477
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 587,
+      "msg": {
+        "solids": 1,
+        "vol": 358.7508648213948
+      },
+      "op": "translate"
+    },
+    {
+      "id": 588,
+      "msg": {
+        "solids": 1,
+        "vol": 162.00451894151237
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 589,
+      "msg": {
+        "solids": 2,
+        "vol": 2562.016024721896
+      },
+      "op": "union"
+    },
+    {
+      "id": 593,
+      "msg": {
+        "solids": 1,
+        "vol": 266.1455481134815
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 594,
+      "msg": {
+        "solids": 1,
+        "vol": 266.14554811348154
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 595,
+      "msg": {
+        "solids": 1,
+        "vol": 266.14554811348165
+      },
+      "op": "translate"
+    },
+    {
+      "id": 596,
+      "msg": {
+        "solids": 1,
+        "vol": 248.84363545426817
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 597,
+      "msg": {
+        "solids": 2,
+        "vol": 2562.5305176657944
+      },
+      "op": "union"
+    },
+    {
+      "id": 601,
+      "msg": {
+        "solids": 1,
+        "vol": 369.1659709284943
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 602,
+      "msg": {
+        "solids": 1,
+        "vol": 369.1659709284943
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 603,
+      "msg": {
+        "solids": 1,
+        "vol": 369.1659709284941
+      },
+      "op": "translate"
+    },
+    {
+      "id": 604,
+      "msg": {
+        "solids": 1,
+        "vol": 280.1311644742698
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 605,
+      "msg": {
+        "solids": 2,
+        "vol": 2667.0425702262373
+      },
+      "op": "union"
+    },
+    {
+      "id": 609,
+      "msg": {
+        "solids": 1,
+        "vol": 65.29628652604389
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 610,
+      "msg": {
+        "solids": 1,
+        "vol": 65.29628652604393
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 611,
+      "msg": {
+        "solids": 1,
+        "vol": 65.29628652604393
+      },
+      "op": "translate"
+    },
+    {
+      "id": 612,
+      "msg": {
+        "solids": 1,
+        "vol": 65.29628652604393
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 613,
+      "msg": {
+        "solids": 2,
+        "vol": 2668.443298642408
+      },
+      "op": "union"
+    },
+    {
+      "id": 617,
+      "msg": {
+        "solids": 1,
+        "vol": 60.54849553213227
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 618,
+      "msg": {
+        "solids": 1,
+        "vol": 60.54849553213226
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 619,
+      "msg": {
+        "solids": 1,
+        "vol": 60.54849553213226
+      },
+      "op": "translate"
+    },
+    {
+      "id": 620,
+      "msg": {
+        "solids": 1,
+        "vol": 60.54849553213226
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 621,
+      "msg": {
+        "solids": 2,
+        "vol": 2673.6143819729987
+      },
+      "op": "union"
+    },
+    {
+      "id": 625,
+      "msg": {
+        "solids": 1,
+        "vol": 118.9600724512817
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 626,
+      "msg": {
+        "solids": 1,
+        "vol": 118.96007245128172
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 627,
+      "msg": {
+        "solids": 1,
+        "vol": 118.96007245128168
+      },
+      "op": "translate"
+    },
+    {
+      "id": 628,
+      "msg": {
+        "solids": 1,
+        "vol": 118.96007245128166
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 629,
+      "msg": {
+        "solids": 2,
+        "vol": 2710.9235526211346
+      },
+      "op": "union"
+    },
+    {
+      "id": 633,
+      "msg": {
+        "solids": 1,
+        "vol": 96.92173374143674
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 634,
+      "msg": {
+        "solids": 1,
+        "vol": 96.92173374143673
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 635,
+      "msg": {
+        "solids": 1,
+        "vol": 96.92173374143668
+      },
+      "op": "translate"
+    },
+    {
+      "id": 636,
+      "msg": {
+        "solids": 1,
+        "vol": 96.92173374143668
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 637,
+      "msg": {
+        "solids": 2,
+        "vol": 2710.9235526211346
+      },
+      "op": "union"
+    },
+    {
+      "id": 641,
+      "msg": {
+        "solids": 1,
+        "vol": 169.01393140730687
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 642,
+      "msg": {
+        "solids": 1,
+        "vol": 169.01393140730687
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 643,
+      "msg": {
+        "solids": 1,
+        "vol": 169.01393140730684
+      },
+      "op": "translate"
+    },
+    {
+      "id": 644,
+      "msg": {
+        "solids": 1,
+        "vol": 153.60455880937593
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 645,
+      "msg": {
+        "solids": 2,
+        "vol": 2802.7500316151354
+      },
+      "op": "union"
+    },
+    {
+      "id": 649,
+      "msg": {
+        "solids": 1,
+        "vol": 136.79596435396348
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 650,
+      "msg": {
+        "solids": 1,
+        "vol": 136.79596435396346
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 651,
+      "msg": {
+        "solids": 1,
+        "vol": 136.79596435396343
+      },
+      "op": "translate"
+    },
+    {
+      "id": 652,
+      "msg": {
+        "solids": 1,
+        "vol": 136.79596435396343
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 653,
+      "msg": {
+        "solids": 2,
+        "vol": 2856.4634089786464
+      },
+      "op": "union"
+    },
+    {
+      "id": 657,
+      "msg": {
+        "solids": 1,
+        "vol": 123.72786307280462
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 658,
+      "msg": {
+        "solids": 1,
+        "vol": 123.7278630728046
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 659,
+      "msg": {
+        "solids": 1,
+        "vol": 123.72786307280474
+      },
+      "op": "translate"
+    },
+    {
+      "id": 660,
+      "msg": {
+        "solids": 1,
+        "vol": 123.72786307280474
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 661,
+      "msg": {
+        "solids": 2,
+        "vol": 2958.661873393346
+      },
+      "op": "union"
+    },
+    {
+      "id": 665,
+      "msg": {
+        "solids": 1,
+        "vol": 169.24199847962265
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 666,
+      "msg": {
+        "solids": 1,
+        "vol": 169.24199847962257
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 667,
+      "msg": {
+        "solids": 1,
+        "vol": 169.2419984796225
+      },
+      "op": "translate"
+    },
+    {
+      "id": 668,
+      "msg": {
+        "solids": 1,
+        "vol": 160.78546619743352
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 669,
+      "msg": {
+        "solids": 2,
+        "vol": 3076.7538008543806
+      },
+      "op": "union"
+    },
+    {
+      "id": 673,
+      "msg": {
+        "solids": 1,
+        "vol": 328.1016105354441
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 674,
+      "msg": {
+        "solids": 1,
+        "vol": 328.101610535444
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 675,
+      "msg": {
+        "solids": 1,
+        "vol": 328.101610535444
+      },
+      "op": "translate"
+    },
+    {
+      "id": 676,
+      "msg": {
+        "solids": 1,
+        "vol": 282.8622860825008
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 677,
+      "msg": {
+        "solids": 1,
+        "vol": 3207.959020308075
+      },
+      "op": "union"
+    },
+    {
+      "id": 681,
+      "msg": {
+        "solids": 1,
+        "vol": 120.24005324469375
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 682,
+      "msg": {
+        "solids": 1,
+        "vol": 120.24005324469373
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 683,
+      "msg": {
+        "solids": 1,
+        "vol": 120.24005324469378
+      },
+      "op": "translate"
+    },
+    {
+      "id": 684,
+      "msg": {
+        "solids": 1,
+        "vol": 120.24005324469378
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 685,
+      "msg": {
+        "solids": 1,
+        "vol": 3225.9335749871284
+      },
+      "op": "union"
+    },
+    {
+      "id": 689,
+      "msg": {
+        "solids": 1,
+        "vol": 261.78388967254295
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 690,
+      "msg": {
+        "solids": 1,
+        "vol": 261.783889672543
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 691,
+      "msg": {
+        "solids": 1,
+        "vol": 261.78388967254307
+      },
+      "op": "translate"
+    },
+    {
+      "id": 692,
+      "msg": {
+        "solids": 1,
+        "vol": 194.86806393103572
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 693,
+      "msg": {
+        "solids": 1,
+        "vol": 3346.907219265908
+      },
+      "op": "union"
+    },
+    {
+      "id": 697,
+      "msg": {
+        "solids": 1,
+        "vol": 263.88775963374485
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 698,
+      "msg": {
+        "solids": 1,
+        "vol": 263.88775963374496
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 699,
+      "msg": {
+        "solids": 1,
+        "vol": 263.88775963374496
+      },
+      "op": "translate"
+    },
+    {
+      "id": 700,
+      "msg": {
+        "solids": 1,
+        "vol": 247.8003214586379
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 701,
+      "msg": {
+        "solids": 1,
+        "vol": 3394.2140645882546
+      },
+      "op": "union"
+    },
+    {
+      "id": 705,
+      "msg": {
+        "solids": 1,
+        "vol": 262.6523442529189
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 706,
+      "msg": {
+        "solids": 1,
+        "vol": 262.6523442529189
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 707,
+      "msg": {
+        "solids": 1,
+        "vol": 262.652344252919
+      },
+      "op": "translate"
+    },
+    {
+      "id": 708,
+      "msg": {
+        "solids": 1,
+        "vol": 255.43732411235555
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 709,
+      "msg": {
+        "solids": 1,
+        "vol": 3438.276663697395
+      },
+      "op": "union"
+    },
+    {
+      "id": 713,
+      "msg": {
+        "solids": 1,
+        "vol": 349.3622330942579
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 714,
+      "msg": {
+        "solids": 1,
+        "vol": 349.3622330942581
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 715,
+      "msg": {
+        "solids": 1,
+        "vol": 349.36223309425804
+      },
+      "op": "translate"
+    },
+    {
+      "id": 716,
+      "msg": {
+        "solids": 1,
+        "vol": 222.53666715124973
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 717,
+      "msg": {
+        "solids": 1,
+        "vol": 3482.5503389092355
+      },
+      "op": "union"
+    },
+    {
+      "id": 721,
+      "msg": {
+        "solids": 1,
+        "vol": 719.2668777616874
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 722,
+      "msg": {
+        "solids": 1,
+        "vol": 719.2668777616875
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 723,
+      "msg": {
+        "solids": 1,
+        "vol": 719.2668777616876
+      },
+      "op": "translate"
+    },
+    {
+      "id": 724,
+      "msg": {
+        "solids": 1,
+        "vol": 418.06053622323594
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 725,
+      "msg": {
+        "solids": 1,
+        "vol": 3509.7866417307996
+      },
+      "op": "union"
+    },
+    {
+      "id": 729,
+      "msg": {
+        "solids": 1,
+        "vol": 511.7649089589478
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 730,
+      "msg": {
+        "solids": 1,
+        "vol": 511.7649089589478
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 731,
+      "msg": {
+        "solids": 1,
+        "vol": 511.7649089589478
+      },
+      "op": "translate"
+    },
+    {
+      "id": 732,
+      "msg": {
+        "solids": 1,
+        "vol": 252.24490834000505
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 733,
+      "msg": {
+        "solids": 1,
+        "vol": 3574.600010255494
+      },
+      "op": "union"
+    },
+    {
+      "id": 737,
+      "msg": {
+        "solids": 1,
+        "vol": 796.3373603253444
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 738,
+      "msg": {
+        "solids": 1,
+        "vol": 796.3373603253445
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 739,
+      "msg": {
+        "solids": 1,
+        "vol": 796.3373603253444
+      },
+      "op": "translate"
+    },
+    {
+      "id": 740,
+      "msg": {
+        "solids": 1,
+        "vol": 389.3609969480907
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 741,
+      "msg": {
+        "solids": 1,
+        "vol": 3578.629632869831
+      },
+      "op": "union"
+    },
+    {
+      "id": 745,
+      "msg": {
+        "solids": 1,
+        "vol": 774.1145881778209
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 746,
+      "msg": {
+        "solids": 1,
+        "vol": 774.1145881778208
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 747,
+      "msg": {
+        "solids": 1,
+        "vol": 774.1145881778205
+      },
+      "op": "translate"
+    },
+    {
+      "id": 748,
+      "msg": {
+        "solids": 1,
+        "vol": 378.7343302607198
+      },
+      "op": "intersect"
+    },
+    {
+      "id": 749,
+      "msg": {
+        "solids": 1,
+        "vol": 3692.3715989991224
+      },
+      "op": "union"
+    },
+    {
+      "id": 750,
+      "msg": {
+        "solids": 1,
+        "vol": 4086.4919655497
+      },
+      "op": "union"
+    }
+  ],
+  "other": [],
+  "script": "a390b3d50c54d566",
+  "solids": 1,
+  "source": "Onshape evalFeatureScript (Parasolid), case.fs",
+  "status": "ok",
+  "vertices": 164,
+  "vol": 4086.4919655497,
+  "warn": []
+}

@@ -1,0 +1,13 @@
+{
+  "adopted": true,
+  "at": 7,
+  "err": "{ message : REVOLVE_PERPENDICULAR }",
+  "evaluated": 1795850823,
+  "guarded_steps": [],
+  "i": 4948,
+  "log": [],
+  "script": "a1131cb7edca962e",
+  "source": "Onshape evalFeatureScript (Parasolid), case.fs",
+  "status": "error",
+  "warn": []
+}

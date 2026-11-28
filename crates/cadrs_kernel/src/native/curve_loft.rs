@@ -213,7 +213,7 @@ fn build(k: &NativeKernel, spec: &CurveLoftSpec) -> Result<(Body, Vec<Vec<u64>>)
         .iter()
         .flat_map(|s| (0..=8).map(move |i| s.at(i as f64 / 8.0)))
         .fold(0.0_f64, |r, p| r.max(p.coords.norm()))
-        .max(crate::native::tol::POINT);
+        .max(crate::native::tol::point());
 
     // Guides: where each meets each profile (guide and profile parameters).
     let mut guides: Vec<NurbsCurve> = Vec::new();
@@ -273,7 +273,7 @@ fn build(k: &NativeKernel, spec: &CurveLoftSpec) -> Result<(Body, Vec<Vec<u64>>)
                     })
                     .sum::<f64>()
                     / 17.0;
-                d.push(d[i - 1] + step.max(tol::POINT));
+                d.push(d[i - 1] + step.max(tol::point()));
             }
             let total = d[n - 1];
             d.iter().map(|x| x / total).collect()
@@ -498,7 +498,7 @@ fn build(k: &NativeKernel, spec: &CurveLoftSpec) -> Result<(Body, Vec<Vec<u64>>)
                     for (j, s) in st.iter().enumerate() {
                         if let Some(g) = guide_of(j) {
                             let want = gd(g, i).dot(&oriented(*s));
-                            let want = if want > tol::POINT {
+                            let want = if want > tol::point() {
                                 want
                             } else {
                                 m * base(*s).norm()
@@ -803,7 +803,7 @@ pub(crate) fn chain_curve(k: &NativeKernel, pcs: &[PathCurve]) -> Result<(NurbsC
     if closed {
         return Err(KernelError::Unsupported("lofts through closed curves"));
     }
-    let lens: Vec<f64> = segs.iter().map(|s| s.length().max(tol::POINT)).collect();
+    let lens: Vec<f64> = segs.iter().map(|s| s.length().max(tol::point())).collect();
     let total: f64 = lens.iter().sum();
     let mut pieces: Vec<NurbsCurve> = segs
         .iter()

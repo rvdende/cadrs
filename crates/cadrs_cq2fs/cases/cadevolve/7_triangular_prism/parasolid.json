@@ -1,0 +1,35 @@
+{
+  "adopted": true,
+  "area": 1324.5928996228852,
+  "bbox": [
+    0.0,
+    0.0,
+    0.0,
+    10.0,
+    17.32050807568877,
+    25.0
+  ],
+  "edges": 9.0,
+  "evaluated": 1795846204,
+  "faces": 5.0,
+  "guarded_steps": [],
+  "i": 7.0,
+  "log": [
+    {
+      "id": 4.0,
+      "msg": {
+        "solids": 1.0,
+        "vol": 2165.063509461096
+      },
+      "op": "extrude"
+    }
+  ],
+  "other": [],
+  "script": "1fc9a46ea5eb12d0",
+  "solids": 1.0,
+  "source": "Onshape evalFeatureScript (Parasolid), cq2fs case.fs",
+  "status": "ok",
+  "vertices": 6.0,
+  "vol": 2165.063509461096,
+  "warn": []
+}

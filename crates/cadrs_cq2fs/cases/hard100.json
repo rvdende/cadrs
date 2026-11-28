@@ -1,0 +1,407 @@
+{
+  "cases": [
+    {
+      "i": 47,
+      "name": "triangular_prism_with_tilt"
+    },
+    {
+      "i": 255,
+      "name": "hex_prism_with_alternating_hole_pattern"
+    },
+    {
+      "i": 297,
+      "name": "sphere_with_hexagonal_lattice_shell"
+    },
+    {
+      "i": 493,
+      "name": "hollow_cyl_shell_with_variable_spoke_web"
+    },
+    {
+      "i": 744,
+      "name": "dome_hemisphere_fenestrated"
+    },
+    {
+      "i": 862,
+      "name": "cone_revolve_with_perforated_lattice_shell"
+    },
+    {
+      "i": 866,
+      "name": "cone_revolve_with_embossed_spiral_pattern"
+    },
+    {
+      "i": 962,
+      "name": "wedge_with_soft_lattice"
+    },
+    {
+      "i": 963,
+      "name": "tubular_panel_filigree"
+    },
+    {
+      "i": 1024,
+      "name": "dome_hemisphere_fenestrated_and_embossed"
+    },
+    {
+      "i": 1047,
+      "name": "tubular_panel_filigree_with_mounting_pads"
+    },
+    {
+      "i": 1135,
+      "name": "lattice_cylinder_with_external_knobs"
+    },
+    {
+      "i": 1188,
+      "name": "wedge_lattice_infill"
+    },
+    {
+      "i": 1235,
+      "name": "dome_hemisphere_gyroid_shell"
+    },
+    {
+      "i": 1277,
+      "name": "cylinder_basic_with_voronoi_mesh"
+    },
+    {
+      "i": 1279,
+      "name": "cone_revolve_with_voronoi_mesh"
+    },
+    {
+      "i": 1516,
+      "name": "plate_with_mixed_holes_and_lattice_infill"
+    },
+    {
+      "i": 1587,
+      "name": "triangular_prism_with_lattice_infill"
+    },
+    {
+      "i": 1927,
+      "name": "wedge_lattice_infill_with_gradient_thickness"
+    },
+    {
+      "i": 2014,
+      "name": "dome_hemisphere_with_lattice_shell_with_counterbored_hole_ring"
+    },
+    {
+      "i": 2041,
+      "name": "dome_hemisphere_with_embossed_flow_contours"
+    },
+    {
+      "i": 2142,
+      "name": "cone_revolve_with_hole_spoke_pattern_and_reinforcement_with_through_lattice_infill"
+    },
+    {
+      "i": 2204,
+      "name": "ring_gear_with_vented_internal_spokes"
+    },
+    {
+      "i": 2223,
+      "name": "hex_prism_with_countersunk_mounting_holes_and_gussets"
+    },
+    {
+      "i": 2257,
+      "name": "box_prism_with_beveled_and_fillet_edges_and_ribs"
+    },
+    {
+      "i": 2320,
+      "name": "sphere_hexagonal_lattice_shell"
+    },
+    {
+      "i": 2329,
+      "name": "dome_vented_web_snap"
+    },
+    {
+      "i": 2351,
+      "name": "sphere_spiral_fin_external"
+    },
+    {
+      "i": 2389,
+      "name": "dome_fenestrated_louvered"
+    },
+    {
+      "i": 2472,
+      "name": "sphere_basic_with_parametric_hexagrid_spike_array"
+    },
+    {
+      "i": 2555,
+      "name": "cone_revolve_with_topography_cutouts_and_ribs"
+    },
+    {
+      "i": 2568,
+      "name": "sphere_basic_with_partial_spherical_mesh"
+    },
+    {
+      "i": 2723,
+      "name": "sphere_with_gaussian_bumps_and_mount_bosses"
+    },
+    {
+      "i": 2758,
+      "name": "dome_lattice_shell_with_ribbed_lugs"
+    },
+    {
+      "i": 2821,
+      "name": "dome_with_filleted_lattice_shell"
+    },
+    {
+      "i": 2974,
+      "name": "sphere_geo_cable_with_louvered_vent_pores"
+    },
+    {
+      "i": 3030,
+      "name": "dome_lattice_vent_with_curve_cutout_panels"
+    },
+    {
+      "i": 3031,
+      "name": "sphere_geo_cable_with_parametric_spike_array"
+    },
+    {
+      "i": 3039,
+      "name": "cylinder_basic_with_conformal_mesh_infill_with_variable_wall_thickness_with_boss_array"
+    },
+    {
+      "i": 3058,
+      "name": "lattice_shell_cylinder_with_gussets_with_pressure_vane_ribs"
+    },
+    {
+      "i": 3157,
+      "name": "panel_torus_segment_rein_with_fenestrated_waves"
+    },
+    {
+      "i": 3180,
+      "name": "vented_dome_web_snap_with_filingerlip"
+    },
+    {
+      "i": 3254,
+      "name": "facade_panel_with_nested_rhombus_and_lattice"
+    },
+    {
+      "i": 3420,
+      "name": "triangular_prism_with_circular_hole_array_with_counterbored_holes"
+    },
+    {
+      "i": 3424,
+      "name": "triangular_prism_with_circular_hole_array_with_grip_textures"
+    },
+    {
+      "i": 3521,
+      "name": "hex_prism_with_mesh_infill_and_snap_features"
+    },
+    {
+      "i": 3591,
+      "name": "dome_shell_with_integrated_branching_boss_mesh_and_snaps"
+    },
+    {
+      "i": 3606,
+      "name": "cylinder_with_wave_ripple_surface_and_spoke_web_and_countersunk_mounts"
+    },
+    {
+      "i": 3609,
+      "name": "cylinder_basic_with_voronoi_infill_shell_and_fluted_flange"
+    },
+    {
+      "i": 3613,
+      "name": "dome_hemisphere_with_mushroom_connector_web_and_framed_cutouts"
+    },
+    {
+      "i": 3648,
+      "name": "dome_hemisphere_with_elliptical_fenestration_and_embossed_trace"
+    },
+    {
+      "i": 3663,
+      "name": "triangular_prism_with_branching_prongs_and_lattice_infill"
+    },
+    {
+      "i": 3702,
+      "name": "plate_with_gradient_voronoi_and_counterbores"
+    },
+    {
+      "i": 3825,
+      "name": "cylinder_lattice_shell_with_access_notches"
+    },
+    {
+      "i": 3829,
+      "name": "annular_ring_embossed_gear_teeth_and_mounts"
+    },
+    {
+      "i": 3834,
+      "name": "sphere_parametric_bump_slice_variant"
+    },
+    {
+      "i": 3837,
+      "name": "wedge_basic_with_integrated_lattice"
+    },
+    {
+      "i": 3841,
+      "name": "spur_gear_with_diagonal_cutouts_with_chamfered_ribs"
+    },
+    {
+      "i": 3858,
+      "name": "spur_gear_with_diagonal_cutouts_with_gusseted_web"
+    },
+    {
+      "i": 3938,
+      "name": "cone_revolve_with_gradated_fenestrations"
+    },
+    {
+      "i": 3940,
+      "name": "torus_revolve_with_profiled_fenestration"
+    },
+    {
+      "i": 3941,
+      "name": "annular_ring_with_embossed_spike_fin_array"
+    },
+    {
+      "i": 3999,
+      "name": "dome_with_embossed_contours_and_cutouts_and_snap_features"
+    },
+    {
+      "i": 4049,
+      "name": "cone_revolve_with_nested_vane_array_and_thorn_ribs"
+    },
+    {
+      "i": 4062,
+      "name": "annular_ring_with_scalloped_thorn_fin_and_counterbore_lip"
+    },
+    {
+      "i": 4079,
+      "name": "cylinder_with_annular_gradient_fin_clusters"
+    },
+    {
+      "i": 4108,
+      "name": "dome_with_prismatic_fins_and_flanged_lip"
+    },
+    {
+      "i": 4123,
+      "name": "cylinder_lightweight_with_prismatic_lattice_and_mount_bosses"
+    },
+    {
+      "i": 4138,
+      "name": "dome_with_nested_fenestrated_panels_and_snap_flange"
+    },
+    {
+      "i": 4182,
+      "name": "tube_frame_shell_prism_composite_lattice_layers"
+    },
+    {
+      "i": 4208,
+      "name": "cylinder_ribbed_grip_with_fillet_clusters"
+    },
+    {
+      "i": 4255,
+      "name": "sphere_with_gaussian_bumps_and_wave_ribs"
+    },
+    {
+      "i": 4289,
+      "name": "cylinder_with_mushroom_fin_array_and_thickened_ribs"
+    },
+    {
+      "i": 4313,
+      "name": "boxPrismWithInternalHexGrid"
+    },
+    {
+      "i": 4361,
+      "name": "domeWithFloatingHexPanels"
+    },
+    {
+      "i": 4771,
+      "name": "cylinder_with_annular_gradient_fin_mesh"
+    },
+    {
+      "i": 4820,
+      "name": "gear_segment_with_geodesic_reinforced_web"
+    },
+    {
+      "i": 4857,
+      "name": "dome_with_nested_lattice_and_snap_lug_array"
+    },
+    {
+      "i": 4900,
+      "name": "fractal_lattice_snap_dome"
+    },
+    {
+      "i": 4948,
+      "name": "helical_snap_lattice_dome"
+    },
+    {
+      "i": 5032,
+      "name": "plate_with_offset_hole_matrix_and_prismatic_handles"
+    },
+    {
+      "i": 5080,
+      "name": "cylinder_chamfered_grip_ribs"
+    },
+    {
+      "i": 5281,
+      "name": "plate_perforated_wave_pattern"
+    },
+    {
+      "i": 5358,
+      "name": "MeshInfillCylinder"
+    },
+    {
+      "i": 5452,
+      "name": "shell_cone_buckle_lattice"
+    },
+    {
+      "i": 5476,
+      "name": "dome_pronged_hinge_counterbore_and_boss_network"
+    },
+    {
+      "i": 5536,
+      "name": "truncated_dome_with_embossed_geo_lattice"
+    },
+    {
+      "i": 5568,
+      "name": "spherical_shell_with_geodesic_rib_lattice"
+    },
+    {
+      "i": 5579,
+      "name": "beveled_filleted_box_voronoi_shell"
+    },
+    {
+      "i": 5587,
+      "name": "spherical_voronoi_lattice_shell"
+    },
+    {
+      "i": 5590,
+      "name": "cylinder_shell_with_internal_spiral_lattice"
+    },
+    {
+      "i": 5599,
+      "name": "spiral_clamp_annular_lip_ring"
+    },
+    {
+      "i": 5611,
+      "name": "snap_clip_with_serpentine_living_strut_and_reinforced_pad"
+    },
+    {
+      "i": 5631,
+      "name": "annular_filter_collar_with_variable_louver_array_and_countersunk_mounts"
+    },
+    {
+      "i": 5637,
+      "name": "cone_living_hinge_shell_with_internal_lattice"
+    },
+    {
+      "i": 5645,
+      "name": "annular_clamp_ring_with_spiral_boss_and_snap_ribs"
+    },
+    {
+      "i": 1531,
+      "name": "hex_prism_with_spike_array_and_internal_ribs"
+    },
+    {
+      "i": 3535,
+      "name": "sphere_with_parametric_bumps_and_circular_spikes"
+    },
+    {
+      "i": 4432,
+      "name": "dome_with_crown_gear_teeth_and_prong_spike_array"
+    },
+    {
+      "i": 5532,
+      "name": "cylinder_shell_with_diagonal_wave_louvres"
+    }
+  ],
+  "dir": "cadevolve",
+  "generators": "~/Work/cadevolve/CADEvolve-G/parametric_generators.json",
+  "note": "100 cases chosen by scripts/select_cases.py (2026-11-28): 35 where cadrs failed, 15 where it swallowed an exception, 50 across the feature families; 2517, 3833, 4842, 5606 replaced (dynamic once the recorder's signals could no longer be swallowed)"
+}

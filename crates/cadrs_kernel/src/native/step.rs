@@ -1357,7 +1357,7 @@ pub fn wire_body(segs: &[WireSeg], pts: &[P3], tol: f64) -> Body {
     for p in pts {
         b.add_point(*p);
     }
-    b.fit_tolerances(tol.max(tol::POINT));
+    b.fit_tolerances(tol.max(tol::point()));
     b
 }
 
@@ -2680,6 +2680,9 @@ fn build_shapes(
                 }
             }
         }
+        // Intersection curves the file approximated (Parasolid's B-splines) on the faces.
+        super::heal::reintersect_spline_edges(&mut b);
+        prof.mark("re-intersected");
         // The file's precision is its entities' tolerance (OCCT's reader does the same).
         let u = m.rep_uncertainty(rep).filter(|u| *u > super::topo::TOL_MIN);
         if let Some(u) = u {
@@ -2698,7 +2701,23 @@ fn build_shapes(
         prof.mark("tolerances");
         // A solid whose faces all point in (a sphere or cylinder band whose loops are only
         // seams and circles, read against the file's own sense): turned round.
+        // A solid with voids, each shell by itself: the outer one pointing out, a void in (a
+        // void read facing out added its volume: Onshape's STEP of a sphere with a lattice
+        // void, CADEvolve 297, read as 6938 mm³ where Parasolid reads 1439).
         for si in 0..b.solids.len() {
+            let shells = b.solids[si].shells.clone();
+            if shells.len() > 1 {
+                for (k, sh) in shells.into_iter().enumerate() {
+                    let faces = b.shells[sh].faces.clone();
+                    let sub = super::kernel::subset(&b, &faces, true);
+                    if super::topo::points_in(&sub) != (k > 0) {
+                        for f in faces {
+                            Body::reverse_face(&mut b.faces[f]);
+                        }
+                    }
+                }
+                continue;
+            }
             let faces = b.solid_faces(si);
             let sub = super::kernel::subset(&b, &faces, true);
             if super::topo::points_in(&sub) {

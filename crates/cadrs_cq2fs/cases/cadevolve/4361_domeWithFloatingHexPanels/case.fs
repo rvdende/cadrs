@@ -1,0 +1,3077 @@
+function(context is Context, queries) {
+// cqrt: CadQuery 2.8's Workplane semantics, ported to FeatureScript so Parasolid can run CADEvolve
+// generators. Each function names the cq.py / selectors.py method it follows; read them side by side.
+//
+// This file is the body of a lambda (Onshape's evalFeatureScript takes one function), so every
+// helper is a const function value; they take the context `c` and the state box `st` explicitly.
+//
+// Conventions
+// - Lengths are plain numbers in millimetres; units are attached only when calling Onshape (`* MM`).
+// - Bodies are never modified in place: an operation copies its inputs (opPattern) and works on the
+//   copies, so every shape value (a query) and every selected face or edge stays valid, as CadQuery's
+//   values are immutable.
+// - Stack objects: {"t": "vec", "p"} a point; {"t": "loc", "T"} a Location (local, as CadQuery keeps
+//   it); {"t": "edge", ...} / {"t": "wire", ...} edges and wires as data (world coordinates);
+//   {"t": "solid", "q"} bodies; {"t": "face" | "edgeq" | "vertex", "q", "body"} topology of a body.
+// - Workplanes live in st[].wps by their tape id: {"plane", "objs", "parent", "ctx"}; a context
+//   (CQContext) in st[].ctx by index: {"pw" pending wires, "pe" pending edges, "fp" firstPoint, "tags"}.
+
+const MM = millimeter;
+const CQTOL = 0.0001;   // CQContext.tolerance and the selectors' tolerance
+const TOL6 = 1e-6;      // cq.py's TOL
+
+const cqErr = function(msg) { throw regenError("cq: " ~ msg); };
+const cqUnsup = function(msg) { throw regenError("cq-unsupported: " ~ msg); };
+
+const nid = function(st, prefix) {
+    var s = st[];
+    s.n = s.n + 1;
+    st[] = s;
+    return s.base + (prefix ~ s.n);   // under the case's own id (a feature's ops must be under its id)
+};
+
+const v3 = function(a) {
+    if (a == undefined) cqErr("missing vector");
+    if (a is map && a.vec != undefined) a = a.vec;
+    if (size(a) == 2) return vector(a[0], a[1], 0);
+    if (size(a) == 3) return vector(a[0], a[1], a[2]);
+    cqErr("not a vector: " ~ toString(a));
+};
+const isNum = function(x) { return x is number; };
+const unitOf = function(v) { return v / norm(v); };
+
+// ---- points and directions through Onshape transforms (unitless mm <-> lengths)
+const tP = function(T, p) { return (T * (p * MM)) / MM; };
+const tD = function(T, d) { return T.linear * d; };
+const lenV = function(p) { return p * MM; };
+const unlen = function(p) { return vector(p[0] / MM, p[1] / MM, p[2] / MM); };
+
+// ---- Plane (geom.py). Frame: x orthogonalised as gp_Ax3(origin, zDir, xDir) does.
+const plMake = function(o, x, z) {
+    var zz = normalize(z);
+    var xp = x - zz * dot(x, zz);
+    if (norm(xp) < 1e-12) cqErr("xDir parallel to the normal");
+    return {"o": o, "x": normalize(xp), "z": zz};
+};
+const plY = function(p) { return cross(p.z, p.x); };
+const plW = function(p, l) {            // Plane.toWorldCoords
+    var v = v3(l);
+    return p.o + p.x * v[0] + plY(p) * v[1] + p.z * v[2];
+};
+const plL = function(p, w) {            // Plane.toLocalCoords (points)
+    var d = w - p.o;
+    return vector(dot(d, p.x), dot(d, plY(p)), dot(d, p.z));
+};
+const plT = function(p) { return toWorld(coordSystem(p.o * MM, p.x, p.z)); };   // Location(plane): local -> world
+const plFromTape = function(m) { return plMake(v3(m.origin), v3(m.xDir), v3(m.zDir)); };
+const plRotated = function(p, r) {      // Plane.rotated: T = T1 * T2 * T3 about the plane's x, y, z
+    var rv = v3(r);
+    var T = rotationMatrix3d(p.x, rv[0] * degree) * rotationMatrix3d(plY(p), rv[1] * degree) * rotationMatrix3d(p.z, rv[2] * degree);
+    return plMake(p.o, T * p.x, T * p.z);
+};
+// gp_Ax2(P, V): OCCT's X direction for a normal alone (Plane(normal=...) with xDir None)
+const defaultXDir = function(n) {
+    const A = n[0]; const B = n[1]; const C = n[2];
+    const Aa = abs(A); const Ba = abs(B); const Ca = abs(C);
+    var d;
+    if (Ba <= Aa && Ba <= Ca) d = (Aa > Ca) ? vector(-C, 0, A) : vector(C, 0, -A);
+    else if (Aa <= Ba && Aa <= Ca) d = (Ba > Ca) ? vector(0, -C, B) : vector(0, C, -B);
+    else d = (Aa > Ba) ? vector(-B, A, 0) : vector(B, -A, 0);
+    return normalize(d);
+};
+const locFromTape = function(m) {       // {"R": 3x3 rows, "t": [x, y, z]} -> Transform (local)
+    return transform(matrix(m.R), v3(m.t) * MM);
+};
+
+// ---- state
+const wpGet = function(st, i) {
+    var w = st[].wps[i];
+    if (w == undefined) cqErr("no workplane " ~ i);
+    return w;
+};
+const wpPut = function(st, i, w) { var s = st[]; s.wps[i] = w; st[] = s; };
+const ctxGet = function(st, w) { return st[].ctx[w.ctx]; };
+const ctxPut = function(st, w, cx) { var s = st[]; s.ctx[w.ctx] = cx; st[] = s; };
+const newObject = function(st, out, selfI, objs) {      // Workplane.newObject
+    var w = wpGet(st, selfI);
+    wpPut(st, out, {"plane": w.plane, "objs": objs, "parent": selfI, "ctx": w.ctx});
+};
+const shapeGet = function(st, i) {
+    var s = st[].shapes[i];
+    if (s == undefined) cqErr("no shape " ~ i);
+    return s;
+};
+const logStep = function(c, st, id, op, msg) {
+    var s = st[];
+    s.log = append(s.log, {"id": id, "op": op, "msg": msg});
+    st[] = s;
+};
+const warn = function(st, msg) {
+    var s = st[];
+    if (!isIn(msg, s.warn)) s.warn = append(s.warn, msg);
+    st[] = s;
+};
+
+// ---- data edges / wires (world coordinates, mm)
+const eStart = function(e) { return (e.k == "circle" || e.k == "ellipse") ? e.s : (e.k == "spline" ? e.pts[0] : e.a); };
+const eEnd = function(e) { return (e.k == "circle" || e.k == "ellipse") ? e.s : (e.k == "spline" ? e.pts[size(e.pts) - 1] : e.b); };
+const eLine = function(a, b) { return {"t": "edge", "k": "line", "a": a, "b": b}; };
+const eArc = function(a, m, b) { return {"t": "edge", "k": "arc", "a": a, "m": m, "b": b}; };
+const eXform = function(T, e) {
+    if (e.k == "line") return eLine(tP(T, e.a), tP(T, e.b));
+    if (e.k == "arc") return eArc(tP(T, e.a), tP(T, e.m), tP(T, e.b));
+    if (e.k == "circle") return {"t": "edge", "k": "circle", "c": tP(T, e.c), "n": tD(T, e.n), "r": e.r, "s": tP(T, e.s)};
+    if (e.k == "ellipse") return {"t": "edge", "k": "ellipse", "c": tP(T, e.c), "n": tD(T, e.n), "xa": tD(T, e.xa), "r1": e.r1, "r2": e.r2, "s": tP(T, e.s)};
+    if (e.k == "spline") {
+        var ps = [];
+        for (var p in e.pts) ps = append(ps, tP(T, p));
+        var ts = undefined;
+        if (e.tans != undefined) { ts = []; for (var d in e.tans) ts = append(ts, d == undefined ? undefined : tD(T, d)); }
+        return {"t": "edge", "k": "spline", "pts": ps, "tans": ts, "periodic": e.periodic};
+    }
+    cqErr("edge kind " ~ e.k);
+};
+const wXform = function(T, w) {
+    var es = [];
+    for (var e in w.edges) es = append(es, eXform(T, e));
+    return {"t": "wire", "edges": es, "closed": w.closed, "constr": w.constr};
+};
+// circumcentre of three points, for arcs
+const circum = function(a, m, b) {
+    const u = m - a; const v = b - a;
+    const n = cross(u, v);
+    const nn = dot(n, n);
+    if (nn < 1e-24) cqErr("arc through collinear points");
+    return a + (cross(n, u) * dot(v, v) + cross(v, n) * dot(u, u)) / (2 * nn);
+};
+// length and centroid of a data edge (GProp linear properties)
+const eLenCen = function(e) {
+    if (e.k == "line") return {"L": norm(e.b - e.a), "C": (e.a + e.b) / 2};
+    if (e.k == "circle") return {"L": 2 * PI * e.r, "C": e.c};
+    if (e.k == "ellipse") {
+        const h = ((e.r1 - e.r2) / (e.r1 + e.r2)) ^ 2;
+        return {"L": PI * (e.r1 + e.r2) * (1 + 3 * h / (10 + sqrt(4 - 3 * h))), "C": e.c};
+    }
+    if (e.k == "arc") {
+        const cc = circum(e.a, e.m, e.b);
+        const r = norm(e.a - cc);
+        const ua = unitOf(e.a - cc); const ub = unitOf(e.b - cc); const um = unitOf(e.m - cc);
+        const n = unitOf(cross(e.a - cc, e.m - cc) + cross(e.m - cc, e.b - cc));
+        var ang = atan2(dot(cross(ua, ub), n), dot(ua, ub)) / radian;
+        if (ang <= 0) ang += 2 * PI;
+        const bis = unitOf(rotationMatrix3d(n, ang / 2 * radian) * ua);
+        const half = ang / 2;
+        return {"L": r * ang, "C": cc + bis * (r * sin(half * radian) / half)};
+    }
+    if (e.k == "spline") {   // by its control polygon: only used to centre a wire made of it
+        var L = 0; var acc = vector(0, 0, 0);
+        for (var j = 0; j + 1 < size(e.pts); j += 1) { const l = norm(e.pts[j + 1] - e.pts[j]); L += l; acc += (e.pts[j] + e.pts[j + 1]) / 2 * l; }
+        return {"L": L, "C": acc / L};
+    }
+    cqErr("edge kind " ~ e.k);
+};
+const wCenter = function(w) {
+    var L = 0; var acc = vector(0, 0, 0);
+    for (var e in w.edges) { const lc = eLenCen(e); L += lc.L; acc += lc.C * lc.L; }
+    if (L <= 0) cqErr("empty wire");
+    return acc / L;
+};
+// wire plane: circle/ellipse normal, else Newell's normal of the polygon through the points
+const wPoints = function(w) {
+    var ps = [];
+    for (var e in w.edges) {
+        if (e.k == "line") ps = concatenateArrays([ps, [e.a, e.b]]);
+        else if (e.k == "arc") ps = concatenateArrays([ps, [e.a, e.m, e.b]]);
+        else if (e.k == "circle" || e.k == "ellipse") ps = append(ps, e.c);
+        else if (e.k == "spline") ps = concatenateArrays([ps, e.pts]);
+    }
+    return ps;
+};
+const wPlane = function(w) {
+    for (var e in w.edges) if (e.k == "circle" || e.k == "ellipse") return plMake(e.c, e.k == "ellipse" ? e.xa : defaultXDir(unitOf(e.n)), e.n);
+    const ps = wPoints(w);
+    var n = vector(0, 0, 0);
+    for (var i = 0; i < size(ps); i += 1) {
+        const p = ps[i]; const q = ps[(i + 1) % size(ps)];
+        n += vector((p[1] - q[1]) * (p[2] + q[2]), (p[2] - q[2]) * (p[0] + q[0]), (p[0] - q[0]) * (p[1] + q[1]));
+    }
+    if (norm(n) < 1e-12) cqErr("Cannot build face(s): wires not planar");
+    var cen = vector(0, 0, 0);
+    for (var p in ps) cen += p;
+    cen = cen / size(ps);
+    return plMake(cen, defaultXDir(unitOf(n)), n);
+};
+
+// ---- topology helpers (Parasolid answers)
+const ents = function(c, q) { return evaluateQuery(c, q); };
+const entObj = function(t, q, body) { return {"t": t, "q": q, "body": body}; };
+const centroid = function(c, q) { return unlen(evApproximateCentroid(c, {"entities": q})); };
+const objCenter = function(c, o) {      // Shape.Center() / Vector.Center()
+    if (o.t == "vec") return o.p;
+    if (o.t == "vertex") return unlen(evVertexPoint(c, {"vertex": o.q}));
+    if (o.t == "face" || o.t == "edgeq" || o.t == "solid") return centroid(c, o.q);
+    if (o.t == "wire") return wCenter(o);
+    if (o.t == "edge") return eLenCen(o).C;
+    cqErr("Center() of " ~ o.t);
+};
+const faceGeom = function(c, q) {       // Face.geomType()
+    const s = evSurfaceDefinition(c, {"face": q});
+    if (s is Plane) return "PLANE";
+    if (s is Cylinder) return "CYLINDER";
+    if (s is Cone) return "CONE";
+    if (s is Sphere) return "SPHERE";
+    if (s is Torus) return "TORUS";
+    if (s is BSplineSurface) return "BSPLINE";
+    return "OTHER";
+};
+const edgeGeom = function(c, q) {       // Edge.geomType()
+    const d = evCurveDefinition(c, {"edge": q});
+    if (d is Line) return "LINE";
+    if (d is Circle) return "CIRCLE";
+    if (d is Ellipse) return "ELLIPSE";
+    if (d is BSplineCurve) return "BSPLINE";
+    return "OTHER";
+};
+const geomType = function(c, o) {
+    if (o.t == "face") return faceGeom(c, o.q);
+    if (o.t == "edgeq") return edgeGeom(c, o.q);
+    if (o.t == "edge") return o.k == "line" ? "LINE" : (o.k == "ellipse" ? "ELLIPSE" : "CIRCLE");
+    return "OTHER";
+};
+const faceNormalAt = function(c, q, p) {   // Face.normalAt(point): outward for a solid's faces
+    if (faceGeom(c, q) == "PLANE") return evPlane(c, {"face": q}).normal;
+    const d = evDistance(c, {"side0": p * MM, "side1": q});
+    return evFaceTangentPlane(c, {"face": q, "parameter": d.sides[1].parameter}).normal;
+};
+const faceNormal0 = function(c, q) {    // Face.normalAt() with no point: at the middle of its UV bounds
+    if (faceGeom(c, q) == "PLANE") return evPlane(c, {"face": q}).normal;
+    return evFaceTangentPlane(c, {"face": q, "parameter": vector(0.5, 0.5)}).normal;
+};
+const edgeTangent = function(c, q) {    // Edge.tangentAt() (locationParam 0.5)
+    return evEdgeTangentLine(c, {"edge": q, "parameter": 0.5, "arcLengthParameterization": true}).direction;
+};
+const bodiesOf = function(c, o) {       // owning bodies of a shape object
+    if (o.t == "solid") return o.q;
+    if (o.body != undefined) return o.body;
+    cqErr("no body for " ~ o.t);
+};
+
+// _collectProperty: the unique sub-shapes of every object on the stack, in stack order
+const collect = function(c, objs, kind) {
+    var cand = [];    // [type, query, body] in stack order, duplicates removed below
+    for (var o in objs) {
+        if (o.t == "solid") {
+            for (var b in ents(c, o.q)) {
+                if (kind == "Solids") cand = append(cand, ["solid", b, b]);
+                if (kind == "Faces") for (var f in ents(c, qOwnedByBody(b, EntityType.FACE))) cand = append(cand, ["face", f, b]);
+                if (kind == "Edges") for (var e in ents(c, qOwnedByBody(b, EntityType.EDGE))) cand = append(cand, ["edgeq", e, b]);
+                if (kind == "Vertices") for (var v in ents(c, qOwnedByBody(b, EntityType.VERTEX))) cand = append(cand, ["vertex", v, b]);
+            }
+        } else if (o.t == "face") {
+            if (kind == "Faces") cand = append(cand, ["face", o.q, o.body]);
+            if (kind == "Edges") for (var e in ents(c, qAdjacent(o.q, AdjacencyType.EDGE, EntityType.EDGE))) cand = append(cand, ["edgeq", e, o.body]);
+            if (kind == "Vertices") for (var v in ents(c, qAdjacent(o.q, AdjacencyType.VERTEX, EntityType.VERTEX))) cand = append(cand, ["vertex", v, o.body]);
+        } else if (o.t == "edgeq") {
+            if (kind == "Edges") cand = append(cand, ["edgeq", o.q, o.body]);
+            if (kind == "Vertices") for (var v in ents(c, qAdjacent(o.q, AdjacencyType.VERTEX, EntityType.VERTEX))) cand = append(cand, ["vertex", v, o.body]);
+        } else if (o.t == "vertex") {
+            if (kind == "Vertices") cand = append(cand, ["vertex", o.q, o.body]);
+        } else if (o.t == "wire" || o.t == "edge") {
+            if (kind == "Edges" || kind == "Vertices" || kind == "Wires") cqUnsup("selecting " ~ kind ~ " of pending wires");
+        }
+    }
+    var out = [];
+    var seen = {};
+    for (var x in cand) {
+        const k = toString(x[1]);
+        if (seen[k] != true) {
+            seen[k] = true;
+            out = append(out, entObj(x[0], x[1], x[2]));
+        }
+    }
+    return out;
+};
+
+// ---- selectors (selectors.py). `sel` is the compiled form cq2fs emits.
+const objKey = function(o) { return toString(o.q); };
+const selFilter = function(self, c, sel, objs) {
+    const k = sel.k;
+    if (k == "and" || k == "or" || k == "exc") {
+        const a = self(self, c, sel.a, objs);
+        const b = self(self, c, sel.b, objs);
+        var inB = {};
+        for (var o in b) inB[objKey(o)] = true;
+        var inA = {};
+        for (var o in a) inA[objKey(o)] = true;
+        var res = [];
+        if (k == "and") { for (var o in a) if (inB[objKey(o)] == true) res = append(res, o); }
+        else if (k == "exc") { for (var o in a) if (inB[objKey(o)] != true) res = append(res, o); }
+        else {
+            res = a;
+            for (var o in b) if (inA[objKey(o)] != true) { res = append(res, o); inA[objKey(o)] = true; }
+        }
+        return res;
+    }
+    if (k == "not") {
+        const na = self(self, c, sel.a, objs);
+        var inN = {};
+        for (var o in na) inN[objKey(o)] = true;
+        var rn = [];
+        for (var o in objs) if (inN[objKey(o)] != true) rn = append(rn, o);
+        return rn;
+    }
+    if (k == "type") {
+        var r = [];
+        for (var o in objs) if (geomType(c, o) == sel.ty) r = append(r, o);
+        return r;
+    }
+    if (k == "dir" || k == "par" || k == "perp") {     // BaseDirSelector subclasses
+        const d = v3(sel.v);
+        var r = [];
+        for (var o in objs) {
+            var tv;
+            if (o.t == "face" && faceGeom(c, o.q) == "PLANE") tv = faceNormal0(c, o.q);
+            else if (o.t == "edgeq" && edgeGeom(c, o.q) == "LINE") tv = edgeTangent(c, o.q);
+            else continue;
+            var ok;
+            if (k == "par") ok = norm(cross(d, tv)) < CQTOL;
+            else {
+                const ang = acos(max(-1, min(1, dot(d, tv) / (norm(d) * norm(tv))))) / radian;
+                ok = (k == "dir") ? ang < CQTOL : abs(ang - PI / 2) < CQTOL;
+            }
+            if (ok) r = append(r, o);
+        }
+        return r;
+    }
+    if (k == "nth") {     // _NthSelector.filter / cluster; key "center" (CenterNth), "radius", "length", "area"
+        var pool = objs;
+        if (sel.parallel == true) pool = self(self, c, {"k": "par", "v": sel.v}, objs);
+        if (size(pool) == 0) cqErr("Can not return the Nth element of an empty list");
+        var keyed = [];
+        for (var o in pool) {
+            var key;
+            if (sel.key == "center") key = dot(objCenter(c, o), v3(sel.v));
+            else if (sel.key == "radius") {
+                if (o.t != "edgeq") continue;
+                const cd = evCurveDefinition(c, {"edge": o.q});
+                if (!(cd is Circle)) continue;
+                key = cd.radius / MM;
+            } else if (sel.key == "length") {
+                if (o.t != "edgeq") cqErr("LengthNthSelector supports only Edges and Wires");
+                key = evLength(c, {"entities": o.q}) / MM;
+            } else if (sel.key == "area") {
+                if (o.t != "face" && o.t != "solid") cqErr("AreaNthSelector: unsupported object");
+                key = evArea(c, {"entities": o.t == "face" ? o.q : qOwnedByBody(o.q, EntityType.FACE)}) / (MM * MM);
+            }
+            keyed = append(keyed, {"key": key, "o": o, "i": size(keyed)});
+        }
+        if (size(keyed) == 0) cqErr("Can not return the Nth element of an empty list");
+        keyed = sort(keyed, function(a, b) { return (a.key != b.key) ? a.key - b.key : a.i - b.i; });
+        var clusters = [[keyed[0].o]];
+        var start = keyed[0].key;
+        for (var j = 1; j < size(keyed); j += 1) {
+            if (abs(keyed[j].key - start) <= CQTOL) clusters[size(clusters) - 1] = append(clusters[size(clusters) - 1], keyed[j].o);
+            else { clusters = append(clusters, [keyed[j].o]); start = keyed[j].key; }
+        }
+        if (sel.max != true) {
+            var rev = [];
+            for (var j = size(clusters) - 1; j >= 0; j -= 1) rev = append(rev, clusters[j]);
+            clusters = rev;
+        }
+        var n = sel.n;
+        if (n < 0) n += size(clusters);
+        if (n < 0 || n >= size(clusters)) cqErr("Attempted to access index " ~ sel.n ~ " of a list with length " ~ size(clusters));
+        return clusters[n];
+    }
+    cqUnsup("selector " ~ k);
+};
+const select = function(c, st, w, kind, sel, tagW) {    // Workplane._selectObjects
+    const src = (tagW == undefined) ? w : tagW;
+    const objs = collect(c, src.objs, kind);
+    if (sel == undefined) return objs;
+    return selFilter(selFilter, c, sel, objs);
+};
+
+// ---- _findType((Solid,), searchStack, searchParents): the solids as one query, or undefined
+const findSolidQ = function(st, i, searchStack, searchParents) {
+    var cur = i;
+    var first = true;
+    while (cur != undefined) {
+        const w = wpGet(st, cur);
+        if (searchStack || !first) {
+            var qs = [];
+            for (var o in w.objs) if (o.t == "solid") qs = append(qs, o.q);
+            if (size(qs) > 0) return qUnion(qs);
+        }
+        first = false;
+        if (!searchParents) break;
+        cur = w.parent;
+    }
+    return undefined;
+};
+const findSolid = function(st, i) {
+    const q = findSolidQ(st, i, true, true);
+    if (q == undefined) cqErr("Cannot find a solid on the stack or in the parent chain");
+    return q;
+};
+
+// ---- body operations, always on copies
+const copyBodies = function(c, st, q, T) {
+    if (size(ents(c, q)) == 0) cqErr("no bodies to copy");
+    const id = nid(st, "cp");
+    opPattern(c, id, {"entities": q, "transforms": [T == undefined ? identityTransform() : T], "instanceNames": ["i"]});
+    return qCreatedBy(id, EntityType.BODY);
+};
+// copy `base` with its selected entities tagged, so the copies' entities can be found
+const copyWithEntities = function(c, st, base, entsQ) {
+    const tagv = "s" ~ st[].n;
+    var all = [];
+    for (var e in entsQ) all = append(all, e.q);
+    if (size(all) > 0) setAttribute(c, {"entities": qUnion(all), "name": "cqsel", "attribute": tagv});
+    const b = copyBodies(c, st, base, undefined);
+    return {"base": b, "tag": tagv};
+};
+const taggedIn = function(body, kind, tagv) {
+    return qHasAttributeWithValue(qOwnedByBody(body, kind), "cqsel", tagv);
+};
+const boolOp = function(c, st, kind, baseQ, toolQ) {
+    const b = copyBodies(c, st, baseQ, undefined);
+    if (toolQ == undefined || size(ents(c, toolQ)) == 0) {
+        if (kind == "union") return b;
+        if (kind == "cut") return b;
+        cqErr("intersect with nothing");
+    }
+    const t = copyBodies(c, st, toolQ, undefined);
+    if (kind == "union") {
+        opBoolean(c, nid(st, "bo"), {"tools": qUnion([b, t]), "operationType": BooleanOperationType.UNION});
+        return qUnion([b, t]);
+    }
+    if (kind == "cut") {
+        opBoolean(c, nid(st, "bo"), {"targets": b, "tools": t, "operationType": BooleanOperationType.SUBTRACTION});
+        return b;
+    }
+    if (kind == "intersect") {
+        // the tools are consumed, as SUBTRACTION's are
+        opBoolean(c, nid(st, "bo"), {"targets": b, "tools": t, "operationType": BooleanOperationType.SUBTRACT_COMPLEMENT});
+        return b;
+    }
+    cqErr("boolean " ~ kind);
+};
+// Compound.fuse() of a compound with itself: merge its overlapping solids
+const selfFuse = function(c, st, q) {
+    if (size(ents(c, q)) < 2) return q;
+    const b = copyBodies(c, st, q, undefined);
+    opBoolean(c, nid(st, "bo"), {"tools": b, "operationType": BooleanOperationType.UNION});
+    return b;
+};
+const solidObj = function(q) { return {"t": "solid", "q": q}; };
+const isShapeObj = function(o) { return o.t == "solid" || o.t == "face" || o.t == "edgeq" || o.t == "vertex" || o.t == "wire" || o.t == "edge"; };
+
+// ---- faces from pending wires (wiresToFaces) as sketch regions; or selected faces
+// Edge.makeSpline through the points (GeomAPI_Interpolate in CadQuery): Onshape's fit spline
+// through the same points, with the end tangents where given. Both interpolate, but OCCT's
+// parametrization may not be Onshape's: the result carries a warning.
+const cqSkSpline = function(sk, nm, e, to2, P, st) {
+    warn(st, "spline: Onshape's interpolation through the points, not OCCT's GeomAPI_Interpolate");
+    var pts = [];
+    for (var p in e.pts) pts = append(pts, to2(p));
+    var def = {"points": pts};
+    if (e.periodic == true) def.closed = true;
+    if (e.tans != undefined && size(e.tans) >= 2) {
+        const d2 = function(d) { const l = plL(P, P.o + d); return vector(l[0], l[1]) * MM; };
+        if (e.tans[0] != undefined) def.startDerivative = d2(e.tans[0]);
+        if (e.tans[size(e.tans) - 1] != undefined) def.endDerivative = d2(e.tans[size(e.tans) - 1]);
+        if (size(e.tans) > 2) warn(st, "spline: tangents at inner points not given to Onshape");
+    }
+    skFitSpline(sk, nm, def);
+};
+
+const sketchRegions = function(c, st, wires) {
+    const P = wPlane(wires[0]);
+    const scale = 1;
+    for (var w in wires) {
+        if (!w.closed) cqErr("Cannot build face(s): wire is not closed");
+        for (var p in wPoints(w)) if (abs(dot(p - P.o, P.z)) > 1e-6 * max(1, norm(p))) cqErr("Cannot build face(s): wires not planar");
+        for (var e in w.edges) if (e.k == "circle" || e.k == "ellipse") if (norm(cross(unitOf(e.n), P.z)) > 1e-9) cqErr("Cannot build face(s): wires not planar");
+    }
+    const id = nid(st, "sk");
+    var sk = newSketchOnPlane(c, id, {"sketchPlane": plane(P.o * MM, P.z, P.x)});
+    const to2 = function(p) { const l = plL(P, p); return vector(l[0], l[1]) * MM; };
+    var j = 0;
+    for (var w in wires) {
+        for (var e in w.edges) {
+            j += 1;
+            const nm = "e" ~ j;
+            if (e.k == "line") {
+                if (norm(e.b - e.a) > 1e-9) skLineSegment(sk, nm, {"start": to2(e.a), "end": to2(e.b)});
+            } else if (e.k == "arc") skArc(sk, nm, {"start": to2(e.a), "mid": to2(e.m), "end": to2(e.b)});
+            else if (e.k == "circle") skCircle(sk, nm, {"center": to2(e.c), "radius": e.r * MM});
+            else if (e.k == "ellipse") {
+                const xa = plL(P, P.o + e.xa);
+                var major = vector(xa[0], xa[1]);
+                var r1 = e.r1; var r2 = e.r2;
+                if (r2 > r1) { major = vector(-major[1], major[0]); r1 = e.r2; r2 = e.r1; }
+                skEllipse(sk, nm, {"center": to2(e.c), "majorRadius": r1 * MM, "minorRadius": r2 * MM, "majorAxis": normalize(major)});
+            } else if (e.k == "spline") cqSkSpline(sk, nm, e, to2, P, st);
+        }
+    }
+    skSolve(sk);
+    const regions = qSketchRegion(id, true);
+    const n = size(ents(c, regions));
+    if (n == 0) cqErr("Cannot build face(s): no closed region");
+    // a wire inside another: its region a hole in the other's face (an inner wire)
+    return {"q": regions, "inner": size(ents(c, qSketchRegion(id, false))) > n};
+};
+const getFaces = function(c, st, selfI) {     // Workplane._getFaces
+    const w = wpGet(st, selfI);
+    var fq = [];
+    for (var o in w.objs) if (o.t == "face") fq = append(fq, o.q);
+    if (size(fq) > 0) {
+        warn(st, "faces on the stack extruded: inner wires not checked for a taper");
+        return {"q": qUnion(fq), "inner": false};
+    }
+    var cx = ctxGet(st, w);
+    if (size(cx.pw) == 0) cqErr("No pending wires present");
+    const wires = cx.pw;
+    cx.pw = [];
+    ctxPut(st, w, cx);
+    return sketchRegions(c, st, wires);
+};
+
+// ---- eachpoint's placements (useLocalCoordinates=True): one world Transform per stack object
+const placements = function(c, w) {
+    const L = plT(w.plane);
+    if (size(w.objs) == 0) return [L];
+    var out = [];
+    for (var o in w.objs) {
+        if (o.t == "loc") out = append(out, L * o.T);
+        else out = append(out, plT(plMake(objCenter(c, o), w.plane.x, w.plane.z)));
+    }
+    return out;
+};
+const addPendingWires = function(st, w, wires) {
+    var cx = ctxGet(st, w);
+    for (var x in wires) if (x.constr != true) cx.pw = append(cx.pw, x);
+    ctxPut(st, w, cx);
+};
+const addPendingEdge = function(st, w, e) {    // Workplane._addPendingEdge
+    var cx = ctxGet(st, w);
+    cx.pe = append(cx.pe, e);
+    if (cx.fp == undefined) cx.fp = plL(w.plane, eStart(e));
+    ctxPut(st, w, cx);
+};
+const fromPoint = function(c, w, useLocal) {    // Workplane._findFromPoint
+    var p;
+    if (size(w.objs) == 0) p = w.plane.o;
+    else {
+        const o = w.objs[size(w.objs) - 1];
+        if (o.t == "edge") p = eEnd(o);
+        else if (o.t == "vec") p = o.p;
+        else if (o.t == "vertex") p = objCenter(c, o);
+        else cqErr("Cannot convert object type " ~ o.t ~ " to vector.");
+    }
+    return useLocal ? plL(w.plane, p) : p;
+};
+
+// ---- _combineWithBase(obj, mode, clean)
+const combineWithBase = function(c, st, out, selfI, q, mode) {
+    if (mode == true || mode == "a") {          // _fuseWithBase
+        const base = findSolidQ(st, selfI, true, true);
+        if (base != undefined) newObject(st, out, selfI, [solidObj(boolOp(c, st, "union", base, q))]);
+        else newObject(st, out, selfI, [solidObj(selfFuse(c, st, q))]);
+    } else if (mode == "cut" || mode == "s") {  // _cutFromBase
+        const base = findSolidQ(st, selfI, true, true);
+        if (base != undefined) newObject(st, out, selfI, [solidObj(boolOp(c, st, "cut", base, q))]);
+        else newObject(st, out, selfI, [solidObj(q)]);
+    } else if (mode == false) newObject(st, out, selfI, [solidObj(q)]);
+    else cqErr("combine mode " ~ toString(mode));
+};
+
+// a Workplane argument's shapes (_selectShapes(wp.vals())) or a shape value
+const argShapes = function(c, st, a) {
+    if (a is map && a.wp != undefined) return wpGet(st, a.wp).objs;
+    if (a is map && a.shape != undefined) return [shapeGet(st, a.shape)];
+    cqErr("not a shape argument: " ~ toString(a));
+};
+const solidsQ = function(c, objs) {
+    var qs = [];
+    for (var o in objs) if (o.t == "solid") qs = append(qs, o.q);
+    return size(qs) == 0 ? undefined : qUnion(qs);
+};
+
+// ================================================================================================
+// Workplane methods. Each: (c, st, out, selfI, a) with a = the bound arguments.
+
+const cqWorkplaneNew = function(c, st, out, a) {      // Workplane.__init__
+    var s = st[];
+    const ci = size(s.ctx);
+    s.ctx = append(s.ctx, {"pw": [], "pe": [], "fp": undefined, "tags": {}});
+    st[] = s;
+    var objs = [];
+    if (a.obj != undefined) objs = argShapes(c, st, a.obj);
+    wpPut(st, out, {"plane": plFromTape(a.plane), "objs": objs, "parent": undefined, "ctx": ci});
+};
+
+const cqWorkplane = function(c, st, out, selfI, a) {   // Workplane.workplane
+    const w = wpGet(st, selfI);
+    const computeXdir = function(normal) {
+        var xd = cross(vector(0, 0, 1), normal);
+        if (norm(xd) < CQTOL) xd = vector(1, 0, 0);
+        return xd;
+    };
+    var center; var normal; var xDir;
+    if (size(w.objs) > 1) {
+        var fqs = [];
+        for (var o in w.objs) {
+            if (o.t != "face" || (faceGeom(c, o.q) != "PLANE")) cqErr("If multiple objects selected, they all must be planar faces.");
+            fqs = append(fqs, o.q);
+        }
+        const n0 = faceNormal0(c, fqs[0]);
+        const p0 = centroid(c, fqs[0]);
+        for (var j = 1; j < size(fqs); j += 1) {
+            const n1 = faceNormal0(c, fqs[j]);
+            const p1 = centroid(c, fqs[j]);
+            const dn = n0 - n1;
+            if (!(abs(dn[0]) < CQTOL || abs(dn[1]) < CQTOL || abs(dn[2]) < CQTOL)) cqErr("Selected faces must be co-planar.");
+            if (abs(dot(n0, p0 - p1)) >= CQTOL) cqErr("Selected faces must be co-planar.");
+        }
+        if (a.centerOption == "CenterOfBoundBox") {
+            const bb = evBox3d(c, {"topology": qUnion(fqs), "tight": true});
+            center = unlen((bb.minCorner + bb.maxCorner) / 2);
+            warn(st, "CenterOfBoundBox: Onshape's tight box, CadQuery's is OCCT's (enlarged)");
+        } else center = centroid(c, qUnion(fqs));
+        normal = n0;
+        xDir = computeXdir(normal);
+    } else {
+        const obj = (size(w.objs) == 0) ? {"t": "vec", "p": w.plane.o} : w.objs[0];
+        if (obj.t == "face") {
+            if (a.centerOption == "CenterOfBoundBox") {
+                const bb = evBox3d(c, {"topology": obj.q, "tight": true});
+                center = unlen((bb.minCorner + bb.maxCorner) / 2);
+                warn(st, "CenterOfBoundBox: Onshape's tight box, CadQuery's is OCCT's (enlarged)");
+            } else center = objCenter(c, obj);
+            normal = faceNormalAt(c, obj.q, center);
+            xDir = computeXdir(normal);
+        } else if (obj.t == "vec" || isShapeObj(obj)) {
+            if (a.centerOption == "CenterOfBoundBox" && obj.t != "vec") {
+                const bb = evBox3d(c, {"topology": bodiesOf(c, obj), "tight": true});
+                center = unlen((bb.minCorner + bb.maxCorner) / 2);
+                warn(st, "CenterOfBoundBox: Onshape's tight box, CadQuery's is OCCT's (enlarged)");
+            } else center = objCenter(c, obj);
+            var pv = undefined;
+            if (w.parent != undefined) {
+                const pw = wpGet(st, w.parent);
+                if (size(pw.objs) > 0) pv = pw.objs[0];
+            }
+            if (pv != undefined && pv.t == "face") {
+                normal = faceNormalAt(c, pv.q, center);
+                xDir = computeXdir(normal);
+            } else {
+                normal = w.plane.z;
+                xDir = w.plane.x;
+            }
+        } else cqErr("Needs a face or a vertex or point on a work plane");
+    }
+    if (a.centerOption == "ProjectedOrigin") {
+        const orig = (a.origin == undefined) ? w.plane.o : v3(a.origin);
+        center = orig - normal * (dot(orig - center, normal) / dot(normal, normal));
+    } else if (a.centerOption != "CenterOfMass" && a.centerOption != "CenterOfBoundBox") cqErr("Undefined centerOption value provided.");
+    if (a.invert == true) normal = -normal;
+    const offsetCenter = center + normalize(normal) * a.offset;
+    wpPut(st, out, {"plane": plMake(offsetCenter, xDir, normal), "objs": [], "parent": selfI, "ctx": w.ctx});
+};
+
+const cqTransformed = function(c, st, out, selfI, a) {   // Workplane.transformed
+    const w = wpGet(st, selfI);
+    var p = plRotated(w.plane, a.rotate);
+    p.o = plW(w.plane, a.offset);
+    wpPut(st, out, {"plane": p, "objs": [{"t": "vec", "p": p.o}], "parent": selfI, "ctx": w.ctx});
+};
+
+const cqCenter = function(c, st, out, selfI, a) {   // Workplane.center
+    const w = wpGet(st, selfI);
+    const o = plW(w.plane, [a.x, a.y]);
+    var p = w.plane;
+    p.o = o;
+    wpPut(st, out, {"plane": p, "objs": [{"t": "vec", "p": o}], "parent": selfI, "ctx": w.ctx});
+};
+
+const cqMoveTo = function(c, st, out, selfI, a) {   // Workplane.moveTo
+    const w = wpGet(st, selfI);
+    newObject(st, out, selfI, [{"t": "vec", "p": plW(w.plane, [a.x, a.y, 0])}]);
+};
+
+const cqMove = function(c, st, out, selfI, a) {     // Workplane.move
+    const w = wpGet(st, selfI);
+    const p = fromPoint(c, w, true);
+    newObject(st, out, selfI, [{"t": "vec", "p": plW(w.plane, p + vector(a.xDist, a.yDist, 0))}]);
+};
+
+const pushPts = function(c, st, out, selfI, pts) {   // Workplane.pushPoints
+    const w = wpGet(st, selfI);
+    var objs = [];
+    for (var p in pts) {
+        if (p is map && p.loc != undefined) objs = append(objs, {"t": "loc", "T": locFromTape(p.loc)});
+        else objs = append(objs, {"t": "vec", "p": plW(w.plane, p)});
+    }
+    newObject(st, out, selfI, objs);
+};
+const cqPushPoints = function(c, st, out, selfI, a) { pushPts(c, st, out, selfI, a.pntList); };
+
+const cqRarray = function(c, st, out, selfI, a) {   // Workplane.rarray
+    if ((a.xSpacing <= 0 && a.ySpacing <= 0) || a.xCount < 1 || a.yCount < 1) cqErr("Spacing and count must be > 0 in at least one direction");
+    const cen = (a.center is boolean) ? [a.center, a.center] : a.center;
+    var pts = [];
+    for (var x = 0; x < a.xCount; x += 1)
+        for (var y = 0; y < a.yCount; y += 1)
+            pts = append(pts, [a.xSpacing * x - (cen[0] ? a.xSpacing * (a.xCount - 1) * 0.5 : 0),
+                               a.ySpacing * y - (cen[1] ? a.ySpacing * (a.yCount - 1) * 0.5 : 0)]);
+    pushPts(c, st, out, selfI, pts);
+};
+
+const pyRemainder = function(x, y) {   // math.remainder (IEEE): x - n*y, n the nearest integer (ties to even)
+    const q = x / y;
+    var n = round(q);
+    if (abs(q - floor(q) - 0.5) < 1e-15) n = (floor(q) % 2 == 0) ? floor(q) : floor(q) + 1;
+    return x - n * y;
+};
+const cqPolarArray = function(c, st, out, selfI, a) {   // Workplane.polarArray
+    if (a.count < 1) cqErr("At least 1 element required");
+    var angle = a.angle;
+    if (a.fill) {
+        if (abs(pyRemainder(angle, 360)) < TOL6) angle = angle / a.count;
+        else angle = (a.count > 1) ? angle / (a.count - 1) : a.startAngle;
+    }
+    var locs = [];
+    for (var i = 0; i < a.count; i += 1) {
+        const phi = a.startAngle + angle * i;
+        const x = a.radius * cos(phi * degree);
+        const y = a.radius * sin(phi * degree);
+        const R = a.rotate ? rotationMatrix3d(vector(0, 0, 1), phi * degree) : identityMatrix(3);
+        locs = append(locs, {"loc": {"R": [[R[0][0], R[0][1], R[0][2]], [R[1][0], R[1][1], R[1][2]], [R[2][0], R[2][1], R[2][2]]], "t": [x, y, 0]}});
+    }
+    pushPts(c, st, out, selfI, locs);
+};
+
+// 2D: wires made at every placement (eachpoint), added to pending wires
+const placeWire = function(c, st, out, selfI, localWire) {
+    const w = wpGet(st, selfI);
+    var objs = [];
+    for (var T in placements(c, w)) objs = append(objs, wXform(T, localWire));
+    addPendingWires(st, w, objs);
+    newObject(st, out, selfI, objs);
+};
+const polyWire = function(pts, constr) {
+    var es = [];
+    for (var i = 0; i + 1 < size(pts); i += 1) es = append(es, eLine(pts[i], pts[i + 1]));
+    return {"t": "wire", "edges": es, "closed": norm(pts[0] - pts[size(pts) - 1]) < 1e-9, "constr": constr};
+};
+const cqRect = function(c, st, out, selfI, a) {   // Workplane.rect
+    const cen = (a.centered is boolean) ? [a.centered, a.centered] : a.centered;
+    const off = vector(cen[0] ? 0 : a.xLen / 2, cen[1] ? 0 : a.yLen / 2, 0);
+    const pts = [vector(-a.xLen / 2, -a.yLen / 2, 0) + off, vector(a.xLen / 2, -a.yLen / 2, 0) + off,
+                 vector(a.xLen / 2, a.yLen / 2, 0) + off, vector(-a.xLen / 2, a.yLen / 2, 0) + off];
+    placeWire(c, st, out, selfI, polyWire(append(pts, pts[0]), a.forConstruction));
+};
+const cqCircle = function(c, st, out, selfI, a) {   // Workplane.circle
+    if (a.radius <= 0) cqErr("circle radius must be positive");
+    placeWire(c, st, out, selfI, {"t": "wire", "closed": true, "constr": a.forConstruction,
+        "edges": [{"t": "edge", "k": "circle", "c": vector(0, 0, 0), "n": vector(0, 0, 1), "r": a.radius, "s": vector(a.radius, 0, 0)}]});
+};
+const cqPolygon = function(c, st, out, selfI, a) {   // Workplane.polygon
+    const angle = 2 * PI / a.nSides;
+    var radius = a.diameter / 2;
+    if (a.circumscribed) radius /= cos(angle / 2 * radian);
+    var pts = [];
+    for (var i = 0; i <= a.nSides; i += 1) {
+        var o = angle * i;
+        if (a.circumscribed) o += angle / 2;
+        pts = append(pts, vector(radius * cos(o * radian), radius * sin(o * radian), 0));
+    }
+    placeWire(c, st, out, selfI, polyWire(pts, a.forConstruction));
+};
+const cqEllipse = function(c, st, out, selfI, a) {   // Workplane.ellipse (closed)
+    const xa = rotationMatrix3d(vector(0, 0, 1), a.rotation_angle * degree) * vector(1, 0, 0);
+    placeWire(c, st, out, selfI, {"t": "wire", "closed": true, "constr": a.forConstruction,
+        "edges": [{"t": "edge", "k": "ellipse", "c": vector(0, 0, 0), "n": vector(0, 0, 1), "xa": xa, "r1": a.x_radius, "r2": a.y_radius, "s": xa * a.x_radius}]});
+};
+
+// edges drawn one at a time (pending edges)
+const drawEdge = function(c, st, out, selfI, e, constr) {
+    const w = wpGet(st, selfI);
+    if (constr != true) addPendingEdge(st, w, e);
+    newObject(st, out, selfI, [e]);
+};
+const cqLineTo = function(c, st, out, selfI, a) {    // Workplane.lineTo
+    const w = wpGet(st, selfI);
+    drawEdge(c, st, out, selfI, eLine(fromPoint(c, w, false), plW(w.plane, [a.x, a.y])), a.forConstruction);
+};
+const cqLine = function(c, st, out, selfI, a) {      // Workplane.line
+    const w = wpGet(st, selfI);
+    const p = fromPoint(c, w, true);
+    cqLineTo(c, st, out, selfI, {"x": a.xDist + p[0], "y": a.yDist + p[1], "forConstruction": a.forConstruction});
+};
+const cqHLine = function(c, st, out, selfI, a) { cqLine(c, st, out, selfI, {"xDist": a.distance, "yDist": 0, "forConstruction": a.forConstruction}); };
+const cqVLine = function(c, st, out, selfI, a) { cqLine(c, st, out, selfI, {"xDist": 0, "yDist": a.distance, "forConstruction": a.forConstruction}); };
+const cqHLineTo = function(c, st, out, selfI, a) {
+    const p = fromPoint(c, wpGet(st, selfI), true);
+    cqLineTo(c, st, out, selfI, {"x": a.xCoord, "y": p[1], "forConstruction": a.forConstruction});
+};
+const cqVLineTo = function(c, st, out, selfI, a) {
+    const p = fromPoint(c, wpGet(st, selfI), true);
+    cqLineTo(c, st, out, selfI, {"x": p[0], "y": a.yCoord, "forConstruction": a.forConstruction});
+};
+const cqPolarLine = function(c, st, out, selfI, a) {
+    cqLine(c, st, out, selfI, {"xDist": cos(a.angle * degree) * a.distance, "yDist": sin(a.angle * degree) * a.distance, "forConstruction": a.forConstruction});
+};
+const cqPolarLineTo = function(c, st, out, selfI, a) {
+    cqLineTo(c, st, out, selfI, {"x": cos(a.angle * degree) * a.distance, "y": sin(a.angle * degree) * a.distance, "forConstruction": a.forConstruction});
+};
+const cqThreePointArc = function(c, st, out, selfI, a) {   // Workplane.threePointArc
+    const w = wpGet(st, selfI);
+    drawEdge(c, st, out, selfI, eArc(fromPoint(c, w, false), plW(w.plane, a.point1), plW(w.plane, a.point2)), a.forConstruction);
+};
+const cqPolyline = function(c, st, out, selfI, a) {   // Workplane.polyline
+    const w = wpGet(st, selfI);
+    var start; var pts;
+    if (a.includeCurrent) { start = fromPoint(c, w, false); pts = a.listOfXYTuple; }
+    else {
+        start = plW(w.plane, a.listOfXYTuple[0]);
+        pts = subArray(a.listOfXYTuple, 1, size(a.listOfXYTuple));
+    }
+    var edges = [];
+    for (var t in pts) {
+        const e = plW(w.plane, t);
+        const ed = eLine(start, e);
+        edges = append(edges, ed);
+        start = e;
+        if (!a.forConstruction) addPendingEdge(st, w, ed);
+    }
+    newObject(st, out, selfI, edges);
+};
+const cqWire = function(c, st, out, selfI, a) {       // Workplane.wire
+    const w = wpGet(st, selfI);
+    var cx = ctxGet(st, w);
+    if (size(cx.pe) == 0) { wpPut(st, out, w); return; }
+    const edges = cx.pe;
+    cx.pe = [];
+    ctxPut(st, w, cx);
+    // Wire.assembleEdges: the edges in order, connected end to start
+    for (var i = 0; i + 1 < size(edges); i += 1)
+        if (norm(eEnd(edges[i]) - eStart(edges[i + 1])) > 1e-6) cqErr("assembleEdges: edges are not connected");
+    const closed = norm(eEnd(edges[size(edges) - 1]) - eStart(edges[0])) < 1e-6;
+    const wire = {"t": "wire", "edges": edges, "closed": closed, "constr": a.forConstruction};
+    if (!a.forConstruction) addPendingWires(st, w, [wire]);
+    var others = [];
+    for (var o in w.objs) if (o.t != "edge") others = append(others, o);
+    newObject(st, out, selfI, append(others, wire));
+};
+const cqClose = function(c, st, out, selfI, a) {      // Workplane.close
+    const w = wpGet(st, selfI);
+    const endPoint = fromPoint(c, w, true);
+    const cx = ctxGet(st, w);
+    if (cx.fp == undefined) cqErr("No start point specified - cannot close");
+    const startPoint = cx.fp;
+    if (norm(endPoint - startPoint) > 1e-6) {
+        // self.polyline([endPoint, startPoint]): its result is discarded, its edge stays pending
+        addPendingEdge(st, w, eLine(plW(w.plane, endPoint), plW(w.plane, startPoint)));
+    }
+    var cx2 = ctxGet(st, w);
+    cx2.fp = undefined;
+    ctxPut(st, w, cx2);
+    cqWire(c, st, out, selfI, {"forConstruction": false});
+};
+
+// 3D
+// Solid.extrudeLinear's taper (LocOpe_DPrism, its height divided by cos(taper) so the solid is
+// `dist` tall): every side face leans in by `taper` degrees from the extrusion's direction,
+// about the face it starts from; out for a negative taper. Onshape's extrude does the same with
+// opDraft about its start cap (std extrude.fs, extrudeWithDraft).
+const taperDraft = function(c, st, id, dir, taper) {
+    for (var b in ents(c, qCreatedBy(id, EntityType.BODY))) {
+        const start = qOwnedByBody(qCapEntity(id, CapType.START, EntityType.FACE), b);
+        const end = qOwnedByBody(qCapEntity(id, CapType.END, EntityType.FACE), b);
+        opDraft(c, nid(st, "dr"), {"draftType": DraftType.NEUTRAL_PLANE, "neutralPlane": start,
+                                   "draftFaces": qSubtraction(qOwnedByBody(b, EntityType.FACE), qUnion([start, end])),
+                                   "pullVec": dir * (taper > 0 ? 1 : -1), "angle": abs(taper) * degree,
+                                   "tangentPropagation": false, "reFillet": false});
+    }
+};
+const extrudeRaw = function(c, st, selfI, dist, both, taper) {   // Workplane._extrude (distance)
+    const w = wpGet(st, selfI);
+    const faces = getFaces(c, st, selfI);
+    if (abs(dist) < 1e-12) cqErr("extrude distance is zero");
+    const t = (taper == undefined) ? 0 : taper;
+    const dir = w.plane.z * (dist > 0 ? 1 : -1);
+    if (t == 0) {
+        const id = nid(st, "ex");
+        var def = {"entities": faces.q, "direction": dir, "endBound": BoundingType.BLIND, "endDepth": abs(dist) * MM};
+        if (both) { def.startBound = BoundingType.BLIND; def.startDepth = abs(dist) * MM; }
+        opExtrude(c, id, def);
+        return qCreatedBy(id, EntityType.BODY);
+    }
+    if (faces.inner) cqErr("Inner wires not allowed with tapered extrusion");
+    // each way its own tapered extrusion (both: s1 fused with s2)
+    var qs = [];
+    for (var d in (both ? [dir, -dir] : [dir])) {
+        const id = nid(st, "ex");
+        opExtrude(c, id, {"entities": faces.q, "direction": d, "endBound": BoundingType.BLIND, "endDepth": abs(dist) * MM});
+        taperDraft(c, st, id, d, t);
+        qs = append(qs, qCreatedBy(id, EntityType.BODY));
+    }
+    if (size(qs) > 1) opBoolean(c, nid(st, "bo"), {"tools": qUnion(qs), "operationType": BooleanOperationType.UNION});
+    return qUnion(qs);
+};
+const cqCutBlind = function(c, st, out, selfI, a) {   // Workplane.cutBlind
+    if (!(a.until is number)) cqUnsup("cutBlind until " ~ toString(a.until));
+    const toCut = extrudeRaw(c, st, selfI, a.until, a.both == true, a.taper);
+    const base = findSolid(st, selfI);
+    newObject(st, out, selfI, [solidObj(boolOp(c, st, "cut", base, toCut))]);
+};
+const cqExtrude = function(c, st, out, selfI, a) {    // Workplane.extrude
+    if (a.combine == "cut" || a.combine == "s") return cqCutBlind(c, st, out, selfI, {"until": a.until, "both": a.both, "taper": a.taper});
+    if (!(a.until is number)) cqUnsup("extrude until " ~ toString(a.until));
+    const r = extrudeRaw(c, st, selfI, a.until, a.both == true, a.taper);
+    combineWithBase(c, st, out, selfI, r, a.combine);
+};
+const cqCutThruAll = function(c, st, out, selfI, a) {   // Workplane.cutThruAll: both directions
+    if (a.taper != 0) cqUnsup("cutThruAll with a taper");
+    const w = wpGet(st, selfI);
+    const base = findSolid(st, selfI);
+    const faces = getFaces(c, st, selfI).q;
+    const bb = evBox3d(c, {"topology": qUnion([base, faces]), "tight": false});
+    const depth = norm(bb.maxCorner - bb.minCorner) / MM * 2 + 1;
+    const id = nid(st, "ex");
+    opExtrude(c, id, {"entities": faces, "direction": w.plane.z, "endBound": BoundingType.BLIND, "endDepth": depth * MM,
+                      "startBound": BoundingType.BLIND, "startDepth": depth * MM});
+    newObject(st, out, selfI, [solidObj(boolOp(c, st, "cut", base, qCreatedBy(id, EntityType.BODY)))]);
+};
+const largestDimension = function(c, st, selfI) {   // findSolid().BoundingBox().DiagonalLength
+    const bb = evBox3d(c, {"topology": findSolid(st, selfI), "tight": false});
+    return norm(bb.maxCorner - bb.minCorner) / MM;
+};
+// a cylinder (radius r, along local -Z from local z0 to z0 - h) placed by T
+const cylAlongNegZ = function(c, st, T, r, z0, h) {
+    const id = nid(st, "cy");
+    fCylinder(c, id, {"bottomCenter": T * (vector(0, 0, z0 - h) * MM), "topCenter": T * (vector(0, 0, z0) * MM), "radius": r * MM});
+    return qCreatedBy(id, EntityType.BODY);
+};
+const cutEach = function(c, st, out, selfI, toolsAt) {   // Workplane.cutEach
+    const w = wpGet(st, selfI);
+    const base = findSolid(st, selfI);
+    var tools = [];
+    for (var T in placements(c, w)) tools = append(tools, toolsAt(T));
+    newObject(st, out, selfI, [solidObj(boolOp(c, st, "cut", base, qUnion(tools)))]);
+};
+const cqHole = function(c, st, out, selfI, a) {     // Workplane.hole
+    const depth = (a.depth == undefined) ? largestDimension(c, st, selfI) : a.depth;
+    cutEach(c, st, out, selfI, function(T) { return cylAlongNegZ(c, st, T, a.diameter / 2, 0, depth); });
+};
+const cqCboreHole = function(c, st, out, selfI, a) {   // Workplane.cboreHole
+    const depth = (a.depth == undefined) ? largestDimension(c, st, selfI) : a.depth;
+    cutEach(c, st, out, selfI, function(T) {
+        return qUnion([cylAlongNegZ(c, st, T, a.diameter / 2, 0, depth), cylAlongNegZ(c, st, T, a.cboreDiameter / 2, 0, a.cboreDepth)]);
+    });
+};
+const cqCskHole = function(c, st, out, selfI, a) {     // Workplane.cskHole
+    const depth = (a.depth == undefined) ? largestDimension(c, st, selfI) : a.depth;
+    const r = a.cskDiameter / 2;
+    const h = r / tan(a.cskAngle / 2 * degree);
+    cutEach(c, st, out, selfI, function(T) {
+        const id = nid(st, "co");
+        fCone(c, id, {"bottomCenter": T * (vector(0, 0, 0) * MM), "topCenter": T * (vector(0, 0, -h) * MM), "bottomRadius": r * MM, "topRadius": 0 * MM});
+        return qUnion([cylAlongNegZ(c, st, T, a.diameter / 2, 0, depth), qCreatedBy(id, EntityType.BODY)]);
+    });
+};
+const solidsAtPlacements = function(c, st, out, selfI, a, make) {   // eachpoint(..., True, combine, clean)
+    const w = wpGet(st, selfI);
+    var qs = [];
+    for (var T in placements(c, w)) qs = append(qs, make(T));
+    combineWithBase(c, st, out, selfI, qUnion(qs), a.combine);
+};
+const cqBox = function(c, st, out, selfI, a) {      // Workplane.box
+    const cen = (a.centered is boolean) ? [a.centered, a.centered, a.centered] : a.centered;
+    const off = vector(cen[0] ? -a.length / 2 : 0, cen[1] ? -a.width / 2 : 0, cen[2] ? -a.height / 2 : 0);
+    if (a.length <= 0 || a.width <= 0 || a.height <= 0) cqErr("box with a non-positive dimension");
+    solidsAtPlacements(c, st, out, selfI, a, function(T) {
+        const id = nid(st, "bx");
+        fCuboid(c, id, {"corner1": off * MM, "corner2": (off + vector(a.length, a.width, a.height)) * MM});
+        opTransform(c, nid(st, "tr"), {"bodies": qCreatedBy(id, EntityType.BODY), "transform": T});
+        return qCreatedBy(id, EntityType.BODY);
+    });
+};
+const cqSphere = function(c, st, out, selfI, a) {   // Workplane.sphere (whole spheres)
+    if (a.angle1 != -90 || a.angle2 != 90 || a.angle3 != 360) cqUnsup("partial sphere");
+    const cen = (a.centered is boolean) ? [a.centered, a.centered, a.centered] : a.centered;
+    const off = vector(cen[0] ? 0 : a.radius, cen[1] ? 0 : a.radius, cen[2] ? 0 : a.radius);
+    solidsAtPlacements(c, st, out, selfI, a, function(T) {
+        const id = nid(st, "sp");
+        opSphere(c, id, {"center": T * (off * MM), "radius": a.radius * MM});
+        return qCreatedBy(id, EntityType.BODY);
+    });
+};
+const cqCylinder = function(c, st, out, selfI, a) {   // Workplane.cylinder (whole cylinders)
+    if (a.angle != 360) cqUnsup("partial cylinder");
+    const cen = (a.centered is boolean) ? [a.centered, a.centered, a.centered] : a.centered;
+    const off = vector(cen[0] ? 0 : a.radius, cen[1] ? 0 : a.radius, cen[2] ? -a.height / 2 : 0);
+    const d = normalize(v3(a.direct));
+    const R = toWorld(coordSystem(vector(0, 0, 0) * MM, defaultXDir(d), d));   // Plane(Vector(), normal=direct).location
+    solidsAtPlacements(c, st, out, selfI, a, function(T) {
+        const id = nid(st, "cy");
+        fCylinder(c, id, {"bottomCenter": (T * R) * (off * MM), "topCenter": (T * R) * ((off + vector(0, 0, a.height)) * MM), "radius": a.radius * MM});
+        return qCreatedBy(id, EntityType.BODY);
+    });
+};
+const cqRevolve = function(c, st, out, selfI, a) {   // Workplane.revolve
+    const w = wpGet(st, selfI);
+    var angle = a.angleDegrees % 360;
+    if (angle < 0) angle += 360;
+    if (angle == 0) angle = 360;
+    const s = (a.axisStart == undefined) ? plW(w.plane, [0, 0]) : plW(w.plane, a.axisStart);
+    var e;
+    if (a.axisEnd == undefined) e = (s[1] != 0) ? plW(w.plane, [0, s[1]]) : plW(w.plane, [0, 1]);
+    else e = plW(w.plane, a.axisEnd);
+    if (norm(e - s) < 1e-12) cqErr("revolve axis of zero length");
+    const faces = getFaces(c, st, selfI).q;
+    const id = nid(st, "rv");
+    opRevolve(c, id, {"entities": faces, "axis": line(s * MM, normalize(e - s)), "angleForward": (angle == 360 ? 2 * PI : angle * PI / 180) * radian});
+    combineWithBase(c, st, out, selfI, qCreatedBy(id, EntityType.BODY), a.combine);
+};
+
+// Workplane.loft: each pending wire one section, in order (or the outer wires of the faces on
+// the stack); OCCT's ThruSections in CadQuery. Two sections make a ruled loft whatever the
+// kernel; so does `ruled` between each pair. A smooth loft through three or more is each
+// kernel's own surface: the result carries a warning saying so.
+const cqLoft = function(c, st, out, selfI, a) {
+    const w = wpGet(st, selfI);
+    var cx = ctxGet(st, w);
+    var profiles = [];
+    if (size(cx.pw) > 0) {
+        const wires = cx.pw;
+        cx.pw = [];
+        ctxPut(st, w, cx);
+        for (var x in wires) {
+            const f = sketchRegions(c, st, [x]);
+            if (size(ents(c, f.q)) != 1) cqErr("loft: a section that isn't one closed wire");
+            profiles = append(profiles, f.q);
+        }
+    } else {
+        for (var o in w.objs) {
+            if (o.t == "face") profiles = append(profiles, o.q);
+            else if (o.t == "vertex") cqUnsup("loft to a vertex");
+        }
+    }
+    if (size(profiles) == 0) cqErr("Nothing to loft");
+    if (size(profiles) == 1) cqErr("More than one wire or face is required");
+    var q;
+    if (a.ruled && size(profiles) > 2) {
+        var parts = [];
+        for (var j = 0; j + 1 < size(profiles); j += 1) {
+            const id = nid(st, "lo");
+            opLoft(c, id, {"profileSubqueries": [profiles[j], profiles[j + 1]], "bodyType": ToolBodyType.SOLID});
+            parts = append(parts, qCreatedBy(id, EntityType.BODY));
+        }
+        opBoolean(c, nid(st, "bo"), {"tools": qUnion(parts), "operationType": BooleanOperationType.UNION});
+        q = qUnion(parts);
+    } else {
+        if (size(profiles) > 2) warn(st, "smooth loft through " ~ size(profiles) ~ " sections: Parasolid's surface, not OCCT's ThruSections");
+        const id = nid(st, "lo");
+        opLoft(c, id, {"profileSubqueries": profiles, "bodyType": ToolBodyType.SOLID});
+        q = qCreatedBy(id, EntityType.BODY);
+    }
+    combineWithBase(c, st, out, selfI, q, a.combine);
+};
+
+const cqNewObject = function(c, st, out, selfI, a) {   // Workplane.newObject(objlist)
+    var objs = [];
+    for (var x in a.objlist) objs = concatenateArrays([objs, argShapes(c, st, x)]);
+    newObject(st, out, selfI, objs);
+};
+
+const cqSlot2D = function(c, st, out, selfI, a) {   // Workplane.slot2D
+    const r = a.diameter / 2;
+    const p1 = vector(-a.length / 2 + r, a.diameter / 2, 0);
+    const p2 = p1 + vector(a.length - a.diameter, 0, 0);
+    const p3 = p1 + vector(a.length - a.diameter, -a.diameter, 0);
+    const p4 = p1 + vector(0, -a.diameter, 0);
+    const arc1 = p2 + vector(r, -r, 0);
+    const arc2 = p4 + vector(-r, r, 0);
+    var w = {"t": "wire", "closed": true, "constr": false, "edges": [eLine(p1, p2), eArc(p2, arc1, p3), eLine(p3, p4), eArc(p4, arc2, p1)]};
+    w = wXform(transform(rotationMatrix3d(vector(0, 0, 1), a.angle * degree), vector(0, 0, 0) * MM), w);
+    placeWire(c, st, out, selfI, w);
+};
+
+const cqSpline = function(c, st, out, selfI, a) {    // Workplane.spline
+    const w = wpGet(st, selfI);
+    var pts = [];
+    if (a.includeCurrent) pts = append(pts, fromPoint(c, w, false));
+    for (var p in a.listOfXYTuple) pts = append(pts, plW(w.plane, p));
+    if (a.parameters != undefined) cqUnsup("spline with parameters");
+    var tans = undefined;
+    if (a.tangents != undefined) {
+        tans = [];
+        for (var t in a.tangents) tans = append(tans, t == undefined ? undefined : plW(w.plane, t) - w.plane.o);
+    }
+    const e = {"t": "edge", "k": "spline", "pts": pts, "tans": tans, "periodic": a.periodic};
+    if (a.makeWire) {
+        const wire = {"t": "wire", "edges": [e], "closed": a.periodic == true || norm(pts[0] - pts[size(pts) - 1]) < 1e-9, "constr": a.forConstruction};
+        if (!a.forConstruction) addPendingWires(st, w, [wire]);
+        newObject(st, out, selfI, [wire]);
+    } else {
+        if (!a.forConstruction) addPendingEdge(st, w, e);
+        newObject(st, out, selfI, [e]);
+    }
+};
+
+// A sweep's path as edges Parasolid can follow: one sketch when the path lies in a plane, else
+// (straight segments only) a 3D polyline.
+const pathEdges = function(c, st, p) {
+    var edges = (p.t == "wire") ? p.edges : [p];
+    var pts = [];
+    for (var e in edges) pts = concatenateArrays([pts, (e.k == "line") ? [e.a, e.b] : (e.k == "arc" ? [e.a, e.m, e.b] : (e.k == "spline" ? e.pts : [e.c, e.s]))]);
+    var planar = undefined;
+    try silent { planar = wPlane({"edges": edges}); }
+    if (planar == undefined && size(edges) == 1 && edges[0].k == "line") {
+        const d = unitOf(edges[0].b - edges[0].a);
+        planar = plMake(edges[0].a, d, defaultXDir(d));
+    }
+    var flat = planar != undefined;
+    if (flat) for (var q in pts) if (abs(dot(q - planar.o, planar.z)) > 1e-7 * max(1, norm(q))) flat = false;
+    if (flat) {
+        const id = nid(st, "pk");
+        var sk = newSketchOnPlane(c, id, {"sketchPlane": plane(planar.o * MM, planar.z, planar.x)});
+        const to2 = function(q) { const l = plL(planar, q); return vector(l[0], l[1]) * MM; };
+        var j = 0;
+        for (var e in edges) {
+            j += 1;
+            if (e.k == "line") skLineSegment(sk, "p" ~ j, {"start": to2(e.a), "end": to2(e.b)});
+            else if (e.k == "arc") skArc(sk, "p" ~ j, {"start": to2(e.a), "mid": to2(e.m), "end": to2(e.b)});
+            else if (e.k == "circle") skCircle(sk, "p" ~ j, {"center": to2(e.c), "radius": e.r * MM});
+            else if (e.k == "spline") cqSkSpline(sk, "p" ~ j, e, to2, planar, st);
+            else cqUnsup("sweep path edge " ~ e.k);
+        }
+        skSolve(sk);
+        return qCreatedBy(id, EntityType.EDGE);
+    }
+    for (var e in edges) if (e.k != "line") cqUnsup("a sweep path off one plane with a " ~ e.k);
+    var chain = [edges[0].a * MM];
+    for (var e in edges) chain = append(chain, e.b * MM);
+    const id = nid(st, "pl");
+    opPolyline(c, id, {"points": chain});
+    return qCreatedBy(id, EntityType.EDGE);
+};
+const cqSweep = function(c, st, out, selfI, a) {     // Workplane.sweep / _sweep
+    if (a.multisection == true || a.sweepAlongWires == true) cqUnsup("multisection sweep");
+    if (a.normal != undefined || a.auxSpine != undefined) cqUnsup("sweep with a normal or an auxiliary spine");
+    if (a.makeSolid == false) cqUnsup("sweep as a shell");
+    var p;
+    if (a.path.wp != undefined) {
+        // path.wire(): its pending edges made a wire (and a pending wire of its context)
+        const tmp = toString(a.path.wp) ~ "_wire";
+        cqWire(c, st, tmp, a.path.wp, {"forConstruction": false});
+        const objs = wpGet(st, tmp).objs;
+        if (size(objs) == 0) cqErr("Wire or Edge instance required");
+        p = objs[0];
+    } else p = shapeGet(st, a.path.shape);
+    if (p.t != "wire" && p.t != "edge") cqErr("Wire or Edge instance required");
+    var corners = false;
+    if (p.t == "wire") for (var j = 0; j + 1 < size(p.edges); j += 1) corners = true;
+    if (corners) warn(st, "sweep along several edges: Parasolid's joins where they meet at an angle, not OCCT's '" ~ a.transition ~ "' transition");
+    const path = pathEdges(c, st, p);
+    const faces = getFaces(c, st, selfI).q;
+    const id = nid(st, "sw");
+    opSweep(c, id, {"profiles": faces, "path": path});
+    combineWithBase(c, st, out, selfI, qCreatedBy(id, EntityType.BODY), a.combine);
+};
+
+
+const unionLike = function(c, st, out, selfI, kind, a, argName) {
+    const arg = a[argName];
+    if (kind == "union") {      // Workplane.union
+        var newS = [];
+        if (arg != undefined) {
+            if (arg.wp != undefined) {
+                const sq = select(c, st, wpGet(st, arg.wp), "Solids", undefined, undefined);
+                if (size(sq) < 1) cqErr("Workplane object must have at least one solid on the stack to union!");
+                for (var o in sq) newS = append(newS, o.q);
+            } else {
+                for (var o in argShapes(c, st, arg)) if (o.t == "solid") newS = append(newS, o.q);
+            }
+        }
+        const solidRef = findSolidQ(st, selfI, true, true);
+        var r;
+        if (solidRef != undefined) r = boolOp(c, st, "union", solidRef, size(newS) == 0 ? undefined : qUnion(newS));
+        else if (size(newS) > 1) r = boolOp(c, st, "union", newS[0], qUnion(subArray(newS, 1, size(newS))));
+        else if (size(newS) == 1) r = newS[0];
+        else cqErr("union of nothing");
+        newObject(st, out, selfI, [solidObj(r)]);
+        return;
+    }
+    const solidRef = findSolid(st, selfI);   // Workplane.cut / intersect
+    const tools = solidsQ(c, argShapes(c, st, arg));
+    if (tools == undefined) cqErr("Cannot " ~ kind ~ " a non-solid");
+    newObject(st, out, selfI, [solidObj(boolOp(c, st, kind, solidRef, tools))]);
+};
+const cqUnion = function(c, st, out, selfI, a) { unionLike(c, st, out, selfI, "union", a, "toUnion"); };
+const cqCut = function(c, st, out, selfI, a) { unionLike(c, st, out, selfI, "cut", a, "toCut"); };
+const cqIntersect = function(c, st, out, selfI, a) { unionLike(c, st, out, selfI, "intersect", a, "toIntersect"); };
+
+const cqCombine = function(c, st, out, selfI, a) {   // Workplane.combine
+    const w = wpGet(st, selfI);
+    var qs = [];
+    for (var o in w.objs) {
+        if (o.t == "solid") qs = append(qs, o.q);
+        else if (isShapeObj(o)) cqUnsup("combine of " ~ o.t);
+    }
+    if (size(qs) == 0) cqErr("pop from empty list");
+    var s = qs[0];
+    if (size(qs) > 1) s = boolOp(c, st, "union", s, qUnion(subArray(qs, 1, size(qs))));
+    newObject(st, out, selfI, [solidObj(s)]);
+};
+
+const edgesOfStack = function(c, st, selfI) {   // self.edges().vals()
+    return select(c, st, wpGet(st, selfI), "Edges", undefined, undefined);
+};
+const cqFillet = function(c, st, out, selfI, a) {   // Workplane.fillet
+    const solid = findSolid(st, selfI);
+    const edges = edgesOfStack(c, st, selfI);
+    if (size(edges) < 1) cqErr("Fillets requires that edges be selected");
+    const cw = copyWithEntities(c, st, solid, edges);
+    const eq = taggedIn(cw.base, EntityType.EDGE, cw.tag);
+    if (size(ents(c, eq)) != size(edges)) cqErr("fillet: selected edges do not belong to the solid");
+    opFillet(c, nid(st, "fi"), {"entities": eq, "radius": a.radius * MM});
+    newObject(st, out, selfI, [solidObj(cw.base)]);
+};
+const cqChamfer = function(c, st, out, selfI, a) {   // Workplane.chamfer
+    if (a.length2 != undefined && a.length2 != a.length) cqUnsup("chamfer with two lengths (CadQuery's side depends on OCCT's edge-face map order)");
+    const solid = findSolid(st, selfI);
+    const edges = edgesOfStack(c, st, selfI);
+    if (size(edges) < 1) cqErr("Chamfer requires that edges be selected");
+    const cw = copyWithEntities(c, st, solid, edges);
+    const eq = taggedIn(cw.base, EntityType.EDGE, cw.tag);
+    if (size(ents(c, eq)) != size(edges)) cqErr("chamfer: selected edges do not belong to the solid");
+    opChamfer(c, nid(st, "ch"), {"entities": eq, "chamferType": ChamferType.EQUAL_OFFSETS, "width": a.length * MM});
+    newObject(st, out, selfI, [solidObj(cw.base)]);
+};
+const cqShell = function(c, st, out, selfI, a) {     // Workplane.shell
+    const solid = findSolid(st, selfI);
+    const w = wpGet(st, selfI);
+    var faces = [];
+    for (var o in w.objs) if (o.t == "face") faces = append(faces, o);
+    if (a.kind != "arc") warn(st, "shell kind " ~ a.kind ~ ": Onshape's shell has one join type");
+    const cw = copyWithEntities(c, st, solid, faces);
+    var entsQ = cw.base;
+    if (size(faces) > 0) {
+        entsQ = taggedIn(cw.base, EntityType.FACE, cw.tag);
+        if (size(ents(c, entsQ)) != size(faces)) cqErr("shell: selected faces do not belong to the solid");
+    }
+    opShell(c, nid(st, "sh"), {"entities": entsQ, "thickness": a.thickness * MM});
+    newObject(st, out, selfI, [solidObj(cw.base)]);
+};
+
+const xformObjs = function(c, st, objs, T) {   // Shape.rotate / translate / mirror over the stack's shapes
+    var out = [];
+    for (var o in objs) {
+        if (o.t == "solid") out = append(out, solidObj(copyBodies(c, st, o.q, T)));
+        else if (o.t == "wire") out = append(out, wXform(T, o));
+        else if (o.t == "edge") out = append(out, eXform(T, o));
+        else if (o.t == "face" || o.t == "edgeq" || o.t == "vertex") cqUnsup("transforming a selected " ~ o.t);
+        else out = append(out, o);   // points and locations are not Shapes: kept as they are
+    }
+    return out;
+};
+const rotT = function(s, e, deg) {
+    const sv = v3(s); const ev = v3(e);
+    if (norm(ev - sv) < 1e-12) cqErr("rotation axis of zero length");
+    return rotationAround(line(sv * MM, normalize(ev - sv)), deg * degree);
+};
+const cqRotate = function(c, st, out, selfI, a) {
+    newObject(st, out, selfI, xformObjs(c, st, wpGet(st, selfI).objs, rotT(a.axisStartPoint, a.axisEndPoint, a.angleDegrees)));
+};
+const cqTranslate = function(c, st, out, selfI, a) {
+    newObject(st, out, selfI, xformObjs(c, st, wpGet(st, selfI).objs, transform(v3(a.vec) * MM)));
+};
+const mirrorT = function(c, st, mp, bp) {   // Shape.mirror(mirrorPlane, basePointVector)
+    var n;
+    if (mp is string) {
+        if (mp == "XY" || mp == "YX") n = vector(0, 0, 1);
+        else if (mp == "XZ" || mp == "ZX") n = vector(0, 1, 0);
+        else if (mp == "YZ" || mp == "ZY") n = vector(1, 0, 0);
+        else cqErr("mirror plane " ~ mp);
+    } else n = v3(mp);
+    return mirrorAcross(plane(v3(bp) * MM, normalize(n)));
+};
+const cqMirror = function(c, st, out, selfI, a) {   // Workplane.mirror
+    var mp = a.mirrorPlane; var bp = a.basePointVector;
+    if (mp is map && mp.wp != undefined) {
+        const fo = wpGet(st, mp.wp).objs;
+        if (size(fo) == 0 || fo[0].t != "face") cqErr("Face required");
+        mp = faceNormal0(c, fo[0].q);
+        if (bp == undefined) bp = centroid(c, fo[0].q);
+    }
+    if (bp == undefined) bp = [0, 0, 0];
+    const w = wpGet(st, selfI);
+    var shapes = [];
+    for (var o in w.objs) if (isShapeObj(o)) shapes = append(shapes, o);
+    const mirrored = xformObjs(c, st, shapes, mirrorT(c, st, mp, bp));
+    if (a.union == true) {
+        const tmp = out ~ "_m";
+        newObject(st, tmp, selfI, mirrored);
+        cqUnion(c, st, out, selfI, {"toUnion": {"wp": tmp}});
+    } else newObject(st, out, selfI, mirrored);
+};
+
+const cqSplit = function(c, st, out, selfI, a) {   // Workplane.split(keepTop, keepBottom)
+    if (!a.keepTop && !a.keepBottom) cqErr("You have to keep at least one half");
+    const w = wpGet(st, selfI);
+    const solid = findSolid(st, selfI);
+    const bb = evBox3d(c, {"topology": solid, "tight": false});
+    const maxDim = norm(bb.maxCorner - bb.minCorner) / MM * 10;
+    const mk = function(sign) {
+        var qs = [];
+        for (var T in placements(c, w)) {
+            const id = nid(st, "bx");
+            fCuboid(c, id, {"corner1": vector(-maxDim / 2, -maxDim / 2, sign > 0 ? 0 : -maxDim) * MM, "corner2": vector(maxDim / 2, maxDim / 2, sign > 0 ? maxDim : 0) * MM});
+            opTransform(c, nid(st, "tr"), {"bodies": qCreatedBy(id, EntityType.BODY), "transform": T});
+            qs = append(qs, qCreatedBy(id, EntityType.BODY));
+        }
+        return qUnion(qs);
+    };
+    var rv = [];
+    if (a.keepTop) rv = append(rv, solidObj(boolOp(c, st, "cut", solid, mk(-1))));
+    if (a.keepBottom) rv = append(rv, solidObj(boolOp(c, st, "cut", solid, mk(1))));
+    newObject(st, out, selfI, rv);
+};
+
+const cqSelect = function(kind) {
+    return function(c, st, out, selfI, a) {
+        const w = wpGet(st, selfI);
+        var tagW = undefined;
+        if (a.tag != undefined) {
+            const cx = ctxGet(st, w);
+            if (cx.tags[a.tag] == undefined) cqErr("No Workplane object named " ~ a.tag ~ " in chain");
+            tagW = wpGet(st, cx.tags[a.tag]);
+        }
+        newObject(st, out, selfI, select(c, st, w, kind, a.selector, tagW));
+    };
+};
+
+const cqAdd = function(c, st, out, selfI, a) {      // Workplane.add: mutates self
+    var w = wpGet(st, selfI);
+    const o = a.obj;
+    if (o is array) { for (var x in o) w.objs = concatenateArrays([w.objs, argShapes(c, st, x)]); }
+    else w.objs = concatenateArrays([w.objs, argShapes(c, st, o)]);
+    wpPut(st, selfI, w);
+};
+const cqTag = function(c, st, out, selfI, a) {
+    const w = wpGet(st, selfI);
+    var cx = ctxGet(st, w);
+    cx.tags[a.name] = selfI;
+    ctxPut(st, w, cx);
+};
+const cqEnd = function(c, st, out, selfI, a) {
+    var cur = selfI;
+    for (var i = 0; i < a.n; i += 1) {
+        const p = wpGet(st, cur).parent;
+        if (p == undefined) cqErr("Cannot End the chain-- no parents!");
+        cur = p;
+    }
+    wpPut(st, out, wpGet(st, cur));
+};
+const cqWorkplaneFromTagged = function(c, st, out, selfI, a) {
+    const w = wpGet(st, selfI);
+    const cx = ctxGet(st, w);
+    if (cx.tags[a.name] == undefined) cqErr("No Workplane object named " ~ a.name ~ " in chain");
+    wpPut(st, out, {"plane": wpGet(st, cx.tags[a.name]).plane, "objs": [], "parent": selfI, "ctx": w.ctx});
+};
+const cqCopyWorkplane = function(c, st, out, selfI, a) {
+    const w = wpGet(st, selfI);
+    wpPut(st, out, {"plane": wpGet(st, a.obj.wp).plane, "objs": [], "parent": selfI, "ctx": w.ctx});
+};
+const cqToPending = function(c, st, out, selfI, a) {
+    const w = wpGet(st, selfI);
+    var cx = ctxGet(st, w);
+    for (var o in w.objs) {
+        if (o.t == "wire") cx.pw = append(cx.pw, o);
+        if (o.t == "edge") cx.pe = append(cx.pe, o);
+    }
+    ctxPut(st, w, cx);
+};
+const cqClean = function(c, st, out, selfI, a) { newObject(st, out, selfI, wpGet(st, selfI).objs); };
+const cqSlice = function(which) {
+    return function(c, st, out, selfI, a) {
+        const objs = wpGet(st, selfI).objs;
+        if (size(objs) > 1) warn(st, which ~ "() of " ~ size(objs) ~ " objects: Parasolid's order may not be OCCT's");
+        if (size(objs) == 0) { newObject(st, out, selfI, []); return; }
+        var i = (which == "first") ? 0 : ((which == "last") ? size(objs) - 1 : a.i);
+        if (i < 0) i += size(objs);
+        newObject(st, out, selfI, [objs[i]]);
+    };
+};
+const cqVal = function(c, st, outShape, selfI) {   // Workplane.val
+    const w = wpGet(st, selfI);
+    var s = st[];
+    if (size(w.objs) > 1) {
+        var sameKind = true;
+        for (var o in w.objs) if (o.t != w.objs[0].t || (o.t != "solid" && o.t != "vec")) sameKind = false;
+        if (w.objs[0].t != "solid" || size(w.objs) > 1) warn(st, "val() of " ~ size(w.objs) ~ " objects: Parasolid's order may not be OCCT's");
+    }
+    s = st[];
+    s.shapes[outShape] = (size(w.objs) == 0) ? {"t": "vec", "p": w.plane.o} : w.objs[0];
+    st[] = s;
+};
+
+// ---- shape-level calls (cq.Solid.make*, Shape methods)
+const putShape = function(st, i, o) { var s = st[]; s.shapes[i] = o; st[] = s; };
+const shCompoundMake = function(c, st, out, a) {    // Compound.makeCompound(listOfShapes)
+    var qs = [];
+    for (var x in a.listOfShapes) for (var o in argShapes(c, st, x)) {
+        if (o.t == "solid") qs = append(qs, o.q);
+        else cqUnsup("a compound of " ~ o.t);
+    }
+    putShape(st, out, solidObj(qUnion(qs)));
+};
+
+const shSolidMakeBox = function(c, st, out, a) {   // Solid.makeBox(length, width, height, pnt, dir)
+    const T = toWorld(coordSystem(v3(a.pnt) * MM, defaultXDir(normalize(v3(a.dir))), normalize(v3(a.dir))));
+    const id = nid(st, "bx");
+    fCuboid(c, id, {"corner1": vector(0, 0, 0) * MM, "corner2": vector(a.length, a.width, a.height) * MM});
+    opTransform(c, nid(st, "tr"), {"bodies": qCreatedBy(id, EntityType.BODY), "transform": T});
+    putShape(st, out, solidObj(qCreatedBy(id, EntityType.BODY)));
+};
+const shSolidMakeCylinder = function(c, st, out, a) {   // Solid.makeCylinder(radius, height, pnt, dir, angleDegrees)
+    if (a.angleDegrees != 360) cqUnsup("partial cylinder");
+    const p = v3(a.pnt); const d = normalize(v3(a.dir));
+    const id = nid(st, "cy");
+    fCylinder(c, id, {"bottomCenter": p * MM, "topCenter": (p + d * a.height) * MM, "radius": a.radius * MM});
+    putShape(st, out, solidObj(qCreatedBy(id, EntityType.BODY)));
+};
+const shSolidMakeCone = function(c, st, out, a) {   // Solid.makeCone(radius1, radius2, height, pnt, dir, angleDegrees)
+    if (a.angleDegrees != 360) cqUnsup("partial cone");
+    const p = v3(a.pnt); const d = normalize(v3(a.dir));
+    const id = nid(st, "co");
+    fCone(c, id, {"bottomCenter": p * MM, "topCenter": (p + d * a.height) * MM, "bottomRadius": a.radius1 * MM, "topRadius": a.radius2 * MM});
+    putShape(st, out, solidObj(qCreatedBy(id, EntityType.BODY)));
+};
+const shSolidMakeSphere = function(c, st, out, a) {   // Solid.makeSphere(radius, pnt, dir, angleDegrees1, 2, 3)
+    if (a.angleDegrees1 != 0 && a.angleDegrees1 != -90) cqUnsup("partial sphere");
+    if (a.angleDegrees2 != 90 || a.angleDegrees3 != 360) cqUnsup("partial sphere");
+    if (a.angleDegrees1 == 0) cqUnsup("hemisphere (makeSphere's default angleDegrees1=0)");
+    const id = nid(st, "sp");
+    opSphere(c, id, {"center": v3(a.pnt) * MM, "radius": a.radius * MM});
+    putShape(st, out, solidObj(qCreatedBy(id, EntityType.BODY)));
+};
+const shapeXform = function(c, st, out, src, T) {
+    if (src.t == "solid") putShape(st, out, solidObj(copyBodies(c, st, src.q, T)));
+    else if (src.t == "wire") putShape(st, out, wXform(T, src));
+    else if (src.t == "edge") putShape(st, out, eXform(T, src));
+    else cqUnsup("transforming a " ~ src.t);
+};
+const shTranslate = function(c, st, out, selfS, a) { shapeXform(c, st, out, shapeGet(st, selfS), transform(v3(a.vector) * MM)); };
+const shRotate = function(c, st, out, selfS, a) { shapeXform(c, st, out, shapeGet(st, selfS), rotT(a.startVector, a.endVector, a.angleDegrees)); };
+const shMirror = function(c, st, out, selfS, a) { shapeXform(c, st, out, shapeGet(st, selfS), mirrorT(c, st, a.mirrorPlane, a.basePointVector)); };
+const shMoved = function(c, st, out, selfS, a) { shapeXform(c, st, out, shapeGet(st, selfS), locFromTape(a.loc.loc)); };
+const shBool = function(kind) {
+    return function(c, st, out, selfS, a) {
+        const s = shapeGet(st, selfS);
+        if (s.t != "solid") cqUnsup(kind ~ " of a " ~ s.t);
+        var qs = [];
+        for (var x in a.toolShapes) for (var o in argShapes(c, st, x)) if (o.t == "solid") qs = append(qs, o.q);
+        if (size(qs) == 0) { putShape(st, out, s); return; }
+        putShape(st, out, solidObj(boolOp(c, st, kind, s.q, qUnion(qs))));
+    };
+};
+
+// ---- measuring the result (worker.py's measure)
+const cqMeasure = function(c, st, res) {
+    var objs = [];
+    if (res.wp != undefined) objs = wpGet(st, res.wp).objs;
+    else if (res.shape != undefined) objs = [shapeGet(st, res.shape)];
+    else if (res.list != undefined) for (var r in res.list) objs = concatenateArrays([objs, argShapes(c, st, r)]);
+    var qs = [];
+    var other = [];
+    for (var o in objs) {
+        if (o.t == "solid") qs = append(qs, o.q);
+        else other = append(other, o.t);
+    }
+    if (size(qs) == 0) return {"status": "no-shape", "other": other, "warn": st[].warn, "log": st[].log};
+    const B = qUnion(qs);
+    const faces = qOwnedByBody(B, EntityType.FACE);
+    const bb = evBox3d(c, {"topology": B, "tight": true});
+    return {"status": "ok", "result_q": B,
+            "vol": evVolume(c, {"entities": B, "accuracy": "HIGH"}) / (MM ^ 3),
+            "area": evArea(c, {"entities": faces}) / (MM ^ 2),
+            "solids": size(ents(c, qBodyType(qEntityFilter(B, EntityType.BODY), BodyType.SOLID))),
+            "faces": size(ents(c, faces)),
+            "edges": size(ents(c, qOwnedByBody(B, EntityType.EDGE))),
+            "vertices": size(ents(c, qOwnedByBody(B, EntityType.VERTEX))),
+            "bbox": [bb.minCorner[0] / MM, bb.minCorner[1] / MM, bb.minCorner[2] / MM, bb.maxCorner[0] / MM, bb.maxCorner[1] / MM, bb.maxCorner[2] / MM],
+            "other": other, "warn": st[].warn, "log": st[].log};
+};
+const newState = function(base) { return new box({"base": base, "wps": {}, "ctx": [], "shapes": {}, "n": 0, "log": [], "warn": [], "cur": 0}); };
+const atStep = function(st, i) { var s = st[]; s.cur = i; st[] = s; };
+const stepVol = function(c, st, out, op) {   // after a solid-producing step: its solids and volume
+    const w = st[].wps[out];
+    if (w == undefined) return;
+    const q = solidsQ(c, w.objs);
+    if (q == undefined) return;
+    logStep(c, st, out, op, {"solids": size(ents(c, q)), "vol": evVolume(c, {"entities": q}) / (MM ^ 3)});
+};
+
+const case_4361 = function(c, base) {
+    var st = newState(base);
+    try {
+        atStep(st, 1);
+        cqWorkplaneNew(c, st, 1, {"plane": {"origin": [0, 0, 0], "xDir": [1, 0, 0], "zDir": [0, 0, 1]}, "obj": undefined});
+        atStep(st, 2);
+        cqSphere(c, st, 2, 1, {"radius": 20, "direct": [0, 0, 1], "angle1": -90, "angle2": 90, "angle3": 360, "centered": true, "combine": true, "clean": true});
+        stepVol(c, st, 2, "sphere");
+        atStep(st, 3);
+        cqWorkplaneNew(c, st, 3, {"plane": {"origin": [0, 0, 0], "xDir": [1, 0, 0], "zDir": [0, 0, 1]}, "obj": undefined});
+        atStep(st, 4);
+        cqRect(c, st, 4, 3, {"xLen": 40, "yLen": 40, "centered": true, "forConstruction": false});
+        atStep(st, 5);
+        cqExtrude(c, st, 5, 4, {"until": -20, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 5, "extrude");
+        atStep(st, 6);
+        cqCut(c, st, 6, 2, {"toCut": {"wp": 5}, "clean": true, "tol": undefined});
+        stepVol(c, st, 6, "cut");
+        atStep(st, 7);
+        cqWorkplaneNew(c, st, 7, {"plane": {"origin": [0, 0, 0], "xDir": [1, 0, 0], "zDir": [0, 0, 1]}, "obj": undefined});
+        atStep(st, 8);
+        cqSphere(c, st, 8, 7, {"radius": 18, "direct": [0, 0, 1], "angle1": -90, "angle2": 90, "angle3": 360, "centered": true, "combine": true, "clean": true});
+        stepVol(c, st, 8, "sphere");
+        atStep(st, 9);
+        cqWorkplaneNew(c, st, 9, {"plane": {"origin": [0, 0, 0], "xDir": [1, 0, 0], "zDir": [0, 0, 1]}, "obj": undefined});
+        atStep(st, 10);
+        cqRect(c, st, 10, 9, {"xLen": 36, "yLen": 36, "centered": true, "forConstruction": false});
+        atStep(st, 11);
+        cqExtrude(c, st, 11, 10, {"until": -18, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 11, "extrude");
+        atStep(st, 12);
+        cqCut(c, st, 12, 8, {"toCut": {"wp": 11}, "clean": true, "tol": undefined});
+        stepVol(c, st, 12, "cut");
+        atStep(st, 13);
+        cqCut(c, st, 13, 6, {"toCut": {"wp": 12}, "clean": true, "tol": undefined});
+        stepVol(c, st, 13, "cut");
+        atStep(st, 14);
+        cqWorkplaneNew(c, st, 14, {"plane": {"origin": [-5, -17.856406460551018, 7.493246847368095], "xDir": [0, -0.3869496033183715, -0.9221008645976616], "zDir": [-0.25, -0.8928203230275509, 0.37466234236840473]}, "obj": undefined});
+        atStep(st, 15);
+        cqCircle(c, st, 15, 14, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 16);
+        cqExtrude(c, st, 16, 15, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 16, "extrude");
+        atStep(st, 17);
+        cqSelect("Edges")(c, st, 17, 16, {"selector": undefined, "tag": undefined});
+        atStep(st, 18);
+        cqFillet(c, st, 18, 17, {"radius": 0.2});
+        stepVol(c, st, 18, "fillet");
+        atStep(st, 19);
+        cqWorkplaneNew(c, st, 19, {"plane": {"origin": [-5, -17.856406460551018, 7.493246847368095], "xDir": [0, -0.3869496033183715, -0.9221008645976616], "zDir": [-0.25, -0.8928203230275509, 0.37466234236840473]}, "obj": undefined});
+        atStep(st, 20);
+        cqWorkplane(c, st, 20, 19, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 21);
+        cqPolygon(c, st, 21, 20, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 22);
+        cqExtrude(c, st, 22, 21, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 22, "extrude");
+        atStep(st, 23);
+        cqUnion(c, st, 23, 13, {"toUnion": {"wp": 18}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 23, "union");
+        atStep(st, 24);
+        cqUnion(c, st, 24, 23, {"toUnion": {"wp": 22}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 24, "union");
+        atStep(st, 25);
+        cqWorkplaneNew(c, st, 25, {"plane": {"origin": [0, -17.856406460551018, 9.008260004883956], "xDir": [0, -0.45041300024419784, -0.8928203230275509], "zDir": [0, -0.8928203230275509, 0.45041300024419784]}, "obj": undefined});
+        atStep(st, 26);
+        cqCircle(c, st, 26, 25, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 27);
+        cqExtrude(c, st, 27, 26, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 27, "extrude");
+        atStep(st, 28);
+        cqSelect("Edges")(c, st, 28, 27, {"selector": undefined, "tag": undefined});
+        atStep(st, 29);
+        cqFillet(c, st, 29, 28, {"radius": 0.2});
+        stepVol(c, st, 29, "fillet");
+        atStep(st, 30);
+        cqWorkplaneNew(c, st, 30, {"plane": {"origin": [0, -17.856406460551018, 9.008260004883956], "xDir": [0, -0.45041300024419784, -0.8928203230275509], "zDir": [0, -0.8928203230275509, 0.45041300024419784]}, "obj": undefined});
+        atStep(st, 31);
+        cqWorkplane(c, st, 31, 30, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 32);
+        cqPolygon(c, st, 32, 31, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 33);
+        cqExtrude(c, st, 33, 32, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 33, "extrude");
+        atStep(st, 34);
+        cqUnion(c, st, 34, 24, {"toUnion": {"wp": 29}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 34, "union");
+        atStep(st, 35);
+        cqUnion(c, st, 35, 34, {"toUnion": {"wp": 33}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 35, "union");
+        atStep(st, 36);
+        cqWorkplaneNew(c, st, 36, {"plane": {"origin": [5, -17.856406460551018, 7.493246847368095], "xDir": [0, -0.3869496033183715, -0.9221008645976616], "zDir": [0.25, -0.8928203230275509, 0.37466234236840473]}, "obj": undefined});
+        atStep(st, 37);
+        cqCircle(c, st, 37, 36, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 38);
+        cqExtrude(c, st, 38, 37, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 38, "extrude");
+        atStep(st, 39);
+        cqSelect("Edges")(c, st, 39, 38, {"selector": undefined, "tag": undefined});
+        atStep(st, 40);
+        cqFillet(c, st, 40, 39, {"radius": 0.2});
+        stepVol(c, st, 40, "fillet");
+        atStep(st, 41);
+        cqWorkplaneNew(c, st, 41, {"plane": {"origin": [5, -17.856406460551018, 7.493246847368095], "xDir": [0, -0.3869496033183715, -0.9221008645976616], "zDir": [0.25, -0.8928203230275509, 0.37466234236840473]}, "obj": undefined});
+        atStep(st, 42);
+        cqWorkplane(c, st, 42, 41, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 43);
+        cqPolygon(c, st, 43, 42, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 44);
+        cqExtrude(c, st, 44, 43, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 44, "extrude");
+        atStep(st, 45);
+        cqUnion(c, st, 45, 35, {"toUnion": {"wp": 40}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 45, "union");
+        atStep(st, 46);
+        cqUnion(c, st, 46, 45, {"toUnion": {"wp": 44}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 46, "union");
+        atStep(st, 47);
+        cqWorkplaneNew(c, st, 47, {"plane": {"origin": [-12.5, -13.392304845413264, 8.024722482897488], "xDir": [-0.7310412324050625, 0.6823332884475792, 0], "zDir": [-0.625, -0.6696152422706632, 0.4012361241448744]}, "obj": undefined});
+        atStep(st, 48);
+        cqCircle(c, st, 48, 47, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 49);
+        cqExtrude(c, st, 49, 48, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 49, "extrude");
+        atStep(st, 50);
+        cqSelect("Edges")(c, st, 50, 49, {"selector": undefined, "tag": undefined});
+        atStep(st, 51);
+        cqFillet(c, st, 51, 50, {"radius": 0.2});
+        stepVol(c, st, 51, "fillet");
+        atStep(st, 52);
+        cqWorkplaneNew(c, st, 52, {"plane": {"origin": [-12.5, -13.392304845413264, 8.024722482897488], "xDir": [-0.7310412324050625, 0.6823332884475792, 0], "zDir": [-0.625, -0.6696152422706632, 0.4012361241448744]}, "obj": undefined});
+        atStep(st, 53);
+        cqWorkplane(c, st, 53, 52, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 54);
+        cqPolygon(c, st, 54, 53, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 55);
+        cqExtrude(c, st, 55, 54, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 55, "extrude");
+        atStep(st, 56);
+        cqUnion(c, st, 56, 46, {"toUnion": {"wp": 51}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 56, "union");
+        atStep(st, 57);
+        cqUnion(c, st, 57, 56, {"toUnion": {"wp": 55}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 57, "union");
+        atStep(st, 58);
+        cqWorkplaneNew(c, st, 58, {"plane": {"origin": [-7.5, -13.392304845413264, 12.821707020811246], "xDir": [-2.7755575615628907e-17, -0.6915514487979944, -0.7223272067874748], "zDir": [-0.37500000000000006, -0.6696152422706633, 0.6410853510405624]}, "obj": undefined});
+        atStep(st, 59);
+        cqCircle(c, st, 59, 58, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 60);
+        cqExtrude(c, st, 60, 59, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 60, "extrude");
+        atStep(st, 61);
+        cqSelect("Edges")(c, st, 61, 60, {"selector": undefined, "tag": undefined});
+        atStep(st, 62);
+        cqFillet(c, st, 62, 61, {"radius": 0.2});
+        stepVol(c, st, 62, "fillet");
+        atStep(st, 63);
+        cqWorkplaneNew(c, st, 63, {"plane": {"origin": [-7.5, -13.392304845413264, 12.821707020811246], "xDir": [-2.7755575615628907e-17, -0.6915514487979944, -0.7223272067874748], "zDir": [-0.37500000000000006, -0.6696152422706633, 0.6410853510405624]}, "obj": undefined});
+        atStep(st, 64);
+        cqWorkplane(c, st, 64, 63, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 65);
+        cqPolygon(c, st, 65, 64, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 66);
+        cqExtrude(c, st, 66, 65, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 66, "extrude");
+        atStep(st, 67);
+        cqUnion(c, st, 67, 57, {"toUnion": {"wp": 62}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 67, "union");
+        atStep(st, 68);
+        cqUnion(c, st, 68, 67, {"toUnion": {"wp": 66}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 68, "union");
+        atStep(st, 69);
+        cqWorkplaneNew(c, st, 69, {"plane": {"origin": [-2.5, -13.392304845413264, 14.642273420733558], "xDir": [-6.9388939039072276e-18, 0.7379012209499434, 0.6749087257700727], "zDir": [-0.12500000000000003, -0.6696152422706633, 0.732113671036678]}, "obj": undefined});
+        atStep(st, 70);
+        cqCircle(c, st, 70, 69, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 71);
+        cqExtrude(c, st, 71, 70, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 71, "extrude");
+        atStep(st, 72);
+        cqSelect("Edges")(c, st, 72, 71, {"selector": undefined, "tag": undefined});
+        atStep(st, 73);
+        cqFillet(c, st, 73, 72, {"radius": 0.2});
+        stepVol(c, st, 73, "fillet");
+        atStep(st, 74);
+        cqWorkplaneNew(c, st, 74, {"plane": {"origin": [-2.5, -13.392304845413264, 14.642273420733558], "xDir": [-6.9388939039072276e-18, 0.7379012209499434, 0.6749087257700727], "zDir": [-0.12500000000000003, -0.6696152422706633, 0.732113671036678]}, "obj": undefined});
+        atStep(st, 75);
+        cqWorkplane(c, st, 75, 74, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 76);
+        cqPolygon(c, st, 76, 75, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 77);
+        cqExtrude(c, st, 77, 76, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 77, "extrude");
+        atStep(st, 78);
+        cqUnion(c, st, 78, 68, {"toUnion": {"wp": 73}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 78, "union");
+        atStep(st, 79);
+        cqUnion(c, st, 79, 78, {"toUnion": {"wp": 77}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 79, "union");
+        atStep(st, 80);
+        cqWorkplaneNew(c, st, 80, {"plane": {"origin": [2.5, -13.392304845413264, 14.642273420733558], "xDir": [6.9388939039072276e-18, 0.7379012209499434, 0.6749087257700727], "zDir": [0.12500000000000003, -0.6696152422706633, 0.732113671036678]}, "obj": undefined});
+        atStep(st, 81);
+        cqCircle(c, st, 81, 80, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 82);
+        cqExtrude(c, st, 82, 81, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 82, "extrude");
+        atStep(st, 83);
+        cqSelect("Edges")(c, st, 83, 82, {"selector": undefined, "tag": undefined});
+        atStep(st, 84);
+        cqFillet(c, st, 84, 83, {"radius": 0.2});
+        stepVol(c, st, 84, "fillet");
+        atStep(st, 85);
+        cqWorkplaneNew(c, st, 85, {"plane": {"origin": [2.5, -13.392304845413264, 14.642273420733558], "xDir": [6.9388939039072276e-18, 0.7379012209499434, 0.6749087257700727], "zDir": [0.12500000000000003, -0.6696152422706633, 0.732113671036678]}, "obj": undefined});
+        atStep(st, 86);
+        cqWorkplane(c, st, 86, 85, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 87);
+        cqPolygon(c, st, 87, 86, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 88);
+        cqExtrude(c, st, 88, 87, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 88, "extrude");
+        atStep(st, 89);
+        cqUnion(c, st, 89, 79, {"toUnion": {"wp": 84}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 89, "union");
+        atStep(st, 90);
+        cqUnion(c, st, 90, 89, {"toUnion": {"wp": 88}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 90, "union");
+        atStep(st, 91);
+        cqWorkplaneNew(c, st, 91, {"plane": {"origin": [7.5, -13.392304845413264, 12.821707020811246], "xDir": [2.7755575615628907e-17, -0.6915514487979944, -0.7223272067874748], "zDir": [0.37500000000000006, -0.6696152422706633, 0.6410853510405624]}, "obj": undefined});
+        atStep(st, 92);
+        cqCircle(c, st, 92, 91, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 93);
+        cqExtrude(c, st, 93, 92, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 93, "extrude");
+        atStep(st, 94);
+        cqSelect("Edges")(c, st, 94, 93, {"selector": undefined, "tag": undefined});
+        atStep(st, 95);
+        cqFillet(c, st, 95, 94, {"radius": 0.2});
+        stepVol(c, st, 95, "fillet");
+        atStep(st, 96);
+        cqWorkplaneNew(c, st, 96, {"plane": {"origin": [7.5, -13.392304845413264, 12.821707020811246], "xDir": [2.7755575615628907e-17, -0.6915514487979944, -0.7223272067874748], "zDir": [0.37500000000000006, -0.6696152422706633, 0.6410853510405624]}, "obj": undefined});
+        atStep(st, 97);
+        cqWorkplane(c, st, 97, 96, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 98);
+        cqPolygon(c, st, 98, 97, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 99);
+        cqExtrude(c, st, 99, 98, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 99, "extrude");
+        atStep(st, 100);
+        cqUnion(c, st, 100, 90, {"toUnion": {"wp": 95}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 100, "union");
+        atStep(st, 101);
+        cqUnion(c, st, 101, 100, {"toUnion": {"wp": 99}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 101, "union");
+        atStep(st, 102);
+        cqWorkplaneNew(c, st, 102, {"plane": {"origin": [12.5, -13.392304845413264, 8.024722482897488], "xDir": [-0.7310412324050625, -0.6823332884475792, 0], "zDir": [0.625, -0.6696152422706632, 0.4012361241448744]}, "obj": undefined});
+        atStep(st, 103);
+        cqCircle(c, st, 103, 102, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 104);
+        cqExtrude(c, st, 104, 103, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 104, "extrude");
+        atStep(st, 105);
+        cqSelect("Edges")(c, st, 105, 104, {"selector": undefined, "tag": undefined});
+        atStep(st, 106);
+        cqFillet(c, st, 106, 105, {"radius": 0.2});
+        stepVol(c, st, 106, "fillet");
+        atStep(st, 107);
+        cqWorkplaneNew(c, st, 107, {"plane": {"origin": [12.5, -13.392304845413264, 8.024722482897488], "xDir": [-0.7310412324050625, -0.6823332884475792, 0], "zDir": [0.625, -0.6696152422706632, 0.4012361241448744]}, "obj": undefined});
+        atStep(st, 108);
+        cqWorkplane(c, st, 108, 107, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 109);
+        cqPolygon(c, st, 109, 108, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 110);
+        cqExtrude(c, st, 110, 109, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 110, "extrude");
+        atStep(st, 111);
+        cqUnion(c, st, 111, 101, {"toUnion": {"wp": 106}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 111, "union");
+        atStep(st, 112);
+        cqUnion(c, st, 112, 111, {"toUnion": {"wp": 110}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 112, "union");
+        atStep(st, 113);
+        cqWorkplaneNew(c, st, 113, {"plane": {"origin": [-15, -8.928203230275509, 9.761515613822372], "xDir": [-0.5454406113259075, -2.775557561562892e-17, -0.838149473254276], "zDir": [-0.75, -0.44641016151377544, 0.48807578069111857]}, "obj": undefined});
+        atStep(st, 114);
+        cqCircle(c, st, 114, 113, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 115);
+        cqExtrude(c, st, 115, 114, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 115, "extrude");
+        atStep(st, 116);
+        cqSelect("Edges")(c, st, 116, 115, {"selector": undefined, "tag": undefined});
+        atStep(st, 117);
+        cqFillet(c, st, 117, 116, {"radius": 0.2});
+        stepVol(c, st, 117, "fillet");
+        atStep(st, 118);
+        cqWorkplaneNew(c, st, 118, {"plane": {"origin": [-15, -8.928203230275509, 9.761515613822372], "xDir": [-0.5454406113259075, -2.775557561562892e-17, -0.838149473254276], "zDir": [-0.75, -0.44641016151377544, 0.48807578069111857]}, "obj": undefined});
+        atStep(st, 119);
+        cqWorkplane(c, st, 119, 118, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 120);
+        cqPolygon(c, st, 120, 119, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 121);
+        cqExtrude(c, st, 121, 120, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 121, "extrude");
+        atStep(st, 122);
+        cqUnion(c, st, 122, 112, {"toUnion": {"wp": 117}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 122, "union");
+        atStep(st, 123);
+        cqUnion(c, st, 123, 122, {"toUnion": {"wp": 121}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 123, "union");
+        atStep(st, 124);
+        cqWorkplaneNew(c, st, 124, {"plane": {"origin": [-10, -8.928203230275509, 14.84207489129798], "xDir": [0.8293251501427946, 0, 0.5587663155028507], "zDir": [-0.5, -0.44641016151377544, 0.742103744564899]}, "obj": undefined});
+        atStep(st, 125);
+        cqCircle(c, st, 125, 124, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 126);
+        cqExtrude(c, st, 126, 125, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 126, "extrude");
+        atStep(st, 127);
+        cqSelect("Edges")(c, st, 127, 126, {"selector": undefined, "tag": undefined});
+        atStep(st, 128);
+        cqFillet(c, st, 128, 127, {"radius": 0.2});
+        stepVol(c, st, 128, "fillet");
+        atStep(st, 129);
+        cqWorkplaneNew(c, st, 129, {"plane": {"origin": [-10, -8.928203230275509, 14.84207489129798], "xDir": [0.8293251501427946, 0, 0.5587663155028507], "zDir": [-0.5, -0.44641016151377544, 0.742103744564899]}, "obj": undefined});
+        atStep(st, 130);
+        cqWorkplane(c, st, 130, 129, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 131);
+        cqPolygon(c, st, 131, 130, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 132);
+        cqExtrude(c, st, 132, 131, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 132, "extrude");
+        atStep(st, 133);
+        cqUnion(c, st, 133, 123, {"toUnion": {"wp": 128}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 133, "union");
+        atStep(st, 134);
+        cqUnion(c, st, 134, 133, {"toUnion": {"wp": 132}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 134, "union");
+        atStep(st, 135);
+        cqWorkplaneNew(c, st, 135, {"plane": {"origin": [-5, -8.928203230275509, 17.183922342669558], "xDir": [-1.3877787807814457e-17, 0.887373934075743, 0.4610504322988307], "zDir": [-0.25, -0.44641016151377544, 0.8591961171334779]}, "obj": undefined});
+        atStep(st, 136);
+        cqCircle(c, st, 136, 135, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 137);
+        cqExtrude(c, st, 137, 136, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 137, "extrude");
+        atStep(st, 138);
+        cqSelect("Edges")(c, st, 138, 137, {"selector": undefined, "tag": undefined});
+        atStep(st, 139);
+        cqFillet(c, st, 139, 138, {"radius": 0.2});
+        stepVol(c, st, 139, "fillet");
+        atStep(st, 140);
+        cqWorkplaneNew(c, st, 140, {"plane": {"origin": [-5, -8.928203230275509, 17.183922342669558], "xDir": [-1.3877787807814457e-17, 0.887373934075743, 0.4610504322988307], "zDir": [-0.25, -0.44641016151377544, 0.8591961171334779]}, "obj": undefined});
+        atStep(st, 141);
+        cqWorkplane(c, st, 141, 140, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 142);
+        cqPolygon(c, st, 142, 141, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 143);
+        cqExtrude(c, st, 143, 142, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 143, "extrude");
+        atStep(st, 144);
+        cqUnion(c, st, 144, 134, {"toUnion": {"wp": 139}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 144, "union");
+        atStep(st, 145);
+        cqUnion(c, st, 145, 144, {"toUnion": {"wp": 143}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 145, "union");
+        atStep(st, 146);
+        cqWorkplaneNew(c, st, 146, {"plane": {"origin": [0, -8.928203230275509, 17.896569142684807], "xDir": [0, 0.8948284571342404, 0.44641016151377544], "zDir": [0, -0.44641016151377544, 0.8948284571342404]}, "obj": undefined});
+        atStep(st, 147);
+        cqCircle(c, st, 147, 146, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 148);
+        cqExtrude(c, st, 148, 147, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 148, "extrude");
+        atStep(st, 149);
+        cqSelect("Edges")(c, st, 149, 148, {"selector": undefined, "tag": undefined});
+        atStep(st, 150);
+        cqFillet(c, st, 150, 149, {"radius": 0.2});
+        stepVol(c, st, 150, "fillet");
+        atStep(st, 151);
+        cqWorkplaneNew(c, st, 151, {"plane": {"origin": [0, -8.928203230275509, 17.896569142684807], "xDir": [0, 0.8948284571342404, 0.44641016151377544], "zDir": [0, -0.44641016151377544, 0.8948284571342404]}, "obj": undefined});
+        atStep(st, 152);
+        cqWorkplane(c, st, 152, 151, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 153);
+        cqPolygon(c, st, 153, 152, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 154);
+        cqExtrude(c, st, 154, 153, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 154, "extrude");
+        atStep(st, 155);
+        cqUnion(c, st, 155, 145, {"toUnion": {"wp": 150}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 155, "union");
+        atStep(st, 156);
+        cqUnion(c, st, 156, 155, {"toUnion": {"wp": 154}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 156, "union");
+        atStep(st, 157);
+        cqWorkplaneNew(c, st, 157, {"plane": {"origin": [5, -8.928203230275509, 17.183922342669558], "xDir": [1.3877787807814457e-17, 0.887373934075743, 0.4610504322988307], "zDir": [0.25, -0.44641016151377544, 0.8591961171334779]}, "obj": undefined});
+        atStep(st, 158);
+        cqCircle(c, st, 158, 157, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 159);
+        cqExtrude(c, st, 159, 158, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 159, "extrude");
+        atStep(st, 160);
+        cqSelect("Edges")(c, st, 160, 159, {"selector": undefined, "tag": undefined});
+        atStep(st, 161);
+        cqFillet(c, st, 161, 160, {"radius": 0.2});
+        stepVol(c, st, 161, "fillet");
+        atStep(st, 162);
+        cqWorkplaneNew(c, st, 162, {"plane": {"origin": [5, -8.928203230275509, 17.183922342669558], "xDir": [1.3877787807814457e-17, 0.887373934075743, 0.4610504322988307], "zDir": [0.25, -0.44641016151377544, 0.8591961171334779]}, "obj": undefined});
+        atStep(st, 163);
+        cqWorkplane(c, st, 163, 162, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 164);
+        cqPolygon(c, st, 164, 163, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 165);
+        cqExtrude(c, st, 165, 164, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 165, "extrude");
+        atStep(st, 166);
+        cqUnion(c, st, 166, 156, {"toUnion": {"wp": 161}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 166, "union");
+        atStep(st, 167);
+        cqUnion(c, st, 167, 166, {"toUnion": {"wp": 165}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 167, "union");
+        atStep(st, 168);
+        cqWorkplaneNew(c, st, 168, {"plane": {"origin": [10, -8.928203230275509, 14.84207489129798], "xDir": [0.8293251501427946, 0, -0.5587663155028507], "zDir": [0.5, -0.44641016151377544, 0.742103744564899]}, "obj": undefined});
+        atStep(st, 169);
+        cqCircle(c, st, 169, 168, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 170);
+        cqExtrude(c, st, 170, 169, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 170, "extrude");
+        atStep(st, 171);
+        cqSelect("Edges")(c, st, 171, 170, {"selector": undefined, "tag": undefined});
+        atStep(st, 172);
+        cqFillet(c, st, 172, 171, {"radius": 0.2});
+        stepVol(c, st, 172, "fillet");
+        atStep(st, 173);
+        cqWorkplaneNew(c, st, 173, {"plane": {"origin": [10, -8.928203230275509, 14.84207489129798], "xDir": [0.8293251501427946, 0, -0.5587663155028507], "zDir": [0.5, -0.44641016151377544, 0.742103744564899]}, "obj": undefined});
+        atStep(st, 174);
+        cqWorkplane(c, st, 174, 173, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 175);
+        cqPolygon(c, st, 175, 174, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 176);
+        cqExtrude(c, st, 176, 175, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 176, "extrude");
+        atStep(st, 177);
+        cqUnion(c, st, 177, 167, {"toUnion": {"wp": 172}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 177, "union");
+        atStep(st, 178);
+        cqUnion(c, st, 178, 177, {"toUnion": {"wp": 176}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 178, "union");
+        atStep(st, 179);
+        cqWorkplaneNew(c, st, 179, {"plane": {"origin": [15, -8.928203230275509, 9.761515613822372], "xDir": [-0.5454406113259075, 2.775557561562892e-17, 0.838149473254276], "zDir": [0.75, -0.44641016151377544, 0.48807578069111857]}, "obj": undefined});
+        atStep(st, 180);
+        cqCircle(c, st, 180, 179, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 181);
+        cqExtrude(c, st, 181, 180, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 181, "extrude");
+        atStep(st, 182);
+        cqSelect("Edges")(c, st, 182, 181, {"selector": undefined, "tag": undefined});
+        atStep(st, 183);
+        cqFillet(c, st, 183, 182, {"radius": 0.2});
+        stepVol(c, st, 183, "fillet");
+        atStep(st, 184);
+        cqWorkplaneNew(c, st, 184, {"plane": {"origin": [15, -8.928203230275509, 9.761515613822372], "xDir": [-0.5454406113259075, 2.775557561562892e-17, 0.838149473254276], "zDir": [0.75, -0.44641016151377544, 0.48807578069111857]}, "obj": undefined});
+        atStep(st, 185);
+        cqWorkplane(c, st, 185, 184, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 186);
+        cqPolygon(c, st, 186, 185, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 187);
+        cqExtrude(c, st, 187, 186, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 187, "extrude");
+        atStep(st, 188);
+        cqUnion(c, st, 188, 178, {"toUnion": {"wp": 183}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 188, "union");
+        atStep(st, 189);
+        cqUnion(c, st, 189, 188, {"toUnion": {"wp": 187}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 189, "union");
+        atStep(st, 190);
+        cqWorkplaneNew(c, st, 190, {"plane": {"origin": [-17.5, -4.464101615137754, 8.591961171334779], "xDir": [-0.4407166758988213, 1.3877787807814457e-17, -0.89764626194548], "zDir": [-0.875, -0.22320508075688772, 0.42959805856673894]}, "obj": undefined});
+        atStep(st, 191);
+        cqCircle(c, st, 191, 190, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 192);
+        cqExtrude(c, st, 192, 191, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 192, "extrude");
+        atStep(st, 193);
+        cqSelect("Edges")(c, st, 193, 192, {"selector": undefined, "tag": undefined});
+        atStep(st, 194);
+        cqFillet(c, st, 194, 193, {"radius": 0.2});
+        stepVol(c, st, 194, "fillet");
+        atStep(st, 195);
+        cqWorkplaneNew(c, st, 195, {"plane": {"origin": [-17.5, -4.464101615137754, 8.591961171334779], "xDir": [-0.4407166758988213, 1.3877787807814457e-17, -0.89764626194548], "zDir": [-0.875, -0.22320508075688772, 0.42959805856673894]}, "obj": undefined});
+        atStep(st, 196);
+        cqWorkplane(c, st, 196, 195, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 197);
+        cqPolygon(c, st, 197, 196, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 198);
+        cqExtrude(c, st, 198, 197, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 198, "extrude");
+        atStep(st, 199);
+        cqUnion(c, st, 199, 189, {"toUnion": {"wp": 194}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 199, "union");
+        atStep(st, 200);
+        cqUnion(c, st, 200, 199, {"toUnion": {"wp": 198}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 200, "union");
+        atStep(st, 201);
+        cqWorkplaneNew(c, st, 201, {"plane": {"origin": [-12.5, -4.464101615137754, 14.960675010497503], "xDir": [0.7673939428202423, 0, 0.6411759013896287], "zDir": [-0.625, -0.22320508075688772, 0.7480337505248752]}, "obj": undefined});
+        atStep(st, 202);
+        cqCircle(c, st, 202, 201, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 203);
+        cqExtrude(c, st, 203, 202, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 203, "extrude");
+        atStep(st, 204);
+        cqSelect("Edges")(c, st, 204, 203, {"selector": undefined, "tag": undefined});
+        atStep(st, 205);
+        cqFillet(c, st, 205, 204, {"radius": 0.2});
+        stepVol(c, st, 205, "fillet");
+        atStep(st, 206);
+        cqWorkplaneNew(c, st, 206, {"plane": {"origin": [-12.5, -4.464101615137754, 14.960675010497503], "xDir": [0.7673939428202423, 0, 0.6411759013896287], "zDir": [-0.625, -0.22320508075688772, 0.7480337505248752]}, "obj": undefined});
+        atStep(st, 207);
+        cqWorkplane(c, st, 207, 206, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 208);
+        cqPolygon(c, st, 208, 207, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 209);
+        cqExtrude(c, st, 209, 208, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 209, "extrude");
+        atStep(st, 210);
+        cqUnion(c, st, 210, 200, {"toUnion": {"wp": 205}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 210, "union");
+        atStep(st, 211);
+        cqUnion(c, st, 211, 210, {"toUnion": {"wp": 209}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 211, "union");
+        atStep(st, 212);
+        cqWorkplaneNew(c, st, 212, {"plane": {"origin": [-7.5, -4.464101615137754, 17.995049229433203], "xDir": [0.923039352818606, 0, 0.3847055408337772], "zDir": [-0.375, -0.22320508075688772, 0.8997524614716601]}, "obj": undefined});
+        atStep(st, 213);
+        cqCircle(c, st, 213, 212, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 214);
+        cqExtrude(c, st, 214, 213, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 214, "extrude");
+        atStep(st, 215);
+        cqSelect("Edges")(c, st, 215, 214, {"selector": undefined, "tag": undefined});
+        atStep(st, 216);
+        cqFillet(c, st, 216, 215, {"radius": 0.2});
+        stepVol(c, st, 216, "fillet");
+        atStep(st, 217);
+        cqWorkplaneNew(c, st, 217, {"plane": {"origin": [-7.5, -4.464101615137754, 17.995049229433203], "xDir": [0.923039352818606, 0, 0.3847055408337772], "zDir": [-0.375, -0.22320508075688772, 0.8997524614716601]}, "obj": undefined});
+        atStep(st, 218);
+        cqWorkplane(c, st, 218, 217, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 219);
+        cqPolygon(c, st, 219, 218, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 220);
+        cqExtrude(c, st, 220, 219, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 220, "extrude");
+        atStep(st, 221);
+        cqUnion(c, st, 221, 211, {"toUnion": {"wp": 216}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 221, "union");
+        atStep(st, 222);
+        cqUnion(c, st, 222, 221, {"toUnion": {"wp": 220}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 222, "union");
+        atStep(st, 223);
+        cqWorkplaneNew(c, st, 223, {"plane": {"origin": [-2.5, -4.464101615137754, 19.33447172202345], "xDir": [-3.469446951953614e-18, 0.9743657887101866, 0.22496957525669084], "zDir": [-0.125, -0.22320508075688772, 0.9667235861011726]}, "obj": undefined});
+        atStep(st, 224);
+        cqCircle(c, st, 224, 223, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 225);
+        cqExtrude(c, st, 225, 224, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 225, "extrude");
+        atStep(st, 226);
+        cqSelect("Edges")(c, st, 226, 225, {"selector": undefined, "tag": undefined});
+        atStep(st, 227);
+        cqFillet(c, st, 227, 226, {"radius": 0.2});
+        stepVol(c, st, 227, "fillet");
+        atStep(st, 228);
+        cqWorkplaneNew(c, st, 228, {"plane": {"origin": [-2.5, -4.464101615137754, 19.33447172202345], "xDir": [-3.469446951953614e-18, 0.9743657887101866, 0.22496957525669084], "zDir": [-0.125, -0.22320508075688772, 0.9667235861011726]}, "obj": undefined});
+        atStep(st, 229);
+        cqWorkplane(c, st, 229, 228, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 230);
+        cqPolygon(c, st, 230, 229, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 231);
+        cqExtrude(c, st, 231, 230, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 231, "extrude");
+        atStep(st, 232);
+        cqUnion(c, st, 232, 222, {"toUnion": {"wp": 227}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 232, "union");
+        atStep(st, 233);
+        cqUnion(c, st, 233, 232, {"toUnion": {"wp": 231}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 233, "union");
+        atStep(st, 234);
+        cqWorkplaneNew(c, st, 234, {"plane": {"origin": [2.5, -4.464101615137754, 19.33447172202345], "xDir": [3.469446951953614e-18, 0.9743657887101866, 0.22496957525669084], "zDir": [0.125, -0.22320508075688772, 0.9667235861011726]}, "obj": undefined});
+        atStep(st, 235);
+        cqCircle(c, st, 235, 234, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 236);
+        cqExtrude(c, st, 236, 235, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 236, "extrude");
+        atStep(st, 237);
+        cqSelect("Edges")(c, st, 237, 236, {"selector": undefined, "tag": undefined});
+        atStep(st, 238);
+        cqFillet(c, st, 238, 237, {"radius": 0.2});
+        stepVol(c, st, 238, "fillet");
+        atStep(st, 239);
+        cqWorkplaneNew(c, st, 239, {"plane": {"origin": [2.5, -4.464101615137754, 19.33447172202345], "xDir": [3.469446951953614e-18, 0.9743657887101866, 0.22496957525669084], "zDir": [0.125, -0.22320508075688772, 0.9667235861011726]}, "obj": undefined});
+        atStep(st, 240);
+        cqWorkplane(c, st, 240, 239, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 241);
+        cqPolygon(c, st, 241, 240, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 242);
+        cqExtrude(c, st, 242, 241, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 242, "extrude");
+        atStep(st, 243);
+        cqUnion(c, st, 243, 233, {"toUnion": {"wp": 238}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 243, "union");
+        atStep(st, 244);
+        cqUnion(c, st, 244, 243, {"toUnion": {"wp": 242}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 244, "union");
+        atStep(st, 245);
+        cqWorkplaneNew(c, st, 245, {"plane": {"origin": [7.5, -4.464101615137754, 17.995049229433203], "xDir": [0.923039352818606, 0, -0.3847055408337772], "zDir": [0.375, -0.22320508075688772, 0.8997524614716601]}, "obj": undefined});
+        atStep(st, 246);
+        cqCircle(c, st, 246, 245, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 247);
+        cqExtrude(c, st, 247, 246, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 247, "extrude");
+        atStep(st, 248);
+        cqSelect("Edges")(c, st, 248, 247, {"selector": undefined, "tag": undefined});
+        atStep(st, 249);
+        cqFillet(c, st, 249, 248, {"radius": 0.2});
+        stepVol(c, st, 249, "fillet");
+        atStep(st, 250);
+        cqWorkplaneNew(c, st, 250, {"plane": {"origin": [7.5, -4.464101615137754, 17.995049229433203], "xDir": [0.923039352818606, 0, -0.3847055408337772], "zDir": [0.375, -0.22320508075688772, 0.8997524614716601]}, "obj": undefined});
+        atStep(st, 251);
+        cqWorkplane(c, st, 251, 250, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 252);
+        cqPolygon(c, st, 252, 251, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 253);
+        cqExtrude(c, st, 253, 252, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 253, "extrude");
+        atStep(st, 254);
+        cqUnion(c, st, 254, 244, {"toUnion": {"wp": 249}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 254, "union");
+        atStep(st, 255);
+        cqUnion(c, st, 255, 254, {"toUnion": {"wp": 253}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 255, "union");
+        atStep(st, 256);
+        cqWorkplaneNew(c, st, 256, {"plane": {"origin": [12.5, -4.464101615137754, 14.960675010497503], "xDir": [0.7673939428202423, 0, -0.6411759013896287], "zDir": [0.625, -0.22320508075688772, 0.7480337505248752]}, "obj": undefined});
+        atStep(st, 257);
+        cqCircle(c, st, 257, 256, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 258);
+        cqExtrude(c, st, 258, 257, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 258, "extrude");
+        atStep(st, 259);
+        cqSelect("Edges")(c, st, 259, 258, {"selector": undefined, "tag": undefined});
+        atStep(st, 260);
+        cqFillet(c, st, 260, 259, {"radius": 0.2});
+        stepVol(c, st, 260, "fillet");
+        atStep(st, 261);
+        cqWorkplaneNew(c, st, 261, {"plane": {"origin": [12.5, -4.464101615137754, 14.960675010497503], "xDir": [0.7673939428202423, 0, -0.6411759013896287], "zDir": [0.625, -0.22320508075688772, 0.7480337505248752]}, "obj": undefined});
+        atStep(st, 262);
+        cqWorkplane(c, st, 262, 261, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 263);
+        cqPolygon(c, st, 263, 262, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 264);
+        cqExtrude(c, st, 264, 263, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 264, "extrude");
+        atStep(st, 265);
+        cqUnion(c, st, 265, 255, {"toUnion": {"wp": 260}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 265, "union");
+        atStep(st, 266);
+        cqUnion(c, st, 266, 265, {"toUnion": {"wp": 264}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 266, "union");
+        atStep(st, 267);
+        cqWorkplaneNew(c, st, 267, {"plane": {"origin": [17.5, -4.464101615137754, 8.591961171334779], "xDir": [-0.4407166758988213, -1.3877787807814457e-17, 0.89764626194548], "zDir": [0.875, -0.22320508075688772, 0.42959805856673894]}, "obj": undefined});
+        atStep(st, 268);
+        cqCircle(c, st, 268, 267, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 269);
+        cqExtrude(c, st, 269, 268, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 269, "extrude");
+        atStep(st, 270);
+        cqSelect("Edges")(c, st, 270, 269, {"selector": undefined, "tag": undefined});
+        atStep(st, 271);
+        cqFillet(c, st, 271, 270, {"radius": 0.2});
+        stepVol(c, st, 271, "fillet");
+        atStep(st, 272);
+        cqWorkplaneNew(c, st, 272, {"plane": {"origin": [17.5, -4.464101615137754, 8.591961171334779], "xDir": [-0.4407166758988213, -1.3877787807814457e-17, 0.89764626194548], "zDir": [0.875, -0.22320508075688772, 0.42959805856673894]}, "obj": undefined});
+        atStep(st, 273);
+        cqWorkplane(c, st, 273, 272, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 274);
+        cqPolygon(c, st, 274, 273, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 275);
+        cqExtrude(c, st, 275, 274, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 275, "extrude");
+        atStep(st, 276);
+        cqUnion(c, st, 276, 266, {"toUnion": {"wp": 271}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 276, "union");
+        atStep(st, 277);
+        cqUnion(c, st, 277, 276, {"toUnion": {"wp": 275}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 277, "union");
+        atStep(st, 278);
+        cqWorkplaneNew(c, st, 278, {"plane": {"origin": [-20, 0, 0], "xDir": [0, 0, -1], "zDir": [-1, 0, 0]}, "obj": undefined});
+        atStep(st, 279);
+        cqCircle(c, st, 279, 278, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 280);
+        cqExtrude(c, st, 280, 279, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 280, "extrude");
+        atStep(st, 281);
+        cqSelect("Edges")(c, st, 281, 280, {"selector": undefined, "tag": undefined});
+        atStep(st, 282);
+        cqFillet(c, st, 282, 281, {"radius": 0.2});
+        stepVol(c, st, 282, "fillet");
+        atStep(st, 283);
+        cqWorkplaneNew(c, st, 283, {"plane": {"origin": [-20, 0, 0], "xDir": [0, 0, -1], "zDir": [-1, 0, 0]}, "obj": undefined});
+        atStep(st, 284);
+        cqWorkplane(c, st, 284, 283, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 285);
+        cqPolygon(c, st, 285, 284, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 286);
+        cqExtrude(c, st, 286, 285, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 286, "extrude");
+        atStep(st, 287);
+        cqUnion(c, st, 287, 277, {"toUnion": {"wp": 282}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 287, "union");
+        atStep(st, 288);
+        cqUnion(c, st, 288, 287, {"toUnion": {"wp": 286}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 288, "union");
+        atStep(st, 289);
+        cqWorkplaneNew(c, st, 289, {"plane": {"origin": [-15, 0, 13.228756555322953], "xDir": [-0.6614378277661477, 0, -0.75], "zDir": [-0.75, 0, 0.6614378277661477]}, "obj": undefined});
+        atStep(st, 290);
+        cqCircle(c, st, 290, 289, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 291);
+        cqExtrude(c, st, 291, 290, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 291, "extrude");
+        atStep(st, 292);
+        cqSelect("Edges")(c, st, 292, 291, {"selector": undefined, "tag": undefined});
+        atStep(st, 293);
+        cqFillet(c, st, 293, 292, {"radius": 0.2});
+        stepVol(c, st, 293, "fillet");
+        atStep(st, 294);
+        cqWorkplaneNew(c, st, 294, {"plane": {"origin": [-15, 0, 13.228756555322953], "xDir": [-0.6614378277661477, 0, -0.75], "zDir": [-0.75, 0, 0.6614378277661477]}, "obj": undefined});
+        atStep(st, 295);
+        cqWorkplane(c, st, 295, 294, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 296);
+        cqPolygon(c, st, 296, 295, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 297);
+        cqExtrude(c, st, 297, 296, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 297, "extrude");
+        atStep(st, 298);
+        cqUnion(c, st, 298, 288, {"toUnion": {"wp": 293}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 298, "union");
+        atStep(st, 299);
+        cqUnion(c, st, 299, 298, {"toUnion": {"wp": 297}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 299, "union");
+        atStep(st, 300);
+        cqWorkplaneNew(c, st, 300, {"plane": {"origin": [-10, 0, 17.320508075688775], "xDir": [0.8660254037844387, 0, 0.5], "zDir": [-0.5, 0, 0.8660254037844387]}, "obj": undefined});
+        atStep(st, 301);
+        cqCircle(c, st, 301, 300, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 302);
+        cqExtrude(c, st, 302, 301, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 302, "extrude");
+        atStep(st, 303);
+        cqSelect("Edges")(c, st, 303, 302, {"selector": undefined, "tag": undefined});
+        atStep(st, 304);
+        cqFillet(c, st, 304, 303, {"radius": 0.2});
+        stepVol(c, st, 304, "fillet");
+        atStep(st, 305);
+        cqWorkplaneNew(c, st, 305, {"plane": {"origin": [-10, 0, 17.320508075688775], "xDir": [0.8660254037844387, 0, 0.5], "zDir": [-0.5, 0, 0.8660254037844387]}, "obj": undefined});
+        atStep(st, 306);
+        cqWorkplane(c, st, 306, 305, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 307);
+        cqPolygon(c, st, 307, 306, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 308);
+        cqExtrude(c, st, 308, 307, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 308, "extrude");
+        atStep(st, 309);
+        cqUnion(c, st, 309, 299, {"toUnion": {"wp": 304}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 309, "union");
+        atStep(st, 310);
+        cqUnion(c, st, 310, 309, {"toUnion": {"wp": 308}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 310, "union");
+        atStep(st, 311);
+        cqWorkplaneNew(c, st, 311, {"plane": {"origin": [-5, 0, 19.364916731037084], "xDir": [0.9682458365518544, 0, 0.25], "zDir": [-0.25, 0, 0.9682458365518544]}, "obj": undefined});
+        atStep(st, 312);
+        cqCircle(c, st, 312, 311, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 313);
+        cqExtrude(c, st, 313, 312, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 313, "extrude");
+        atStep(st, 314);
+        cqSelect("Edges")(c, st, 314, 313, {"selector": undefined, "tag": undefined});
+        atStep(st, 315);
+        cqFillet(c, st, 315, 314, {"radius": 0.2});
+        stepVol(c, st, 315, "fillet");
+        atStep(st, 316);
+        cqWorkplaneNew(c, st, 316, {"plane": {"origin": [-5, 0, 19.364916731037084], "xDir": [0.9682458365518544, 0, 0.25], "zDir": [-0.25, 0, 0.9682458365518544]}, "obj": undefined});
+        atStep(st, 317);
+        cqWorkplane(c, st, 317, 316, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 318);
+        cqPolygon(c, st, 318, 317, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 319);
+        cqExtrude(c, st, 319, 318, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 319, "extrude");
+        atStep(st, 320);
+        cqUnion(c, st, 320, 310, {"toUnion": {"wp": 315}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 320, "union");
+        atStep(st, 321);
+        cqUnion(c, st, 321, 320, {"toUnion": {"wp": 319}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 321, "union");
+        atStep(st, 322);
+        cqWorkplaneNew(c, st, 322, {"plane": {"origin": [5, 0, 19.364916731037084], "xDir": [0.9682458365518544, 0, -0.25], "zDir": [0.25, 0, 0.9682458365518544]}, "obj": undefined});
+        atStep(st, 323);
+        cqCircle(c, st, 323, 322, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 324);
+        cqExtrude(c, st, 324, 323, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 324, "extrude");
+        atStep(st, 325);
+        cqSelect("Edges")(c, st, 325, 324, {"selector": undefined, "tag": undefined});
+        atStep(st, 326);
+        cqFillet(c, st, 326, 325, {"radius": 0.2});
+        stepVol(c, st, 326, "fillet");
+        atStep(st, 327);
+        cqWorkplaneNew(c, st, 327, {"plane": {"origin": [5, 0, 19.364916731037084], "xDir": [0.9682458365518544, 0, -0.25], "zDir": [0.25, 0, 0.9682458365518544]}, "obj": undefined});
+        atStep(st, 328);
+        cqWorkplane(c, st, 328, 327, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 329);
+        cqPolygon(c, st, 329, 328, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 330);
+        cqExtrude(c, st, 330, 329, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 330, "extrude");
+        atStep(st, 331);
+        cqUnion(c, st, 331, 321, {"toUnion": {"wp": 326}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 331, "union");
+        atStep(st, 332);
+        cqUnion(c, st, 332, 331, {"toUnion": {"wp": 330}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 332, "union");
+        atStep(st, 333);
+        cqWorkplaneNew(c, st, 333, {"plane": {"origin": [10, 0, 17.320508075688775], "xDir": [0.8660254037844387, 0, -0.5], "zDir": [0.5, 0, 0.8660254037844387]}, "obj": undefined});
+        atStep(st, 334);
+        cqCircle(c, st, 334, 333, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 335);
+        cqExtrude(c, st, 335, 334, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 335, "extrude");
+        atStep(st, 336);
+        cqSelect("Edges")(c, st, 336, 335, {"selector": undefined, "tag": undefined});
+        atStep(st, 337);
+        cqFillet(c, st, 337, 336, {"radius": 0.2});
+        stepVol(c, st, 337, "fillet");
+        atStep(st, 338);
+        cqWorkplaneNew(c, st, 338, {"plane": {"origin": [10, 0, 17.320508075688775], "xDir": [0.8660254037844387, 0, -0.5], "zDir": [0.5, 0, 0.8660254037844387]}, "obj": undefined});
+        atStep(st, 339);
+        cqWorkplane(c, st, 339, 338, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 340);
+        cqPolygon(c, st, 340, 339, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 341);
+        cqExtrude(c, st, 341, 340, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 341, "extrude");
+        atStep(st, 342);
+        cqUnion(c, st, 342, 332, {"toUnion": {"wp": 337}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 342, "union");
+        atStep(st, 343);
+        cqUnion(c, st, 343, 342, {"toUnion": {"wp": 341}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 343, "union");
+        atStep(st, 344);
+        cqWorkplaneNew(c, st, 344, {"plane": {"origin": [15, 0, 13.228756555322953], "xDir": [-0.6614378277661477, 0, 0.75], "zDir": [0.75, 0, 0.6614378277661477]}, "obj": undefined});
+        atStep(st, 345);
+        cqCircle(c, st, 345, 344, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 346);
+        cqExtrude(c, st, 346, 345, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 346, "extrude");
+        atStep(st, 347);
+        cqSelect("Edges")(c, st, 347, 346, {"selector": undefined, "tag": undefined});
+        atStep(st, 348);
+        cqFillet(c, st, 348, 347, {"radius": 0.2});
+        stepVol(c, st, 348, "fillet");
+        atStep(st, 349);
+        cqWorkplaneNew(c, st, 349, {"plane": {"origin": [15, 0, 13.228756555322953], "xDir": [-0.6614378277661477, 0, 0.75], "zDir": [0.75, 0, 0.6614378277661477]}, "obj": undefined});
+        atStep(st, 350);
+        cqWorkplane(c, st, 350, 349, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 351);
+        cqPolygon(c, st, 351, 350, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 352);
+        cqExtrude(c, st, 352, 351, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 352, "extrude");
+        atStep(st, 353);
+        cqUnion(c, st, 353, 343, {"toUnion": {"wp": 348}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 353, "union");
+        atStep(st, 354);
+        cqUnion(c, st, 354, 353, {"toUnion": {"wp": 352}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 354, "union");
+        atStep(st, 355);
+        cqWorkplaneNew(c, st, 355, {"plane": {"origin": [20, 0, 0], "xDir": [0, 0, 1], "zDir": [1, 0, 0]}, "obj": undefined});
+        atStep(st, 356);
+        cqCircle(c, st, 356, 355, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 357);
+        cqExtrude(c, st, 357, 356, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 357, "extrude");
+        atStep(st, 358);
+        cqSelect("Edges")(c, st, 358, 357, {"selector": undefined, "tag": undefined});
+        atStep(st, 359);
+        cqFillet(c, st, 359, 358, {"radius": 0.2});
+        stepVol(c, st, 359, "fillet");
+        atStep(st, 360);
+        cqWorkplaneNew(c, st, 360, {"plane": {"origin": [20, 0, 0], "xDir": [0, 0, 1], "zDir": [1, 0, 0]}, "obj": undefined});
+        atStep(st, 361);
+        cqWorkplane(c, st, 361, 360, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 362);
+        cqPolygon(c, st, 362, 361, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 363);
+        cqExtrude(c, st, 363, 362, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 363, "extrude");
+        atStep(st, 364);
+        cqUnion(c, st, 364, 354, {"toUnion": {"wp": 359}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 364, "union");
+        atStep(st, 365);
+        cqUnion(c, st, 365, 364, {"toUnion": {"wp": 363}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 365, "union");
+        atStep(st, 366);
+        cqWorkplaneNew(c, st, 366, {"plane": {"origin": [-17.5, 4.464101615137754, 8.591961171334779], "xDir": [-0.4407166758988213, -1.3877787807814457e-17, -0.89764626194548], "zDir": [-0.875, 0.22320508075688772, 0.42959805856673894]}, "obj": undefined});
+        atStep(st, 367);
+        cqCircle(c, st, 367, 366, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 368);
+        cqExtrude(c, st, 368, 367, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 368, "extrude");
+        atStep(st, 369);
+        cqSelect("Edges")(c, st, 369, 368, {"selector": undefined, "tag": undefined});
+        atStep(st, 370);
+        cqFillet(c, st, 370, 369, {"radius": 0.2});
+        stepVol(c, st, 370, "fillet");
+        atStep(st, 371);
+        cqWorkplaneNew(c, st, 371, {"plane": {"origin": [-17.5, 4.464101615137754, 8.591961171334779], "xDir": [-0.4407166758988213, -1.3877787807814457e-17, -0.89764626194548], "zDir": [-0.875, 0.22320508075688772, 0.42959805856673894]}, "obj": undefined});
+        atStep(st, 372);
+        cqWorkplane(c, st, 372, 371, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 373);
+        cqPolygon(c, st, 373, 372, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 374);
+        cqExtrude(c, st, 374, 373, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 374, "extrude");
+        atStep(st, 375);
+        cqUnion(c, st, 375, 365, {"toUnion": {"wp": 370}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 375, "union");
+        atStep(st, 376);
+        cqUnion(c, st, 376, 375, {"toUnion": {"wp": 374}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 376, "union");
+        atStep(st, 377);
+        cqWorkplaneNew(c, st, 377, {"plane": {"origin": [-12.5, 4.464101615137754, 14.960675010497503], "xDir": [0.7673939428202423, 0, 0.6411759013896287], "zDir": [-0.625, 0.22320508075688772, 0.7480337505248752]}, "obj": undefined});
+        atStep(st, 378);
+        cqCircle(c, st, 378, 377, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 379);
+        cqExtrude(c, st, 379, 378, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 379, "extrude");
+        atStep(st, 380);
+        cqSelect("Edges")(c, st, 380, 379, {"selector": undefined, "tag": undefined});
+        atStep(st, 381);
+        cqFillet(c, st, 381, 380, {"radius": 0.2});
+        stepVol(c, st, 381, "fillet");
+        atStep(st, 382);
+        cqWorkplaneNew(c, st, 382, {"plane": {"origin": [-12.5, 4.464101615137754, 14.960675010497503], "xDir": [0.7673939428202423, 0, 0.6411759013896287], "zDir": [-0.625, 0.22320508075688772, 0.7480337505248752]}, "obj": undefined});
+        atStep(st, 383);
+        cqWorkplane(c, st, 383, 382, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 384);
+        cqPolygon(c, st, 384, 383, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 385);
+        cqExtrude(c, st, 385, 384, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 385, "extrude");
+        atStep(st, 386);
+        cqUnion(c, st, 386, 376, {"toUnion": {"wp": 381}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 386, "union");
+        atStep(st, 387);
+        cqUnion(c, st, 387, 386, {"toUnion": {"wp": 385}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 387, "union");
+        atStep(st, 388);
+        cqWorkplaneNew(c, st, 388, {"plane": {"origin": [-7.5, 4.464101615137754, 17.995049229433203], "xDir": [0.923039352818606, 0, 0.3847055408337772], "zDir": [-0.375, 0.22320508075688772, 0.8997524614716601]}, "obj": undefined});
+        atStep(st, 389);
+        cqCircle(c, st, 389, 388, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 390);
+        cqExtrude(c, st, 390, 389, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 390, "extrude");
+        atStep(st, 391);
+        cqSelect("Edges")(c, st, 391, 390, {"selector": undefined, "tag": undefined});
+        atStep(st, 392);
+        cqFillet(c, st, 392, 391, {"radius": 0.2});
+        stepVol(c, st, 392, "fillet");
+        atStep(st, 393);
+        cqWorkplaneNew(c, st, 393, {"plane": {"origin": [-7.5, 4.464101615137754, 17.995049229433203], "xDir": [0.923039352818606, 0, 0.3847055408337772], "zDir": [-0.375, 0.22320508075688772, 0.8997524614716601]}, "obj": undefined});
+        atStep(st, 394);
+        cqWorkplane(c, st, 394, 393, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 395);
+        cqPolygon(c, st, 395, 394, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 396);
+        cqExtrude(c, st, 396, 395, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 396, "extrude");
+        atStep(st, 397);
+        cqUnion(c, st, 397, 387, {"toUnion": {"wp": 392}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 397, "union");
+        atStep(st, 398);
+        cqUnion(c, st, 398, 397, {"toUnion": {"wp": 396}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 398, "union");
+        atStep(st, 399);
+        cqWorkplaneNew(c, st, 399, {"plane": {"origin": [-2.5, 4.464101615137754, 19.33447172202345], "xDir": [3.469446951953614e-18, 0.9743657887101866, -0.22496957525669084], "zDir": [-0.125, 0.22320508075688772, 0.9667235861011726]}, "obj": undefined});
+        atStep(st, 400);
+        cqCircle(c, st, 400, 399, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 401);
+        cqExtrude(c, st, 401, 400, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 401, "extrude");
+        atStep(st, 402);
+        cqSelect("Edges")(c, st, 402, 401, {"selector": undefined, "tag": undefined});
+        atStep(st, 403);
+        cqFillet(c, st, 403, 402, {"radius": 0.2});
+        stepVol(c, st, 403, "fillet");
+        atStep(st, 404);
+        cqWorkplaneNew(c, st, 404, {"plane": {"origin": [-2.5, 4.464101615137754, 19.33447172202345], "xDir": [3.469446951953614e-18, 0.9743657887101866, -0.22496957525669084], "zDir": [-0.125, 0.22320508075688772, 0.9667235861011726]}, "obj": undefined});
+        atStep(st, 405);
+        cqWorkplane(c, st, 405, 404, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 406);
+        cqPolygon(c, st, 406, 405, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 407);
+        cqExtrude(c, st, 407, 406, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 407, "extrude");
+        atStep(st, 408);
+        cqUnion(c, st, 408, 398, {"toUnion": {"wp": 403}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 408, "union");
+        atStep(st, 409);
+        cqUnion(c, st, 409, 408, {"toUnion": {"wp": 407}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 409, "union");
+        atStep(st, 410);
+        cqWorkplaneNew(c, st, 410, {"plane": {"origin": [2.5, 4.464101615137754, 19.33447172202345], "xDir": [-3.469446951953614e-18, 0.9743657887101866, -0.22496957525669084], "zDir": [0.125, 0.22320508075688772, 0.9667235861011726]}, "obj": undefined});
+        atStep(st, 411);
+        cqCircle(c, st, 411, 410, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 412);
+        cqExtrude(c, st, 412, 411, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 412, "extrude");
+        atStep(st, 413);
+        cqSelect("Edges")(c, st, 413, 412, {"selector": undefined, "tag": undefined});
+        atStep(st, 414);
+        cqFillet(c, st, 414, 413, {"radius": 0.2});
+        stepVol(c, st, 414, "fillet");
+        atStep(st, 415);
+        cqWorkplaneNew(c, st, 415, {"plane": {"origin": [2.5, 4.464101615137754, 19.33447172202345], "xDir": [-3.469446951953614e-18, 0.9743657887101866, -0.22496957525669084], "zDir": [0.125, 0.22320508075688772, 0.9667235861011726]}, "obj": undefined});
+        atStep(st, 416);
+        cqWorkplane(c, st, 416, 415, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 417);
+        cqPolygon(c, st, 417, 416, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 418);
+        cqExtrude(c, st, 418, 417, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 418, "extrude");
+        atStep(st, 419);
+        cqUnion(c, st, 419, 409, {"toUnion": {"wp": 414}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 419, "union");
+        atStep(st, 420);
+        cqUnion(c, st, 420, 419, {"toUnion": {"wp": 418}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 420, "union");
+        atStep(st, 421);
+        cqWorkplaneNew(c, st, 421, {"plane": {"origin": [7.5, 4.464101615137754, 17.995049229433203], "xDir": [0.923039352818606, 0, -0.3847055408337772], "zDir": [0.375, 0.22320508075688772, 0.8997524614716601]}, "obj": undefined});
+        atStep(st, 422);
+        cqCircle(c, st, 422, 421, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 423);
+        cqExtrude(c, st, 423, 422, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 423, "extrude");
+        atStep(st, 424);
+        cqSelect("Edges")(c, st, 424, 423, {"selector": undefined, "tag": undefined});
+        atStep(st, 425);
+        cqFillet(c, st, 425, 424, {"radius": 0.2});
+        stepVol(c, st, 425, "fillet");
+        atStep(st, 426);
+        cqWorkplaneNew(c, st, 426, {"plane": {"origin": [7.5, 4.464101615137754, 17.995049229433203], "xDir": [0.923039352818606, 0, -0.3847055408337772], "zDir": [0.375, 0.22320508075688772, 0.8997524614716601]}, "obj": undefined});
+        atStep(st, 427);
+        cqWorkplane(c, st, 427, 426, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 428);
+        cqPolygon(c, st, 428, 427, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 429);
+        cqExtrude(c, st, 429, 428, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 429, "extrude");
+        atStep(st, 430);
+        cqUnion(c, st, 430, 420, {"toUnion": {"wp": 425}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 430, "union");
+        atStep(st, 431);
+        cqUnion(c, st, 431, 430, {"toUnion": {"wp": 429}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 431, "union");
+        atStep(st, 432);
+        cqWorkplaneNew(c, st, 432, {"plane": {"origin": [12.5, 4.464101615137754, 14.960675010497503], "xDir": [0.7673939428202423, 0, -0.6411759013896287], "zDir": [0.625, 0.22320508075688772, 0.7480337505248752]}, "obj": undefined});
+        atStep(st, 433);
+        cqCircle(c, st, 433, 432, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 434);
+        cqExtrude(c, st, 434, 433, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 434, "extrude");
+        atStep(st, 435);
+        cqSelect("Edges")(c, st, 435, 434, {"selector": undefined, "tag": undefined});
+        atStep(st, 436);
+        cqFillet(c, st, 436, 435, {"radius": 0.2});
+        stepVol(c, st, 436, "fillet");
+        atStep(st, 437);
+        cqWorkplaneNew(c, st, 437, {"plane": {"origin": [12.5, 4.464101615137754, 14.960675010497503], "xDir": [0.7673939428202423, 0, -0.6411759013896287], "zDir": [0.625, 0.22320508075688772, 0.7480337505248752]}, "obj": undefined});
+        atStep(st, 438);
+        cqWorkplane(c, st, 438, 437, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 439);
+        cqPolygon(c, st, 439, 438, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 440);
+        cqExtrude(c, st, 440, 439, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 440, "extrude");
+        atStep(st, 441);
+        cqUnion(c, st, 441, 431, {"toUnion": {"wp": 436}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 441, "union");
+        atStep(st, 442);
+        cqUnion(c, st, 442, 441, {"toUnion": {"wp": 440}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 442, "union");
+        atStep(st, 443);
+        cqWorkplaneNew(c, st, 443, {"plane": {"origin": [17.5, 4.464101615137754, 8.591961171334779], "xDir": [-0.4407166758988213, 1.3877787807814457e-17, 0.89764626194548], "zDir": [0.875, 0.22320508075688772, 0.42959805856673894]}, "obj": undefined});
+        atStep(st, 444);
+        cqCircle(c, st, 444, 443, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 445);
+        cqExtrude(c, st, 445, 444, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 445, "extrude");
+        atStep(st, 446);
+        cqSelect("Edges")(c, st, 446, 445, {"selector": undefined, "tag": undefined});
+        atStep(st, 447);
+        cqFillet(c, st, 447, 446, {"radius": 0.2});
+        stepVol(c, st, 447, "fillet");
+        atStep(st, 448);
+        cqWorkplaneNew(c, st, 448, {"plane": {"origin": [17.5, 4.464101615137754, 8.591961171334779], "xDir": [-0.4407166758988213, 1.3877787807814457e-17, 0.89764626194548], "zDir": [0.875, 0.22320508075688772, 0.42959805856673894]}, "obj": undefined});
+        atStep(st, 449);
+        cqWorkplane(c, st, 449, 448, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 450);
+        cqPolygon(c, st, 450, 449, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 451);
+        cqExtrude(c, st, 451, 450, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 451, "extrude");
+        atStep(st, 452);
+        cqUnion(c, st, 452, 442, {"toUnion": {"wp": 447}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 452, "union");
+        atStep(st, 453);
+        cqUnion(c, st, 453, 452, {"toUnion": {"wp": 451}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 453, "union");
+        atStep(st, 454);
+        cqWorkplaneNew(c, st, 454, {"plane": {"origin": [-15, 8.928203230275509, 9.761515613822372], "xDir": [-0.5454406113259075, 2.775557561562892e-17, -0.838149473254276], "zDir": [-0.75, 0.44641016151377544, 0.48807578069111857]}, "obj": undefined});
+        atStep(st, 455);
+        cqCircle(c, st, 455, 454, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 456);
+        cqExtrude(c, st, 456, 455, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 456, "extrude");
+        atStep(st, 457);
+        cqSelect("Edges")(c, st, 457, 456, {"selector": undefined, "tag": undefined});
+        atStep(st, 458);
+        cqFillet(c, st, 458, 457, {"radius": 0.2});
+        stepVol(c, st, 458, "fillet");
+        atStep(st, 459);
+        cqWorkplaneNew(c, st, 459, {"plane": {"origin": [-15, 8.928203230275509, 9.761515613822372], "xDir": [-0.5454406113259075, 2.775557561562892e-17, -0.838149473254276], "zDir": [-0.75, 0.44641016151377544, 0.48807578069111857]}, "obj": undefined});
+        atStep(st, 460);
+        cqWorkplane(c, st, 460, 459, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 461);
+        cqPolygon(c, st, 461, 460, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 462);
+        cqExtrude(c, st, 462, 461, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 462, "extrude");
+        atStep(st, 463);
+        cqUnion(c, st, 463, 453, {"toUnion": {"wp": 458}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 463, "union");
+        atStep(st, 464);
+        cqUnion(c, st, 464, 463, {"toUnion": {"wp": 462}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 464, "union");
+        atStep(st, 465);
+        cqWorkplaneNew(c, st, 465, {"plane": {"origin": [-10, 8.928203230275509, 14.84207489129798], "xDir": [0.8293251501427946, 0, 0.5587663155028507], "zDir": [-0.5, 0.44641016151377544, 0.742103744564899]}, "obj": undefined});
+        atStep(st, 466);
+        cqCircle(c, st, 466, 465, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 467);
+        cqExtrude(c, st, 467, 466, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 467, "extrude");
+        atStep(st, 468);
+        cqSelect("Edges")(c, st, 468, 467, {"selector": undefined, "tag": undefined});
+        atStep(st, 469);
+        cqFillet(c, st, 469, 468, {"radius": 0.2});
+        stepVol(c, st, 469, "fillet");
+        atStep(st, 470);
+        cqWorkplaneNew(c, st, 470, {"plane": {"origin": [-10, 8.928203230275509, 14.84207489129798], "xDir": [0.8293251501427946, 0, 0.5587663155028507], "zDir": [-0.5, 0.44641016151377544, 0.742103744564899]}, "obj": undefined});
+        atStep(st, 471);
+        cqWorkplane(c, st, 471, 470, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 472);
+        cqPolygon(c, st, 472, 471, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 473);
+        cqExtrude(c, st, 473, 472, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 473, "extrude");
+        atStep(st, 474);
+        cqUnion(c, st, 474, 464, {"toUnion": {"wp": 469}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 474, "union");
+        atStep(st, 475);
+        cqUnion(c, st, 475, 474, {"toUnion": {"wp": 473}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 475, "union");
+        atStep(st, 476);
+        cqWorkplaneNew(c, st, 476, {"plane": {"origin": [-5, 8.928203230275509, 17.183922342669558], "xDir": [1.3877787807814457e-17, 0.887373934075743, -0.4610504322988307], "zDir": [-0.25, 0.44641016151377544, 0.8591961171334779]}, "obj": undefined});
+        atStep(st, 477);
+        cqCircle(c, st, 477, 476, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 478);
+        cqExtrude(c, st, 478, 477, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 478, "extrude");
+        atStep(st, 479);
+        cqSelect("Edges")(c, st, 479, 478, {"selector": undefined, "tag": undefined});
+        atStep(st, 480);
+        cqFillet(c, st, 480, 479, {"radius": 0.2});
+        stepVol(c, st, 480, "fillet");
+        atStep(st, 481);
+        cqWorkplaneNew(c, st, 481, {"plane": {"origin": [-5, 8.928203230275509, 17.183922342669558], "xDir": [1.3877787807814457e-17, 0.887373934075743, -0.4610504322988307], "zDir": [-0.25, 0.44641016151377544, 0.8591961171334779]}, "obj": undefined});
+        atStep(st, 482);
+        cqWorkplane(c, st, 482, 481, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 483);
+        cqPolygon(c, st, 483, 482, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 484);
+        cqExtrude(c, st, 484, 483, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 484, "extrude");
+        atStep(st, 485);
+        cqUnion(c, st, 485, 475, {"toUnion": {"wp": 480}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 485, "union");
+        atStep(st, 486);
+        cqUnion(c, st, 486, 485, {"toUnion": {"wp": 484}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 486, "union");
+        atStep(st, 487);
+        cqWorkplaneNew(c, st, 487, {"plane": {"origin": [0, 8.928203230275509, 17.896569142684807], "xDir": [0, 0.8948284571342404, -0.44641016151377544], "zDir": [0, 0.44641016151377544, 0.8948284571342404]}, "obj": undefined});
+        atStep(st, 488);
+        cqCircle(c, st, 488, 487, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 489);
+        cqExtrude(c, st, 489, 488, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 489, "extrude");
+        atStep(st, 490);
+        cqSelect("Edges")(c, st, 490, 489, {"selector": undefined, "tag": undefined});
+        atStep(st, 491);
+        cqFillet(c, st, 491, 490, {"radius": 0.2});
+        stepVol(c, st, 491, "fillet");
+        atStep(st, 492);
+        cqWorkplaneNew(c, st, 492, {"plane": {"origin": [0, 8.928203230275509, 17.896569142684807], "xDir": [0, 0.8948284571342404, -0.44641016151377544], "zDir": [0, 0.44641016151377544, 0.8948284571342404]}, "obj": undefined});
+        atStep(st, 493);
+        cqWorkplane(c, st, 493, 492, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 494);
+        cqPolygon(c, st, 494, 493, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 495);
+        cqExtrude(c, st, 495, 494, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 495, "extrude");
+        atStep(st, 496);
+        cqUnion(c, st, 496, 486, {"toUnion": {"wp": 491}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 496, "union");
+        atStep(st, 497);
+        cqUnion(c, st, 497, 496, {"toUnion": {"wp": 495}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 497, "union");
+        atStep(st, 498);
+        cqWorkplaneNew(c, st, 498, {"plane": {"origin": [5, 8.928203230275509, 17.183922342669558], "xDir": [-1.3877787807814457e-17, 0.887373934075743, -0.4610504322988307], "zDir": [0.25, 0.44641016151377544, 0.8591961171334779]}, "obj": undefined});
+        atStep(st, 499);
+        cqCircle(c, st, 499, 498, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 500);
+        cqExtrude(c, st, 500, 499, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 500, "extrude");
+        atStep(st, 501);
+        cqSelect("Edges")(c, st, 501, 500, {"selector": undefined, "tag": undefined});
+        atStep(st, 502);
+        cqFillet(c, st, 502, 501, {"radius": 0.2});
+        stepVol(c, st, 502, "fillet");
+        atStep(st, 503);
+        cqWorkplaneNew(c, st, 503, {"plane": {"origin": [5, 8.928203230275509, 17.183922342669558], "xDir": [-1.3877787807814457e-17, 0.887373934075743, -0.4610504322988307], "zDir": [0.25, 0.44641016151377544, 0.8591961171334779]}, "obj": undefined});
+        atStep(st, 504);
+        cqWorkplane(c, st, 504, 503, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 505);
+        cqPolygon(c, st, 505, 504, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 506);
+        cqExtrude(c, st, 506, 505, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 506, "extrude");
+        atStep(st, 507);
+        cqUnion(c, st, 507, 497, {"toUnion": {"wp": 502}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 507, "union");
+        atStep(st, 508);
+        cqUnion(c, st, 508, 507, {"toUnion": {"wp": 506}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 508, "union");
+        atStep(st, 509);
+        cqWorkplaneNew(c, st, 509, {"plane": {"origin": [10, 8.928203230275509, 14.84207489129798], "xDir": [0.8293251501427946, 0, -0.5587663155028507], "zDir": [0.5, 0.44641016151377544, 0.742103744564899]}, "obj": undefined});
+        atStep(st, 510);
+        cqCircle(c, st, 510, 509, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 511);
+        cqExtrude(c, st, 511, 510, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 511, "extrude");
+        atStep(st, 512);
+        cqSelect("Edges")(c, st, 512, 511, {"selector": undefined, "tag": undefined});
+        atStep(st, 513);
+        cqFillet(c, st, 513, 512, {"radius": 0.2});
+        stepVol(c, st, 513, "fillet");
+        atStep(st, 514);
+        cqWorkplaneNew(c, st, 514, {"plane": {"origin": [10, 8.928203230275509, 14.84207489129798], "xDir": [0.8293251501427946, 0, -0.5587663155028507], "zDir": [0.5, 0.44641016151377544, 0.742103744564899]}, "obj": undefined});
+        atStep(st, 515);
+        cqWorkplane(c, st, 515, 514, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 516);
+        cqPolygon(c, st, 516, 515, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 517);
+        cqExtrude(c, st, 517, 516, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 517, "extrude");
+        atStep(st, 518);
+        cqUnion(c, st, 518, 508, {"toUnion": {"wp": 513}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 518, "union");
+        atStep(st, 519);
+        cqUnion(c, st, 519, 518, {"toUnion": {"wp": 517}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 519, "union");
+        atStep(st, 520);
+        cqWorkplaneNew(c, st, 520, {"plane": {"origin": [15, 8.928203230275509, 9.761515613822372], "xDir": [-0.5454406113259075, -2.775557561562892e-17, 0.838149473254276], "zDir": [0.75, 0.44641016151377544, 0.48807578069111857]}, "obj": undefined});
+        atStep(st, 521);
+        cqCircle(c, st, 521, 520, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 522);
+        cqExtrude(c, st, 522, 521, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 522, "extrude");
+        atStep(st, 523);
+        cqSelect("Edges")(c, st, 523, 522, {"selector": undefined, "tag": undefined});
+        atStep(st, 524);
+        cqFillet(c, st, 524, 523, {"radius": 0.2});
+        stepVol(c, st, 524, "fillet");
+        atStep(st, 525);
+        cqWorkplaneNew(c, st, 525, {"plane": {"origin": [15, 8.928203230275509, 9.761515613822372], "xDir": [-0.5454406113259075, -2.775557561562892e-17, 0.838149473254276], "zDir": [0.75, 0.44641016151377544, 0.48807578069111857]}, "obj": undefined});
+        atStep(st, 526);
+        cqWorkplane(c, st, 526, 525, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 527);
+        cqPolygon(c, st, 527, 526, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 528);
+        cqExtrude(c, st, 528, 527, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 528, "extrude");
+        atStep(st, 529);
+        cqUnion(c, st, 529, 519, {"toUnion": {"wp": 524}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 529, "union");
+        atStep(st, 530);
+        cqUnion(c, st, 530, 529, {"toUnion": {"wp": 528}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 530, "union");
+        atStep(st, 531);
+        cqWorkplaneNew(c, st, 531, {"plane": {"origin": [-12.5, 13.392304845413264, 8.024722482897488], "xDir": [0.7310412324050625, 0.6823332884475792, 0], "zDir": [-0.625, 0.6696152422706632, 0.4012361241448744]}, "obj": undefined});
+        atStep(st, 532);
+        cqCircle(c, st, 532, 531, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 533);
+        cqExtrude(c, st, 533, 532, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 533, "extrude");
+        atStep(st, 534);
+        cqSelect("Edges")(c, st, 534, 533, {"selector": undefined, "tag": undefined});
+        atStep(st, 535);
+        cqFillet(c, st, 535, 534, {"radius": 0.2});
+        stepVol(c, st, 535, "fillet");
+        atStep(st, 536);
+        cqWorkplaneNew(c, st, 536, {"plane": {"origin": [-12.5, 13.392304845413264, 8.024722482897488], "xDir": [0.7310412324050625, 0.6823332884475792, 0], "zDir": [-0.625, 0.6696152422706632, 0.4012361241448744]}, "obj": undefined});
+        atStep(st, 537);
+        cqWorkplane(c, st, 537, 536, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 538);
+        cqPolygon(c, st, 538, 537, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 539);
+        cqExtrude(c, st, 539, 538, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 539, "extrude");
+        atStep(st, 540);
+        cqUnion(c, st, 540, 530, {"toUnion": {"wp": 535}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 540, "union");
+        atStep(st, 541);
+        cqUnion(c, st, 541, 540, {"toUnion": {"wp": 539}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 541, "union");
+        atStep(st, 542);
+        cqWorkplaneNew(c, st, 542, {"plane": {"origin": [-7.5, 13.392304845413264, 12.821707020811246], "xDir": [2.7755575615628907e-17, -0.6915514487979944, 0.7223272067874748], "zDir": [-0.37500000000000006, 0.6696152422706633, 0.6410853510405624]}, "obj": undefined});
+        atStep(st, 543);
+        cqCircle(c, st, 543, 542, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 544);
+        cqExtrude(c, st, 544, 543, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 544, "extrude");
+        atStep(st, 545);
+        cqSelect("Edges")(c, st, 545, 544, {"selector": undefined, "tag": undefined});
+        atStep(st, 546);
+        cqFillet(c, st, 546, 545, {"radius": 0.2});
+        stepVol(c, st, 546, "fillet");
+        atStep(st, 547);
+        cqWorkplaneNew(c, st, 547, {"plane": {"origin": [-7.5, 13.392304845413264, 12.821707020811246], "xDir": [2.7755575615628907e-17, -0.6915514487979944, 0.7223272067874748], "zDir": [-0.37500000000000006, 0.6696152422706633, 0.6410853510405624]}, "obj": undefined});
+        atStep(st, 548);
+        cqWorkplane(c, st, 548, 547, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 549);
+        cqPolygon(c, st, 549, 548, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 550);
+        cqExtrude(c, st, 550, 549, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 550, "extrude");
+        atStep(st, 551);
+        cqUnion(c, st, 551, 541, {"toUnion": {"wp": 546}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 551, "union");
+        atStep(st, 552);
+        cqUnion(c, st, 552, 551, {"toUnion": {"wp": 550}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 552, "union");
+        atStep(st, 553);
+        cqWorkplaneNew(c, st, 553, {"plane": {"origin": [-2.5, 13.392304845413264, 14.642273420733558], "xDir": [6.9388939039072276e-18, 0.7379012209499434, -0.6749087257700727], "zDir": [-0.12500000000000003, 0.6696152422706633, 0.732113671036678]}, "obj": undefined});
+        atStep(st, 554);
+        cqCircle(c, st, 554, 553, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 555);
+        cqExtrude(c, st, 555, 554, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 555, "extrude");
+        atStep(st, 556);
+        cqSelect("Edges")(c, st, 556, 555, {"selector": undefined, "tag": undefined});
+        atStep(st, 557);
+        cqFillet(c, st, 557, 556, {"radius": 0.2});
+        stepVol(c, st, 557, "fillet");
+        atStep(st, 558);
+        cqWorkplaneNew(c, st, 558, {"plane": {"origin": [-2.5, 13.392304845413264, 14.642273420733558], "xDir": [6.9388939039072276e-18, 0.7379012209499434, -0.6749087257700727], "zDir": [-0.12500000000000003, 0.6696152422706633, 0.732113671036678]}, "obj": undefined});
+        atStep(st, 559);
+        cqWorkplane(c, st, 559, 558, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 560);
+        cqPolygon(c, st, 560, 559, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 561);
+        cqExtrude(c, st, 561, 560, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 561, "extrude");
+        atStep(st, 562);
+        cqUnion(c, st, 562, 552, {"toUnion": {"wp": 557}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 562, "union");
+        atStep(st, 563);
+        cqUnion(c, st, 563, 562, {"toUnion": {"wp": 561}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 563, "union");
+        atStep(st, 564);
+        cqWorkplaneNew(c, st, 564, {"plane": {"origin": [2.5, 13.392304845413264, 14.642273420733558], "xDir": [-6.9388939039072276e-18, 0.7379012209499434, -0.6749087257700727], "zDir": [0.12500000000000003, 0.6696152422706633, 0.732113671036678]}, "obj": undefined});
+        atStep(st, 565);
+        cqCircle(c, st, 565, 564, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 566);
+        cqExtrude(c, st, 566, 565, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 566, "extrude");
+        atStep(st, 567);
+        cqSelect("Edges")(c, st, 567, 566, {"selector": undefined, "tag": undefined});
+        atStep(st, 568);
+        cqFillet(c, st, 568, 567, {"radius": 0.2});
+        stepVol(c, st, 568, "fillet");
+        atStep(st, 569);
+        cqWorkplaneNew(c, st, 569, {"plane": {"origin": [2.5, 13.392304845413264, 14.642273420733558], "xDir": [-6.9388939039072276e-18, 0.7379012209499434, -0.6749087257700727], "zDir": [0.12500000000000003, 0.6696152422706633, 0.732113671036678]}, "obj": undefined});
+        atStep(st, 570);
+        cqWorkplane(c, st, 570, 569, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 571);
+        cqPolygon(c, st, 571, 570, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 572);
+        cqExtrude(c, st, 572, 571, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 572, "extrude");
+        atStep(st, 573);
+        cqUnion(c, st, 573, 563, {"toUnion": {"wp": 568}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 573, "union");
+        atStep(st, 574);
+        cqUnion(c, st, 574, 573, {"toUnion": {"wp": 572}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 574, "union");
+        atStep(st, 575);
+        cqWorkplaneNew(c, st, 575, {"plane": {"origin": [7.5, 13.392304845413264, 12.821707020811246], "xDir": [-2.7755575615628907e-17, -0.6915514487979944, 0.7223272067874748], "zDir": [0.37500000000000006, 0.6696152422706633, 0.6410853510405624]}, "obj": undefined});
+        atStep(st, 576);
+        cqCircle(c, st, 576, 575, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 577);
+        cqExtrude(c, st, 577, 576, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 577, "extrude");
+        atStep(st, 578);
+        cqSelect("Edges")(c, st, 578, 577, {"selector": undefined, "tag": undefined});
+        atStep(st, 579);
+        cqFillet(c, st, 579, 578, {"radius": 0.2});
+        stepVol(c, st, 579, "fillet");
+        atStep(st, 580);
+        cqWorkplaneNew(c, st, 580, {"plane": {"origin": [7.5, 13.392304845413264, 12.821707020811246], "xDir": [-2.7755575615628907e-17, -0.6915514487979944, 0.7223272067874748], "zDir": [0.37500000000000006, 0.6696152422706633, 0.6410853510405624]}, "obj": undefined});
+        atStep(st, 581);
+        cqWorkplane(c, st, 581, 580, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 582);
+        cqPolygon(c, st, 582, 581, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 583);
+        cqExtrude(c, st, 583, 582, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 583, "extrude");
+        atStep(st, 584);
+        cqUnion(c, st, 584, 574, {"toUnion": {"wp": 579}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 584, "union");
+        atStep(st, 585);
+        cqUnion(c, st, 585, 584, {"toUnion": {"wp": 583}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 585, "union");
+        atStep(st, 586);
+        cqWorkplaneNew(c, st, 586, {"plane": {"origin": [12.5, 13.392304845413264, 8.024722482897488], "xDir": [0.7310412324050625, -0.6823332884475792, 0], "zDir": [0.625, 0.6696152422706632, 0.4012361241448744]}, "obj": undefined});
+        atStep(st, 587);
+        cqCircle(c, st, 587, 586, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 588);
+        cqExtrude(c, st, 588, 587, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 588, "extrude");
+        atStep(st, 589);
+        cqSelect("Edges")(c, st, 589, 588, {"selector": undefined, "tag": undefined});
+        atStep(st, 590);
+        cqFillet(c, st, 590, 589, {"radius": 0.2});
+        stepVol(c, st, 590, "fillet");
+        atStep(st, 591);
+        cqWorkplaneNew(c, st, 591, {"plane": {"origin": [12.5, 13.392304845413264, 8.024722482897488], "xDir": [0.7310412324050625, -0.6823332884475792, 0], "zDir": [0.625, 0.6696152422706632, 0.4012361241448744]}, "obj": undefined});
+        atStep(st, 592);
+        cqWorkplane(c, st, 592, 591, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 593);
+        cqPolygon(c, st, 593, 592, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 594);
+        cqExtrude(c, st, 594, 593, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 594, "extrude");
+        atStep(st, 595);
+        cqUnion(c, st, 595, 585, {"toUnion": {"wp": 590}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 595, "union");
+        atStep(st, 596);
+        cqUnion(c, st, 596, 595, {"toUnion": {"wp": 594}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 596, "union");
+        atStep(st, 597);
+        cqWorkplaneNew(c, st, 597, {"plane": {"origin": [-5, 17.856406460551018, 7.493246847368095], "xDir": [0, -0.3869496033183715, 0.9221008645976616], "zDir": [-0.25, 0.8928203230275509, 0.37466234236840473]}, "obj": undefined});
+        atStep(st, 598);
+        cqCircle(c, st, 598, 597, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 599);
+        cqExtrude(c, st, 599, 598, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 599, "extrude");
+        atStep(st, 600);
+        cqSelect("Edges")(c, st, 600, 599, {"selector": undefined, "tag": undefined});
+        atStep(st, 601);
+        cqFillet(c, st, 601, 600, {"radius": 0.2});
+        stepVol(c, st, 601, "fillet");
+        atStep(st, 602);
+        cqWorkplaneNew(c, st, 602, {"plane": {"origin": [-5, 17.856406460551018, 7.493246847368095], "xDir": [0, -0.3869496033183715, 0.9221008645976616], "zDir": [-0.25, 0.8928203230275509, 0.37466234236840473]}, "obj": undefined});
+        atStep(st, 603);
+        cqWorkplane(c, st, 603, 602, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 604);
+        cqPolygon(c, st, 604, 603, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 605);
+        cqExtrude(c, st, 605, 604, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 605, "extrude");
+        atStep(st, 606);
+        cqUnion(c, st, 606, 596, {"toUnion": {"wp": 601}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 606, "union");
+        atStep(st, 607);
+        cqUnion(c, st, 607, 606, {"toUnion": {"wp": 605}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 607, "union");
+        atStep(st, 608);
+        cqWorkplaneNew(c, st, 608, {"plane": {"origin": [0, 17.856406460551018, 9.008260004883956], "xDir": [0, -0.45041300024419784, 0.8928203230275509], "zDir": [0, 0.8928203230275509, 0.45041300024419784]}, "obj": undefined});
+        atStep(st, 609);
+        cqCircle(c, st, 609, 608, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 610);
+        cqExtrude(c, st, 610, 609, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 610, "extrude");
+        atStep(st, 611);
+        cqSelect("Edges")(c, st, 611, 610, {"selector": undefined, "tag": undefined});
+        atStep(st, 612);
+        cqFillet(c, st, 612, 611, {"radius": 0.2});
+        stepVol(c, st, 612, "fillet");
+        atStep(st, 613);
+        cqWorkplaneNew(c, st, 613, {"plane": {"origin": [0, 17.856406460551018, 9.008260004883956], "xDir": [0, -0.45041300024419784, 0.8928203230275509], "zDir": [0, 0.8928203230275509, 0.45041300024419784]}, "obj": undefined});
+        atStep(st, 614);
+        cqWorkplane(c, st, 614, 613, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 615);
+        cqPolygon(c, st, 615, 614, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 616);
+        cqExtrude(c, st, 616, 615, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 616, "extrude");
+        atStep(st, 617);
+        cqUnion(c, st, 617, 607, {"toUnion": {"wp": 612}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 617, "union");
+        atStep(st, 618);
+        cqUnion(c, st, 618, 617, {"toUnion": {"wp": 616}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 618, "union");
+        atStep(st, 619);
+        cqWorkplaneNew(c, st, 619, {"plane": {"origin": [5, 17.856406460551018, 7.493246847368095], "xDir": [0, -0.3869496033183715, 0.9221008645976616], "zDir": [0.25, 0.8928203230275509, 0.37466234236840473]}, "obj": undefined});
+        atStep(st, 620);
+        cqCircle(c, st, 620, 619, {"radius": 0.25, "forConstruction": false});
+        atStep(st, 621);
+        cqExtrude(c, st, 621, 620, {"until": 1, "combine": true, "clean": true, "both": true, "taper": undefined});
+        stepVol(c, st, 621, "extrude");
+        atStep(st, 622);
+        cqSelect("Edges")(c, st, 622, 621, {"selector": undefined, "tag": undefined});
+        atStep(st, 623);
+        cqFillet(c, st, 623, 622, {"radius": 0.2});
+        stepVol(c, st, 623, "fillet");
+        atStep(st, 624);
+        cqWorkplaneNew(c, st, 624, {"plane": {"origin": [5, 17.856406460551018, 7.493246847368095], "xDir": [0, -0.3869496033183715, 0.9221008645976616], "zDir": [0.25, 0.8928203230275509, 0.37466234236840473]}, "obj": undefined});
+        atStep(st, 625);
+        cqWorkplane(c, st, 625, 624, {"offset": 1, "invert": false, "centerOption": "ProjectedOrigin", "origin": undefined});
+        atStep(st, 626);
+        cqPolygon(c, st, 626, 625, {"nSides": 6, "diameter": 4.618802153517006, "forConstruction": false, "circumscribed": false});
+        atStep(st, 627);
+        cqExtrude(c, st, 627, 626, {"until": 1, "combine": true, "clean": true, "both": false, "taper": undefined});
+        stepVol(c, st, 627, "extrude");
+        atStep(st, 628);
+        cqUnion(c, st, 628, 618, {"toUnion": {"wp": 623}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 628, "union");
+        atStep(st, 629);
+        cqUnion(c, st, 629, 628, {"toUnion": {"wp": 627}, "clean": true, "glue": false, "tol": undefined});
+        stepVol(c, st, 629, "union");
+        return mergeMaps(cqMeasure(c, st, {"wp": 629}), {"i": 4361});
+    } catch (e) {
+        return {"i": 4361, "status": "error", "at": st[].cur, "err": toString(e), "log": st[].log, "warn": st[].warn};
+    }
+};
+    var out = {};
+    { var r = case_4361(newContextWithDefaults(), makeId("q")); r.result_q = undefined; out["c4361"] = r; }
+    return out;
+}

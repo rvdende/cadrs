@@ -85,7 +85,7 @@ pub fn curved_prism_inset(
     let h = (b.verts[b.edges[b.faces[top].loops[0][0].edge].v[0]].p - o).dot(&n);
     // Every vertex on one cap or the other: the sides run the whole height.
     // (The part's own size, however small: no floor at a millimetre.)
-    let size = b.bbox().diagonal().max(tol::POINT);
+    let size = b.bbox().diagonal().max(tol::point());
     if h <= tol::ROUNDOFF
         || b.verts.iter().any(|v| {
             let z = (v.p - o).dot(&n);

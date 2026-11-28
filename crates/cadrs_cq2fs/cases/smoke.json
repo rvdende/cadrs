@@ -1,0 +1,126 @@
+{
+  "cases": [
+    {
+      "i": 0,
+      "name": "box_prism"
+    },
+    {
+      "i": 1,
+      "name": "cylinder_basic"
+    },
+    {
+      "i": 2,
+      "name": "sphere_basic"
+    },
+    {
+      "i": 3,
+      "name": "cone_revolve"
+    },
+    {
+      "i": 6,
+      "name": "hex_prism"
+    },
+    {
+      "i": 7,
+      "name": "triangular_prism"
+    },
+    {
+      "i": 8,
+      "name": "torus_revolve"
+    },
+    {
+      "i": 9,
+      "name": "half_cylinder"
+    },
+    {
+      "i": 11,
+      "name": "annular_ring"
+    },
+    {
+      "i": 12,
+      "name": "wedge_basic"
+    },
+    {
+      "i": 13,
+      "name": "oct_prism"
+    },
+    {
+      "i": 14,
+      "name": "star_prism"
+    },
+    {
+      "i": 15,
+      "name": "quarter_torus"
+    },
+    {
+      "i": 16,
+      "name": "dome_hemisphere"
+    },
+    {
+      "i": 19,
+      "name": "chamfered_box"
+    },
+    {
+      "i": 20,
+      "name": "sphere_cap"
+    },
+    {
+      "i": 21,
+      "name": "spur_gear"
+    },
+    {
+      "i": 22,
+      "name": "perforated_plate"
+    },
+    {
+      "i": 24,
+      "name": "box_with_cross_hole"
+    },
+    {
+      "i": 25,
+      "name": "flanged_cylinder"
+    },
+    {
+      "i": 27,
+      "name": "oct_prism_with_hole"
+    },
+    {
+      "i": 29,
+      "name": "sphere_with_cylindrical_hole"
+    },
+    {
+      "i": 34,
+      "name": "box_with_edge_fillets"
+    },
+    {
+      "i": 36,
+      "name": "triangular_prism_hollow"
+    },
+    {
+      "i": 38,
+      "name": "hollow_cylinder_shell"
+    },
+    {
+      "i": 41,
+      "name": "star_prism_with_boss"
+    },
+    {
+      "i": 42,
+      "name": "hex_prism_with_hole_pattern"
+    },
+    {
+      "i": 44,
+      "name": "sphere_cap_with_hole"
+    },
+    {
+      "i": 45,
+      "name": "beveled_hex_prism"
+    },
+    {
+      "i": 191,
+      "name": "sphere_cap_with_hole_and_chamfer"
+    }
+  ],
+  "dir": "cadevolve",
+  "generators": "~/Work/cadevolve/CADEvolve-G/parametric_generators.json"
+}

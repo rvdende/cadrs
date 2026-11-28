@@ -1,0 +1,2281 @@
+{
+  "entries": [
+    {
+      "line": 49,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 1
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "zDir": [
+          0.0,
+          -1.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "args": [
+        [
+          [
+            0,
+            0
+          ],
+          [
+            10.0,
+            0
+          ],
+          [
+            1e-6,
+            20.0
+          ],
+          [
+            0,
+            20.0
+          ]
+        ]
+      ],
+      "kwargs": {},
+      "line": 49,
+      "op": "polyline",
+      "out": {
+        "wp": 2
+      },
+      "self": {
+        "wp": 1
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {},
+      "line": 49,
+      "op": "close",
+      "out": {
+        "wp": 3
+      },
+      "self": {
+        "wp": 2
+      }
+    },
+    {
+      "args": [
+        360.0
+      ],
+      "kwargs": {},
+      "line": 49,
+      "op": "revolve",
+      "out": {
+        "wp": 4
+      },
+      "self": {
+        "wp": 3
+      }
+    },
+    {
+      "line": 56,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 5
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "zDir": [
+          0.0,
+          -1.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "args": [
+        [
+          [
+            0,
+            0
+          ],
+          [
+            9.0,
+            0
+          ],
+          [
+            0,
+            20.0
+          ]
+        ]
+      ],
+      "kwargs": {},
+      "line": 56,
+      "op": "polyline",
+      "out": {
+        "wp": 6
+      },
+      "self": {
+        "wp": 5
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {},
+      "line": 56,
+      "op": "close",
+      "out": {
+        "wp": 7
+      },
+      "self": {
+        "wp": 6
+      }
+    },
+    {
+      "args": [
+        360.0
+      ],
+      "kwargs": {},
+      "line": 56,
+      "op": "revolve",
+      "out": {
+        "wp": 8
+      },
+      "self": {
+        "wp": 7
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 8
+        }
+      ],
+      "kwargs": {},
+      "line": 57,
+      "op": "cut",
+      "out": {
+        "wp": 9
+      },
+      "self": {
+        "wp": 4
+      }
+    },
+    {
+      "line": 77,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 10
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": {
+          "vec": [
+            9.0,
+            0.0,
+            0.0
+          ]
+        },
+        "rotate": {
+          "vec": [
+            0.0,
+            0.0,
+            180.0
+          ]
+        }
+      },
+      "line": 78,
+      "op": "transformed",
+      "out": {
+        "wp": 11
+      },
+      "self": {
+        "wp": 10
+      }
+    },
+    {
+      "args": [
+        9.0,
+        1.0,
+        20.0
+      ],
+      "kwargs": {
+        "centered": [
+          false,
+          true,
+          false
+        ]
+      },
+      "line": 83,
+      "op": "box",
+      "out": {
+        "wp": 12
+      },
+      "self": {
+        "wp": 11
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 8
+        }
+      ],
+      "kwargs": {},
+      "line": 86,
+      "op": "intersect",
+      "out": {
+        "wp": 13
+      },
+      "self": {
+        "wp": 12
+      }
+    },
+    {
+      "line": 77,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 14
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": {
+          "vec": [
+            6.3639610306789285,
+            6.363961030678928,
+            0.0
+          ]
+        },
+        "rotate": {
+          "vec": [
+            0.0,
+            0.0,
+            225.0
+          ]
+        }
+      },
+      "line": 78,
+      "op": "transformed",
+      "out": {
+        "wp": 15
+      },
+      "self": {
+        "wp": 14
+      }
+    },
+    {
+      "args": [
+        9.0,
+        1.0,
+        20.0
+      ],
+      "kwargs": {
+        "centered": [
+          false,
+          true,
+          false
+        ]
+      },
+      "line": 83,
+      "op": "box",
+      "out": {
+        "wp": 16
+      },
+      "self": {
+        "wp": 15
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 8
+        }
+      ],
+      "kwargs": {},
+      "line": 86,
+      "op": "intersect",
+      "out": {
+        "wp": 17
+      },
+      "self": {
+        "wp": 16
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 17
+        }
+      ],
+      "kwargs": {},
+      "line": 87,
+      "op": "union",
+      "out": {
+        "wp": 18
+      },
+      "self": {
+        "wp": 13
+      }
+    },
+    {
+      "line": 77,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 19
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": {
+          "vec": [
+            5.51091059616309e-16,
+            9.0,
+            0.0
+          ]
+        },
+        "rotate": {
+          "vec": [
+            0.0,
+            0.0,
+            270.0
+          ]
+        }
+      },
+      "line": 78,
+      "op": "transformed",
+      "out": {
+        "wp": 20
+      },
+      "self": {
+        "wp": 19
+      }
+    },
+    {
+      "args": [
+        9.0,
+        1.0,
+        20.0
+      ],
+      "kwargs": {
+        "centered": [
+          false,
+          true,
+          false
+        ]
+      },
+      "line": 83,
+      "op": "box",
+      "out": {
+        "wp": 21
+      },
+      "self": {
+        "wp": 20
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 8
+        }
+      ],
+      "kwargs": {},
+      "line": 86,
+      "op": "intersect",
+      "out": {
+        "wp": 22
+      },
+      "self": {
+        "wp": 21
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 22
+        }
+      ],
+      "kwargs": {},
+      "line": 87,
+      "op": "union",
+      "out": {
+        "wp": 23
+      },
+      "self": {
+        "wp": 18
+      }
+    },
+    {
+      "line": 77,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 24
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": {
+          "vec": [
+            -6.363961030678928,
+            6.3639610306789285,
+            0.0
+          ]
+        },
+        "rotate": {
+          "vec": [
+            0.0,
+            0.0,
+            315.0
+          ]
+        }
+      },
+      "line": 78,
+      "op": "transformed",
+      "out": {
+        "wp": 25
+      },
+      "self": {
+        "wp": 24
+      }
+    },
+    {
+      "args": [
+        9.0,
+        1.0,
+        20.0
+      ],
+      "kwargs": {
+        "centered": [
+          false,
+          true,
+          false
+        ]
+      },
+      "line": 83,
+      "op": "box",
+      "out": {
+        "wp": 26
+      },
+      "self": {
+        "wp": 25
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 8
+        }
+      ],
+      "kwargs": {},
+      "line": 86,
+      "op": "intersect",
+      "out": {
+        "wp": 27
+      },
+      "self": {
+        "wp": 26
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 27
+        }
+      ],
+      "kwargs": {},
+      "line": 87,
+      "op": "union",
+      "out": {
+        "wp": 28
+      },
+      "self": {
+        "wp": 23
+      }
+    },
+    {
+      "line": 77,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 29
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": {
+          "vec": [
+            -9.0,
+            1.102182119232618e-15,
+            0.0
+          ]
+        },
+        "rotate": {
+          "vec": [
+            0.0,
+            0.0,
+            360.0
+          ]
+        }
+      },
+      "line": 78,
+      "op": "transformed",
+      "out": {
+        "wp": 30
+      },
+      "self": {
+        "wp": 29
+      }
+    },
+    {
+      "args": [
+        9.0,
+        1.0,
+        20.0
+      ],
+      "kwargs": {
+        "centered": [
+          false,
+          true,
+          false
+        ]
+      },
+      "line": 83,
+      "op": "box",
+      "out": {
+        "wp": 31
+      },
+      "self": {
+        "wp": 30
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 8
+        }
+      ],
+      "kwargs": {},
+      "line": 86,
+      "op": "intersect",
+      "out": {
+        "wp": 32
+      },
+      "self": {
+        "wp": 31
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 32
+        }
+      ],
+      "kwargs": {},
+      "line": 87,
+      "op": "union",
+      "out": {
+        "wp": 33
+      },
+      "self": {
+        "wp": 28
+      }
+    },
+    {
+      "line": 77,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 34
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": {
+          "vec": [
+            -6.363961030678929,
+            -6.363961030678928,
+            0.0
+          ]
+        },
+        "rotate": {
+          "vec": [
+            0.0,
+            0.0,
+            405.0
+          ]
+        }
+      },
+      "line": 78,
+      "op": "transformed",
+      "out": {
+        "wp": 35
+      },
+      "self": {
+        "wp": 34
+      }
+    },
+    {
+      "args": [
+        9.0,
+        1.0,
+        20.0
+      ],
+      "kwargs": {
+        "centered": [
+          false,
+          true,
+          false
+        ]
+      },
+      "line": 83,
+      "op": "box",
+      "out": {
+        "wp": 36
+      },
+      "self": {
+        "wp": 35
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 8
+        }
+      ],
+      "kwargs": {},
+      "line": 86,
+      "op": "intersect",
+      "out": {
+        "wp": 37
+      },
+      "self": {
+        "wp": 36
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 37
+        }
+      ],
+      "kwargs": {},
+      "line": 87,
+      "op": "union",
+      "out": {
+        "wp": 38
+      },
+      "self": {
+        "wp": 33
+      }
+    },
+    {
+      "line": 77,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 39
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": {
+          "vec": [
+            -1.6532731788489269e-15,
+            -9.0,
+            0.0
+          ]
+        },
+        "rotate": {
+          "vec": [
+            0.0,
+            0.0,
+            450.0
+          ]
+        }
+      },
+      "line": 78,
+      "op": "transformed",
+      "out": {
+        "wp": 40
+      },
+      "self": {
+        "wp": 39
+      }
+    },
+    {
+      "args": [
+        9.0,
+        1.0,
+        20.0
+      ],
+      "kwargs": {
+        "centered": [
+          false,
+          true,
+          false
+        ]
+      },
+      "line": 83,
+      "op": "box",
+      "out": {
+        "wp": 41
+      },
+      "self": {
+        "wp": 40
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 8
+        }
+      ],
+      "kwargs": {},
+      "line": 86,
+      "op": "intersect",
+      "out": {
+        "wp": 42
+      },
+      "self": {
+        "wp": 41
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 42
+        }
+      ],
+      "kwargs": {},
+      "line": 87,
+      "op": "union",
+      "out": {
+        "wp": 43
+      },
+      "self": {
+        "wp": 38
+      }
+    },
+    {
+      "line": 77,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 44
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": {
+          "vec": [
+            6.363961030678926,
+            -6.363961030678929,
+            0.0
+          ]
+        },
+        "rotate": {
+          "vec": [
+            0.0,
+            0.0,
+            495.0
+          ]
+        }
+      },
+      "line": 78,
+      "op": "transformed",
+      "out": {
+        "wp": 45
+      },
+      "self": {
+        "wp": 44
+      }
+    },
+    {
+      "args": [
+        9.0,
+        1.0,
+        20.0
+      ],
+      "kwargs": {
+        "centered": [
+          false,
+          true,
+          false
+        ]
+      },
+      "line": 83,
+      "op": "box",
+      "out": {
+        "wp": 46
+      },
+      "self": {
+        "wp": 45
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 8
+        }
+      ],
+      "kwargs": {},
+      "line": 86,
+      "op": "intersect",
+      "out": {
+        "wp": 47
+      },
+      "self": {
+        "wp": 46
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 47
+        }
+      ],
+      "kwargs": {},
+      "line": 87,
+      "op": "union",
+      "out": {
+        "wp": 48
+      },
+      "self": {
+        "wp": 43
+      }
+    },
+    {
+      "line": 77,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 49
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": {
+          "vec": [
+            9.0,
+            0.0,
+            0.0
+          ]
+        },
+        "rotate": {
+          "vec": [
+            0.0,
+            0.0,
+            180.0
+          ]
+        }
+      },
+      "line": 78,
+      "op": "transformed",
+      "out": {
+        "wp": 50
+      },
+      "self": {
+        "wp": 49
+      }
+    },
+    {
+      "args": [
+        4.5,
+        1.0,
+        20.0
+      ],
+      "kwargs": {
+        "centered": [
+          false,
+          true,
+          false
+        ]
+      },
+      "line": 83,
+      "op": "box",
+      "out": {
+        "wp": 51
+      },
+      "self": {
+        "wp": 50
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 8
+        }
+      ],
+      "kwargs": {},
+      "line": 86,
+      "op": "intersect",
+      "out": {
+        "wp": 52
+      },
+      "self": {
+        "wp": 51
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 52
+        }
+      ],
+      "kwargs": {},
+      "line": 87,
+      "op": "union",
+      "out": {
+        "wp": 53
+      },
+      "self": {
+        "wp": 48
+      }
+    },
+    {
+      "line": 77,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 54
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": {
+          "vec": [
+            6.3639610306789285,
+            6.363961030678928,
+            0.0
+          ]
+        },
+        "rotate": {
+          "vec": [
+            0.0,
+            0.0,
+            225.0
+          ]
+        }
+      },
+      "line": 78,
+      "op": "transformed",
+      "out": {
+        "wp": 55
+      },
+      "self": {
+        "wp": 54
+      }
+    },
+    {
+      "args": [
+        4.5,
+        1.0,
+        20.0
+      ],
+      "kwargs": {
+        "centered": [
+          false,
+          true,
+          false
+        ]
+      },
+      "line": 83,
+      "op": "box",
+      "out": {
+        "wp": 56
+      },
+      "self": {
+        "wp": 55
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 8
+        }
+      ],
+      "kwargs": {},
+      "line": 86,
+      "op": "intersect",
+      "out": {
+        "wp": 57
+      },
+      "self": {
+        "wp": 56
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 57
+        }
+      ],
+      "kwargs": {},
+      "line": 87,
+      "op": "union",
+      "out": {
+        "wp": 58
+      },
+      "self": {
+        "wp": 53
+      }
+    },
+    {
+      "line": 77,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 59
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": {
+          "vec": [
+            5.51091059616309e-16,
+            9.0,
+            0.0
+          ]
+        },
+        "rotate": {
+          "vec": [
+            0.0,
+            0.0,
+            270.0
+          ]
+        }
+      },
+      "line": 78,
+      "op": "transformed",
+      "out": {
+        "wp": 60
+      },
+      "self": {
+        "wp": 59
+      }
+    },
+    {
+      "args": [
+        4.5,
+        1.0,
+        20.0
+      ],
+      "kwargs": {
+        "centered": [
+          false,
+          true,
+          false
+        ]
+      },
+      "line": 83,
+      "op": "box",
+      "out": {
+        "wp": 61
+      },
+      "self": {
+        "wp": 60
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 8
+        }
+      ],
+      "kwargs": {},
+      "line": 86,
+      "op": "intersect",
+      "out": {
+        "wp": 62
+      },
+      "self": {
+        "wp": 61
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 62
+        }
+      ],
+      "kwargs": {},
+      "line": 87,
+      "op": "union",
+      "out": {
+        "wp": 63
+      },
+      "self": {
+        "wp": 58
+      }
+    },
+    {
+      "line": 77,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 64
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": {
+          "vec": [
+            -6.363961030678928,
+            6.3639610306789285,
+            0.0
+          ]
+        },
+        "rotate": {
+          "vec": [
+            0.0,
+            0.0,
+            315.0
+          ]
+        }
+      },
+      "line": 78,
+      "op": "transformed",
+      "out": {
+        "wp": 65
+      },
+      "self": {
+        "wp": 64
+      }
+    },
+    {
+      "args": [
+        4.5,
+        1.0,
+        20.0
+      ],
+      "kwargs": {
+        "centered": [
+          false,
+          true,
+          false
+        ]
+      },
+      "line": 83,
+      "op": "box",
+      "out": {
+        "wp": 66
+      },
+      "self": {
+        "wp": 65
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 8
+        }
+      ],
+      "kwargs": {},
+      "line": 86,
+      "op": "intersect",
+      "out": {
+        "wp": 67
+      },
+      "self": {
+        "wp": 66
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 67
+        }
+      ],
+      "kwargs": {},
+      "line": 87,
+      "op": "union",
+      "out": {
+        "wp": 68
+      },
+      "self": {
+        "wp": 63
+      }
+    },
+    {
+      "line": 77,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 69
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": {
+          "vec": [
+            -9.0,
+            1.102182119232618e-15,
+            0.0
+          ]
+        },
+        "rotate": {
+          "vec": [
+            0.0,
+            0.0,
+            360.0
+          ]
+        }
+      },
+      "line": 78,
+      "op": "transformed",
+      "out": {
+        "wp": 70
+      },
+      "self": {
+        "wp": 69
+      }
+    },
+    {
+      "args": [
+        4.5,
+        1.0,
+        20.0
+      ],
+      "kwargs": {
+        "centered": [
+          false,
+          true,
+          false
+        ]
+      },
+      "line": 83,
+      "op": "box",
+      "out": {
+        "wp": 71
+      },
+      "self": {
+        "wp": 70
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 8
+        }
+      ],
+      "kwargs": {},
+      "line": 86,
+      "op": "intersect",
+      "out": {
+        "wp": 72
+      },
+      "self": {
+        "wp": 71
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 72
+        }
+      ],
+      "kwargs": {},
+      "line": 87,
+      "op": "union",
+      "out": {
+        "wp": 73
+      },
+      "self": {
+        "wp": 68
+      }
+    },
+    {
+      "line": 77,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 74
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": {
+          "vec": [
+            -6.363961030678929,
+            -6.363961030678928,
+            0.0
+          ]
+        },
+        "rotate": {
+          "vec": [
+            0.0,
+            0.0,
+            405.0
+          ]
+        }
+      },
+      "line": 78,
+      "op": "transformed",
+      "out": {
+        "wp": 75
+      },
+      "self": {
+        "wp": 74
+      }
+    },
+    {
+      "args": [
+        4.5,
+        1.0,
+        20.0
+      ],
+      "kwargs": {
+        "centered": [
+          false,
+          true,
+          false
+        ]
+      },
+      "line": 83,
+      "op": "box",
+      "out": {
+        "wp": 76
+      },
+      "self": {
+        "wp": 75
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 8
+        }
+      ],
+      "kwargs": {},
+      "line": 86,
+      "op": "intersect",
+      "out": {
+        "wp": 77
+      },
+      "self": {
+        "wp": 76
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 77
+        }
+      ],
+      "kwargs": {},
+      "line": 87,
+      "op": "union",
+      "out": {
+        "wp": 78
+      },
+      "self": {
+        "wp": 73
+      }
+    },
+    {
+      "line": 77,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 79
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": {
+          "vec": [
+            -1.6532731788489269e-15,
+            -9.0,
+            0.0
+          ]
+        },
+        "rotate": {
+          "vec": [
+            0.0,
+            0.0,
+            450.0
+          ]
+        }
+      },
+      "line": 78,
+      "op": "transformed",
+      "out": {
+        "wp": 80
+      },
+      "self": {
+        "wp": 79
+      }
+    },
+    {
+      "args": [
+        4.5,
+        1.0,
+        20.0
+      ],
+      "kwargs": {
+        "centered": [
+          false,
+          true,
+          false
+        ]
+      },
+      "line": 83,
+      "op": "box",
+      "out": {
+        "wp": 81
+      },
+      "self": {
+        "wp": 80
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 8
+        }
+      ],
+      "kwargs": {},
+      "line": 86,
+      "op": "intersect",
+      "out": {
+        "wp": 82
+      },
+      "self": {
+        "wp": 81
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 82
+        }
+      ],
+      "kwargs": {},
+      "line": 87,
+      "op": "union",
+      "out": {
+        "wp": 83
+      },
+      "self": {
+        "wp": 78
+      }
+    },
+    {
+      "line": 77,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 84
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": {
+          "vec": [
+            6.363961030678926,
+            -6.363961030678929,
+            0.0
+          ]
+        },
+        "rotate": {
+          "vec": [
+            0.0,
+            0.0,
+            495.0
+          ]
+        }
+      },
+      "line": 78,
+      "op": "transformed",
+      "out": {
+        "wp": 85
+      },
+      "self": {
+        "wp": 84
+      }
+    },
+    {
+      "args": [
+        4.5,
+        1.0,
+        20.0
+      ],
+      "kwargs": {
+        "centered": [
+          false,
+          true,
+          false
+        ]
+      },
+      "line": 83,
+      "op": "box",
+      "out": {
+        "wp": 86
+      },
+      "self": {
+        "wp": 85
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 8
+        }
+      ],
+      "kwargs": {},
+      "line": 86,
+      "op": "intersect",
+      "out": {
+        "wp": 87
+      },
+      "self": {
+        "wp": 86
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 87
+        }
+      ],
+      "kwargs": {},
+      "line": 87,
+      "op": "union",
+      "out": {
+        "wp": 88
+      },
+      "self": {
+        "wp": 83
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 88
+        }
+      ],
+      "kwargs": {},
+      "line": 89,
+      "op": "union",
+      "out": {
+        "wp": 89
+      },
+      "self": {
+        "wp": 9
+      }
+    },
+    {
+      "line": 100,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 90
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "zDir": [
+          0.0,
+          -1.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "args": [
+        [
+          [
+            5.0000005,
+            9.5
+          ],
+          [
+            5.5000005,
+            10.0
+          ],
+          [
+            5.0000005,
+            10.5
+          ]
+        ]
+      ],
+      "kwargs": {},
+      "line": 100,
+      "op": "polyline",
+      "out": {
+        "wp": 91
+      },
+      "self": {
+        "wp": 90
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {},
+      "line": 100,
+      "op": "close",
+      "out": {
+        "wp": 92
+      },
+      "self": {
+        "wp": 91
+      }
+    },
+    {
+      "args": [
+        0.2
+      ],
+      "kwargs": {},
+      "line": 100,
+      "op": "extrude",
+      "out": {
+        "wp": 93
+      },
+      "self": {
+        "wp": 92
+      }
+    },
+    {
+      "args": [
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          1
+        ],
+        22.5
+      ],
+      "kwargs": {},
+      "line": 106,
+      "op": "rotate",
+      "out": {
+        "wp": 94
+      },
+      "self": {
+        "wp": 93
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 94
+        }
+      ],
+      "kwargs": {},
+      "line": 107,
+      "op": "union",
+      "out": {
+        "wp": 95
+      },
+      "self": {
+        "wp": 89
+      }
+    },
+    {
+      "args": [
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          1
+        ],
+        67.5
+      ],
+      "kwargs": {},
+      "line": 106,
+      "op": "rotate",
+      "out": {
+        "wp": 96
+      },
+      "self": {
+        "wp": 93
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 96
+        }
+      ],
+      "kwargs": {},
+      "line": 107,
+      "op": "union",
+      "out": {
+        "wp": 97
+      },
+      "self": {
+        "wp": 95
+      }
+    },
+    {
+      "args": [
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          1
+        ],
+        112.5
+      ],
+      "kwargs": {},
+      "line": 106,
+      "op": "rotate",
+      "out": {
+        "wp": 98
+      },
+      "self": {
+        "wp": 93
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 98
+        }
+      ],
+      "kwargs": {},
+      "line": 107,
+      "op": "union",
+      "out": {
+        "wp": 99
+      },
+      "self": {
+        "wp": 97
+      }
+    },
+    {
+      "args": [
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          1
+        ],
+        157.5
+      ],
+      "kwargs": {},
+      "line": 106,
+      "op": "rotate",
+      "out": {
+        "wp": 100
+      },
+      "self": {
+        "wp": 93
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 100
+        }
+      ],
+      "kwargs": {},
+      "line": 107,
+      "op": "union",
+      "out": {
+        "wp": 101
+      },
+      "self": {
+        "wp": 99
+      }
+    },
+    {
+      "args": [
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          1
+        ],
+        202.5
+      ],
+      "kwargs": {},
+      "line": 106,
+      "op": "rotate",
+      "out": {
+        "wp": 102
+      },
+      "self": {
+        "wp": 93
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 102
+        }
+      ],
+      "kwargs": {},
+      "line": 107,
+      "op": "union",
+      "out": {
+        "wp": 103
+      },
+      "self": {
+        "wp": 101
+      }
+    },
+    {
+      "args": [
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          1
+        ],
+        247.5
+      ],
+      "kwargs": {},
+      "line": 106,
+      "op": "rotate",
+      "out": {
+        "wp": 104
+      },
+      "self": {
+        "wp": 93
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 104
+        }
+      ],
+      "kwargs": {},
+      "line": 107,
+      "op": "union",
+      "out": {
+        "wp": 105
+      },
+      "self": {
+        "wp": 103
+      }
+    },
+    {
+      "args": [
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          1
+        ],
+        292.5
+      ],
+      "kwargs": {},
+      "line": 106,
+      "op": "rotate",
+      "out": {
+        "wp": 106
+      },
+      "self": {
+        "wp": 93
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 106
+        }
+      ],
+      "kwargs": {},
+      "line": 107,
+      "op": "union",
+      "out": {
+        "wp": 107
+      },
+      "self": {
+        "wp": 105
+      }
+    },
+    {
+      "args": [
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          1
+        ],
+        337.5
+      ],
+      "kwargs": {},
+      "line": 106,
+      "op": "rotate",
+      "out": {
+        "wp": 108
+      },
+      "self": {
+        "wp": 93
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 108
+        }
+      ],
+      "kwargs": {},
+      "line": 107,
+      "op": "union",
+      "out": {
+        "wp": 109
+      },
+      "self": {
+        "wp": 107
+      }
+    }
+  ],
+  "guarded": false,
+  "i": 4049,
+  "name": "cone_revolve_with_nested_vane_array_and_thorn_ribs",
+  "result": {
+    "wp": 109
+  },
+  "status": "ok"
+}

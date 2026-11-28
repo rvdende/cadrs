@@ -82,7 +82,7 @@ fn box_box_stress(d: f64) -> Result<(), String> {
         cube(&mut k, [0.0; 3], 1.0, 1.0, 1.0)?,
         cube(&mut k, [d, 0.0, 0.5], 1.0, 1.0, 1.0)?,
     );
-    let tol = if d <= cadrs_kernel::native::tol::POINT {
+    let tol = if d <= cadrs_kernel::native::tol::point() {
         0.5 * d + 1e-12
     } else {
         1e-12

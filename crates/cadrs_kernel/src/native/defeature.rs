@@ -476,8 +476,8 @@ pub fn delete_faces(b: &Body, gone: &[usize]) -> Result<(Body, Vec<Vec<usize>>)>
     }
     let ef = b.edge_faces();
     let lost = |e: usize| ef[e].iter().any(|&f| is_gone[f]);
-    let size = b.bbox().diagonal().max(tol::POINT);
-    let ptol = tol::POINT;
+    let size = b.bbox().diagonal().max(tol::point());
+    let ptol = tol::point();
 
     // The deleted faces in groups joined through vertices, and the vertices of each.
     let mut group = vec![usize::MAX; nf];

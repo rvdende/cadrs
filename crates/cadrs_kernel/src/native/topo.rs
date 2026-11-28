@@ -848,6 +848,8 @@ impl Body {
                 }
             }
         }
+        // (Remade p-curves land each in its own period: chained again.)
+        b.chain_periodic_pcurves();
         b
     }
 
@@ -946,6 +948,51 @@ impl Body {
     /// Whether the body has a solid.
     pub fn is_solid(&self) -> bool {
         !self.solids.is_empty()
+    }
+
+    /// Each loop's p-curves on a surface periodic in u or v moved by whole periods to run on
+    /// from one another (each starting where the one before ends): a builder that projected
+    /// each edge on its own may leave one a period off (the ends of a helical band winding
+    /// round a cylinder several times), which folds the loop over in (u, v). Loops that run on
+    /// already are left as they are.
+    pub fn chain_periodic_pcurves(&mut self) {
+        use std::f64::consts::TAU;
+        let edges = &self.edges;
+        for f in &mut self.faces {
+            let (pu, pv) = (f.surf.u_periodic(), f.surf.v_periodic());
+            if !pu && !pv {
+                continue;
+            }
+            for lp in &mut f.loops {
+                let ends = |c: &Coedge| {
+                    let e = &edges[c.edge];
+                    let (a, b) = if c.fwd {
+                        (e.t[0], e.t[1])
+                    } else {
+                        (e.t[1], e.t[0])
+                    };
+                    (c.pc.point(a), c.pc.point(b))
+                };
+                for k in 1..lp.len() {
+                    let prev = ends(&lp[k - 1]).1;
+                    let start = ends(&lp[k]).0;
+                    let du = if pu {
+                        ((prev.x - start.x) / TAU).round() * TAU
+                    } else {
+                        0.0
+                    };
+                    let dv = if pv {
+                        ((prev.y - start.y) / TAU).round() * TAU
+                    } else {
+                        0.0
+                    };
+                    if du != 0.0 || dv != 0.0 {
+                        let m = super::math::Affine::translation(V3::new(du, dv, 0.0));
+                        lp[k].pc = lp[k].pc.transformed(&m);
+                    }
+                }
+            }
+        }
     }
 
     /// Reverses a face's orientation (the outward normal flips): sense and loops.
@@ -1153,7 +1200,7 @@ impl Body {
                     // p-curve on the edge in 3D, within the edge's tolerance (a read model's
                     // p-curves stray by it): 7 points, or the largest gap searched for (Full).
                     if !ea.degenerate {
-                        let allowed = ea.tol.max(super::tol::POINT);
+                        let allowed = ea.tol.max(super::tol::point());
                         let gap = if fully(fi) {
                             pcurve_gap_kept(ea, &a.pc, &f.surf, &mut surface_key)
                         } else {
@@ -1194,7 +1241,7 @@ impl Body {
                     continue;
                 };
                 let d = (e.point(e.t[k]) - v.p).norm();
-                if d > v.tol.max(e.tol).max(super::tol::POINT) {
+                if d > v.tol.max(e.tol).max(super::tol::point()) {
                     errs.push(format!("edge {ei}: end {k} is {d:.3e} from its vertex"));
                 }
             }
@@ -1839,7 +1886,7 @@ impl Body {
                         let uv = c.pc.point(t);
                         (f.surf.eval(uv.x, uv.y) - self.verts[v].p).norm()
                     };
-                    let allowed = |v: usize| self.verts[v].tol.max(e.tol).max(super::tol::POINT);
+                    let allowed = |v: usize| self.verts[v].tol.max(e.tol).max(super::tol::point());
                     for end in 0..2 {
                         let d = on(e.t[end], e.v[end]);
                         if !(d <= allowed(e.v[end])) {
@@ -2071,7 +2118,7 @@ impl Body {
                         &out,
                         &polys,
                         &v.p,
-                        v.tol.max(super::tol::POINT),
+                        v.tol.max(super::tol::point()),
                     ) == crate::PointClass::Outside
                 });
                 if outside {

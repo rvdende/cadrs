@@ -1,0 +1,121 @@
+{
+  "entries": [
+    {
+      "line": 15,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 1
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        10.0
+      ],
+      "kwargs": {},
+      "line": 15,
+      "op": "sphere",
+      "out": {
+        "wp": 2
+      },
+      "self": {
+        "wp": 1
+      }
+    },
+    {
+      "line": 16,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 3
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        2.0
+      ],
+      "kwargs": {},
+      "line": 16,
+      "op": "circle",
+      "out": {
+        "wp": 4
+      },
+      "self": {
+        "wp": 3
+      }
+    },
+    {
+      "args": [
+        10.0
+      ],
+      "kwargs": {
+        "both": true
+      },
+      "line": 16,
+      "op": "extrude",
+      "out": {
+        "wp": 5
+      },
+      "self": {
+        "wp": 4
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 5
+        }
+      ],
+      "kwargs": {},
+      "line": 17,
+      "op": "cut",
+      "out": {
+        "wp": 6
+      },
+      "self": {
+        "wp": 2
+      }
+    }
+  ],
+  "guarded": false,
+  "i": 29,
+  "name": "sphere_with_cylindrical_hole",
+  "result": {
+    "wp": 6
+  },
+  "status": "ok"
+}

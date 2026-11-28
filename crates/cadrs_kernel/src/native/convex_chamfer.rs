@@ -57,7 +57,7 @@ pub(crate) fn chamfer(
         return None;
     }
     // (The part's own size, however small: no floor at a millimetre.)
-    let size = b.bbox().diagonal().max(tol::POINT);
+    let size = b.bbox().diagonal().max(tol::point());
     let eps = 1e-9 * size;
     // The faces' half-spaces.
     let mut halves: Vec<Half> = Vec::new();

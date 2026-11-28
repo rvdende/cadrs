@@ -23,7 +23,9 @@ const TANGENT: f64 = 1e-6;
 /// How far apart two faces may lie all over and be moved onto one surface whether they cross or
 /// not, mm: twice the point tolerance, past the gaps the boolean reads one way here and the
 /// other there.
-const NEAR: f64 = 2.0 * tol::POINT;
+fn near() -> f64 {
+    2.0 * tol::point()
+}
 
 /// How far moving faces may move a vertex, in multiples of how far they were moved: further means
 /// a neighbour meets the face at an angle so shallow that its corner slides along it.
@@ -115,12 +117,12 @@ fn snaps(sa: &Surface, sb: &Surface, pts: &[P3], before: bool) -> Option<f64> {
     // surface in some places and not in others), crossing or not.
     // (Their normals then need only run the same way to well within a degree's thousandth: a
     // copy turned a microradian and lying within the tolerance all over.)
-    if worst <= NEAR && grazing(1e-4) {
+    if worst <= near() && grazing(1e-4) {
         // (Before any boolean only past half the point tolerance: nearer, the boolean takes the
         // two for one surface everywhere.)
-        return (!before || worst > 0.5 * tol::POINT).then_some(worst);
+        return (!before || worst > 0.5 * tol::point()).then_some(worst);
     }
-    if before || worst <= tol::POINT {
+    if before || worst <= tol::point() {
         return None;
     }
     let crosses = d.iter().any(|&x| x > 0.5 * worst) && d.iter().any(|&x| x < -0.5 * worst);
@@ -132,7 +134,7 @@ fn snaps(sa: &Surface, sb: &Surface, pts: &[P3], before: bool) -> Option<f64> {
 /// with every vertex within [`MOST_MOVED`] times the gap of where it was. All at once where they
 /// fit together, else one at a time, keeping each that does.
 ///
-/// `before`: for a boolean not yet tried, only faces within [`NEAR`] all over (where the boolean
+/// `before`: for a boolean not yet tried, only faces within [`near()`] all over (where the boolean
 /// would read the gap one way here and the other there); else, for a boolean refused, those
 /// crossing at a grazing angle too.
 pub fn snapped(a: &Body, b: &Body, before: bool) -> Option<Body> {

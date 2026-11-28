@@ -68,7 +68,7 @@ pub fn mesh_solid(triangles: &[[P3; 3]], tol: f64) -> Result<Body, String> {
     let tol = if tol.is_finite() && tol > 0.0 {
         tol
     } else {
-        tol::POINT
+        tol::point()
     };
     let mut weld = Weld {
         tol,
@@ -643,7 +643,7 @@ mod tests {
     fn cubes_touching_along_an_edge() {
         let mut tris = cube(P3::origin(), 10.0);
         tris.extend(cube(P3::new(10.0, 10.0, 0.0), 10.0));
-        let b = mesh_solid(&tris, tol::POINT).unwrap();
+        let b = mesh_solid(&tris, tol::point()).unwrap();
         assert!(b.check().is_empty(), "{:?}", b.check());
         assert!((super::super::mass::body_volume(&b) - 2000.0).abs() < tol::ROUNDOFF);
         assert_eq!(b.faces.len(), 12);
@@ -662,12 +662,12 @@ mod tests {
         upper[0] = [c(0.0, 0.0), c(0.0, 10.0), c(10.0, 0.0)];
         upper[1] = [c(0.0, 10.0), c(10.0, 10.0), c(10.0, 0.0)];
         tris.extend(upper);
-        let b = mesh_solid(&tris, tol::POINT).unwrap();
+        let b = mesh_solid(&tris, tol::point()).unwrap();
         assert!(b.check().is_empty(), "{:?}", b.check());
         assert!((super::super::mass::body_volume(&b) - 2000.0).abs() < tol::ROUNDOFF);
         // Turned the other way about, it still comes out the same.
         let inv: Vec<[P3; 3]> = tris.iter().map(|t| [t[0], t[2], t[1]]).collect();
-        let b = mesh_solid(&inv, tol::POINT).unwrap();
+        let b = mesh_solid(&inv, tol::point()).unwrap();
         assert!((super::super::mass::body_volume(&b) - 2000.0).abs() < tol::ROUNDOFF);
     }
 
@@ -681,7 +681,7 @@ mod tests {
         let mut tris: Vec<[P3; 3]> = lower[..2].iter().chain(&lower[4..]).copied().collect();
         tris.extend_from_slice(&upper[2..]);
         tris.push(lower[2]);
-        let b = mesh_solid(&tris, tol::POINT).unwrap();
+        let b = mesh_solid(&tris, tol::point()).unwrap();
         assert!(b.check().is_empty(), "{:?}", b.check());
         assert!((super::super::mass::body_volume(&b) - 2000.0).abs() < tol::ROUNDOFF);
     }
@@ -701,10 +701,10 @@ mod tests {
         ];
         tris.push(fin);
         tris.push([fin[0], fin[2], fin[1]]);
-        let b = mesh_solid(&tris, tol::POINT).unwrap();
+        let b = mesh_solid(&tris, tol::point()).unwrap();
         assert!(b.check().is_empty(), "{:?}", b.check());
         assert!((super::super::mass::body_volume(&b) - 1000.0).abs() < tol::ROUNDOFF);
         // Still not a solid: open.
-        assert!(mesh_solid(&tris[..11], tol::POINT).is_err());
+        assert!(mesh_solid(&tris[..11], tol::point()).is_err());
     }
 }

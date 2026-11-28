@@ -316,7 +316,7 @@ impl Outline {
     /// The loop: closed with a segment back to the start, where the outline hasn't come back
     /// to it.
     pub fn close(mut self) -> Loop {
-        if (self.at - self.start).norm() > crate::native::tol::POINT {
+        if (self.at - self.start).norm() > crate::native::tol::point() {
             self.curves.push(Curve2::line(self.at, self.start));
         }
         Loop {
@@ -450,6 +450,34 @@ impl Helix {
             height,
             ..Helix::new(axis, r0, 0.0, start_angle, turns)
         }
+    }
+
+    /// The helix or conical spiral the points `pts` (with their unit tangents `tans`, in order)
+    /// lie on within `tol`, running from the first point to the last, its axis pointing the way
+    /// it rises: a sampled helix (a fitted spline, a path a file or another system gives as
+    /// points) as the exact one. None when they don't lie on one, or it doesn't rise.
+    pub fn through(pts: &[P3], tans: &[V3], tol: f64) -> Option<Helix> {
+        if pts.len() < 4 || pts.len() != tans.len() {
+            return None;
+        }
+        crate::native::sweep::frames::helix_through(pts, tans, tol)
+            .or_else(|| crate::native::sweep::frames::spiral_through(pts, tans, tol))
+    }
+
+    /// [`Helix::through`] for points alone, their tangents taken along the polyline through
+    /// them (central differences; one-sided at the ends).
+    pub fn through_points(pts: &[P3], tol: f64) -> Option<Helix> {
+        let n = pts.len();
+        if n < 4 {
+            return None;
+        }
+        let tans: Option<Vec<V3>> = (0..n)
+            .map(|i| {
+                let (a, b) = (pts[i.saturating_sub(1)], pts[(i + 1).min(n - 1)]);
+                (b - a).try_normalize(f64::EPSILON)
+            })
+            .collect();
+        Helix::through(pts, &tans?, tol)
     }
 
     fn frame(&self) -> (V3, V3, V3) {

@@ -263,7 +263,7 @@ pub(crate) fn mill(k: &mut NativeKernel, b: &Body, motion: &Motion) -> Option<Re
             why: format!("the swept mill: {why}"),
         }))
     };
-    let size = b.bbox().diagonal().max(super::tol::POINT);
+    let size = b.bbox().diagonal().max(super::tol::point());
     let n = 2048;
     let ts: Vec<f64> = (0..=n).map(|i| i as f64 / n as f64).collect();
     let places = ts.iter().map(|&t| motion.place(t)).collect();

@@ -77,7 +77,7 @@ pub(crate) fn join(
         Join::None => crate::native::features::tagged_union(acc, next),
         Join::Mitre => {
             let m = (c.d1 + c.d2).normalize();
-            let ext = reach * (theta * 0.5).tan() * 1.05 + reach * 1e-3 + tol::POINT;
+            let ext = reach * (theta * 0.5).tan() * 1.05 + reach * 1e-3 + tol::point();
             let size = 4.0 * reach + 2.0 * ext;
             // The piece before: extended along d1, cut at the mitre plane.
             let ea = Tagged::from_built(sweep_full(
@@ -115,7 +115,7 @@ pub(crate) fn join(
                     }
                 }
             }
-            let pad = |h: f64| h * 1.05 + reach * 1e-3 + tol::POINT;
+            let pad = |h: f64| h * 1.05 + reach * 1e-3 + tol::point();
             let a = tagged_bool(
                 &a,
                 &local_box_sized(

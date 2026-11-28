@@ -128,7 +128,7 @@ pub fn split(
                     let e = &r.body.edges[c.edge];
                     for q in [e.point(e.t[0]), e.point(e.mid_t())] {
                         let (u, v) = tf.surf.project(&q, None);
-                        if super::classify::in_face(&polys, &tf.surf, P2::new(u, v), tol::POINT)
+                        if super::classify::in_face(&polys, &tf.surf, P2::new(u, v), tol::point())
                             == super::classify::InFace::Outside
                         {
                             return Err(KernelError::InvalidParameter(
@@ -307,7 +307,7 @@ pub fn face_tool(
         let n = n.normalize();
         if pts
             .iter()
-            .any(|p| (p.coords - c).dot(&n).abs() > tol::POINT)
+            .any(|p| (p.coords - c).dot(&n).abs() > tol::point())
         {
             return Err(KernelError::InvalidParameter(
                 "An open loop of the faces isn't planar".into(),

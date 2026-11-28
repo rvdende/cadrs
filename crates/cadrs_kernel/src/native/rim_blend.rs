@@ -45,7 +45,7 @@ impl Meridian {
             Meridian::Line { p, n } => Meridian::Line { p: p - n * k, n },
             Meridian::Circle { q, r, out } => {
                 let r = r - out * k;
-                if r <= tol::POINT {
+                if r <= tol::point() {
                     return None;
                 }
                 Meridian::Circle { q, r, out }
@@ -80,7 +80,7 @@ impl Meridian {
                 // The line's foot from the centre, and half its chord.
                 let h = (q - p).dot(n);
                 let half = (r * r - h * h).max(0.0).sqrt();
-                if h.abs() > r + tol::POINT {
+                if h.abs() > r + tol::point() {
                     return None;
                 }
                 let (foot, along) = (q - n * h, V2::new(-n.y, n.x));
@@ -89,7 +89,10 @@ impl Meridian {
             (Meridian::Circle { q, r, .. }, Meridian::Circle { q: q2, r: r2, .. }) => {
                 let d = q2 - q;
                 let l = d.norm();
-                if l <= tol::POINT || l > r + r2 + tol::POINT || l < (r - r2).abs() - tol::POINT {
+                if l <= tol::point()
+                    || l > r + r2 + tol::point()
+                    || l < (r - r2).abs() - tol::point()
+                {
                     return None;
                 }
                 let a = (l * l + r * r - r2 * r2) / (2.0 * l);
@@ -663,4 +666,86 @@ pub(crate) fn rim_chamfer_through(
         read.lines[1].meets(&line, &on[1])?,
     ];
     read.cut(input, feet)
+}
+
+/// The edges `es` of `b` chamfered with each contact the distance `told` gives its face (a
+/// face and a distance) from the rim in a straight line: in the half-plane through the axis,
+/// where the face's meridian meets the circle of that radius about the rim's point, on the side
+/// it runs into the face. Parasolid's equal-distance chamfer puts its new edges there ("each
+/// `width` away from the original edge"); on a face straight across the rim (a plane, a cone, a
+/// cylinder's side) it is the point that far along the face, as the ball of [`rim_chamfer`]
+/// gives, and on one curving across it (a sphere, a torus) it is where that ball's offsets,
+/// sized on the faces' tangent planes, don't land. None as [`rim_chamfer`].
+pub(crate) fn rim_chamfer_at(
+    b: &Body,
+    input: BodyId,
+    es: &[usize],
+    told: [(usize, f64); 2],
+) -> Option<(Body, Vec<Vec<FaceSrc>>)> {
+    let read = Read::of(b, es)?;
+    let foot = |k: usize| -> Option<V2> {
+        let d = told
+            .iter()
+            .find(|(f, _)| *f == read.faces[k])
+            .map(|x| x.1)
+            .filter(|d| *d > 0.0)?;
+        let around = Meridian::Circle {
+            q: read.e2,
+            r: d,
+            out: 1.0,
+        };
+        read.lines[k].meets(&around, &(read.e2 + read.runs[k] * d))
+    };
+    let feet = [foot(0)?, foot(1)?];
+    read.cut(input, feet)
+}
+
+/// The edges `es` of `b`, one rim or several (each the arcs of one circle), chamfered `d` from
+/// each rim in a straight line as [`rim_chamfer_at`], one rim after another: a cut adds its
+/// circles and cone and leaves every other edge and face where it was, so the next rim's edges
+/// and faces keep their indices, and each face's source is followed back to the input. None
+/// where any of them isn't a rim or can't be cut.
+pub(crate) fn rims_chamfer_at(
+    b: &Body,
+    input: BodyId,
+    es: &[usize],
+    d: f64,
+) -> Option<(Body, Vec<Vec<FaceSrc>>)> {
+    let mut rims: Vec<(P3, V3, f64, Vec<usize>)> = Vec::new();
+    for &e in es {
+        let Curve::Circle { c, x, y, r } = &b.edges.get(e)?.curve else {
+            return no("an edge that isn't a circle's");
+        };
+        let z = x.cross(y).normalize();
+        match rims.iter_mut().find(|g| {
+            (g.0 - c).norm() <= tol::point()
+                && (g.2 - r).abs() <= tol::point()
+                && g.1.cross(&z).norm() <= tol::ANGULAR
+        }) {
+            Some(g) => g.3.push(e),
+            None => rims.push((*c, z, *r, vec![e])),
+        }
+    }
+    let mut cur: Option<(Body, Vec<Vec<FaceSrc>>)> = None;
+    for (_, _, _, rim) in &rims {
+        let body = cur.as_ref().map_or(b, |x| &x.0);
+        let [(f0, _), (f1, _)] = super::blend::edge_sides(body, rim[0]).ok()?;
+        let (nb, src) = rim_chamfer_at(body, input, rim, [(f0, d), (f1, d)])?;
+        let src = match &cur {
+            None => src,
+            Some((_, prev)) => src
+                .into_iter()
+                .map(|s| {
+                    s.into_iter()
+                        .flat_map(|x| match x {
+                            FaceSrc::Input(i) => prev[i].clone(),
+                            other => vec![other],
+                        })
+                        .collect()
+                })
+                .collect(),
+        };
+        cur = Some((nb, src));
+    }
+    cur
 }

@@ -1,0 +1,6 @@
+{
+  "5271": {
+    "vol": 1145.68,
+    "why": "Hollow sphere (R 10, r 9: 4/3 pi (1000 - 729) = 1135.17) with an internal web of rods ending on the inner sphere (about 10.4) and 12 rib stubs touching it at a point (separate solids, 0.014 each). OCCT's union keeps only the outer shell (one shell, 4188.79: the cavity filled); kentron matches OCCT. The cavity is real: the result has two shells."
+  }
+}

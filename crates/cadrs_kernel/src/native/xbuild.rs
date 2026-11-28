@@ -542,7 +542,7 @@ fn snap_tiny(c: Curve) -> Curve {
             .map(|h| (h.x / h.w).abs().max((h.y / h.w).abs()))
             .fold(0.0, f64::max),
     };
-    let tiny = 1e-13 * size.max(crate::native::tol::POINT);
+    let tiny = 1e-13 * size.max(crate::native::tol::point());
     let z = |x: f64| if x.abs() < tiny { 0.0 } else { x };
     let p = |q: &P3| P3::new(z(q.x), z(q.y), z(q.z));
     let v = |q: &V3| V3::new(z(q.x), z(q.y), z(q.z));
@@ -665,7 +665,7 @@ fn pcurve_unsnapped_found(
         let on = |pc: &Curve| {
             samples(pc).iter().all(|&t| {
                 let q = pc.point(t);
-                (s.eval(q.x, q.y) - c.point(t)).norm() < tol::POINT
+                (s.eval(q.x, q.y) - c.point(t)).norm() < tol::point()
             })
         };
         if on(&pc) {
@@ -1681,6 +1681,46 @@ impl XBuilder {
         v
     }
 
+    /// Edges running through a pole of a sphere they bound, split there: a rim along a great
+    /// circle through the sphere's axis (Parasolid's STEP of a half dome cut along its axis,
+    /// CADEvolve 744) jumps half a turn in u at each pole it passes, inside the edge, where no
+    /// p-curve follows it; split, each piece keeps to one meridian and the jump is a joint the
+    /// loop's trace resolves (as at a pole a file's loop reaches at a vertex).
+    fn split_at_poles(&mut self, dropped: &[bool]) {
+        for fi in 0..self.faces.len() {
+            if dropped[fi] {
+                continue;
+            }
+            let (poles, r) = match &self.faces[fi].surf {
+                Surface::Sphere { f, r } => ([f.o + f.z * *r, f.o - f.z * *r], *r),
+                _ => continue,
+            };
+            let mut work: Vec<usize> = self.faces[fi].loops.iter().flatten().map(|c| c.0).collect();
+            work.sort_unstable();
+            work.dedup();
+            while let Some(e) = work.pop() {
+                let ed = &self.body.edges[e];
+                if ed.degenerate {
+                    continue;
+                }
+                let near = (r * 1e-7).max(ed.tol);
+                let (t0, t1) = (ed.t[0].min(ed.t[1]), ed.t[0].max(ed.t[1]));
+                let at = poles.iter().find_map(|p| {
+                    let t = ed.curve.closest(p, t0, t1);
+                    let q = ed.curve.point(t);
+                    let inside = (q - ed.curve.point(t0)).norm() > 10.0 * near
+                        && (q - ed.curve.point(t1)).norm() > 10.0 * near;
+                    ((q - p).norm() <= near && inside).then_some(t)
+                });
+                if let Some(t) = at {
+                    self.split_edge(e, t);
+                    work.push(e);
+                    work.push(self.body.edges.len() - 1);
+                }
+            }
+        }
+    }
+
     /// A vertex at `p`: an existing one within the join distance, else a new one.
     fn vertex_at(&mut self, p: P3) -> usize {
         let verts = &self.body.verts;
@@ -2197,6 +2237,7 @@ impl XBuilder {
                 dropped[fi] = true;
             }
         }
+        self.split_at_poles(&dropped);
         prof.mark("loops and surfaces");
         self.fit_pcurves(&dropped);
         prof.mark("p-curves");
@@ -2243,6 +2284,40 @@ impl XBuilder {
             }
         }
         prof.mark("senses");
+        // A whole sphere or torus with holes and no outer bound (each loop runs clockwise about
+        // the face, none round the surface: Parasolid's STEP of a sphere with 506 spikes fused
+        // on, CADEvolve 2472, which was read as the one spike's base it took for the outer
+        // loop): bounded by its seam as well, as a face with no bounds is.
+        for fi in 0..nf {
+            if dropped[fi]
+                || self.faces[fi].loops.is_empty()
+                || !matches!(
+                    self.faces[fi].surf,
+                    Surface::Sphere { .. } | Surface::Torus { .. }
+                )
+            {
+                continue;
+            }
+            let s = self.faces[fi].surf.clone();
+            let sense = self.faces[fi].sense;
+            let all_holes = self.faces[fi].loops.iter().all(|l| {
+                let t = self.trace(fi, &s, l);
+                if t.wu != 0 || t.wv != 0 || t.free.iter().chain(&t.free_v).any(|&f| f) {
+                    return false;
+                }
+                let z = vec![0; l.len()];
+                let a = Self::trace_area(&s, &self.body, l, &t, &z, &z);
+                a.abs() > tol::DEGENERATE && (a > 0.0) != sense
+            });
+            if all_holes {
+                let holes = std::mem::take(&mut self.faces[fi].loops);
+                if self.close_whole(fi) {
+                    self.faces[fi].loops.extend(holes);
+                } else {
+                    self.faces[fi].loops = holes;
+                }
+            }
+        }
         // A whole sphere or torus bounded only by slits (a seam and a cut, each edge used both
         // ways: loops enclosing no area, as SMLib writes some spheres) is bounded by its seams
         // instead, as SMLib reads it; the slits' edges are dropped.
@@ -2668,7 +2743,7 @@ pub fn orient_shells(b: &mut Body, always: bool) -> usize {
                 .then(|| super::mass::faces_volume(&super::kernel::subset(b, &faces, false)))
                 .filter(|v| v.is_finite() && *v != 0.0);
             let shift = bb.center().coords;
-            let defl = (bb.diagonal() * 1e-2).max(tol::POINT);
+            let defl = (bb.diagonal() * 1e-2).max(tol::point());
             let es = || super::tess::edge_samples(b, defl, 0.5);
             let vol: f64 = exact.unwrap_or_else(|| {
                 let es = es();

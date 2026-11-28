@@ -725,7 +725,9 @@ fn ray_surface_with(
         }
         Surface::Nurbs(_) | Surface::Revolution { .. } => {
             if let Surface::Nurbs(ns) = s
-                && let Some(hits) = ray_ruled(ns, o, d).or_else(|| ray_graph(ns, o, d))
+                && let Some(hits) = ray_ruled(ns, o, d)
+                    .or_else(|| ray_ruled_across(ns, o, d))
+                    .or_else(|| ray_graph(ns, o, d))
             {
                 return hits;
             }
@@ -750,6 +752,34 @@ fn ray_surface_with(
         out.push((t, u, v));
     }
     out
+}
+
+/// [`ray_ruled`] for a B-spline ruled along u (degree 1 and one span in u: a segment swept
+/// along a path, its sections along v), by its transpose.
+fn ray_ruled_across(
+    ns: &super::nurbs::NurbsSurface,
+    o: &P3,
+    d: &V3,
+) -> Option<Vec<(f64, f64, f64)>> {
+    if ns.du != 1 || ns.ku.len() != 4 || ns.cps.len() != 2 {
+        return None;
+    }
+    let t = super::nurbs::NurbsSurface {
+        du: ns.dv,
+        dv: ns.du,
+        ku: ns.kv.clone(),
+        kv: ns.ku.clone(),
+        cps: (0..ns.cps[0].len())
+            .map(|j| vec![ns.cps[0][j], ns.cps[1][j]])
+            .collect(),
+        screw: None,
+    };
+    Some(
+        ray_ruled(&t, o, d)?
+            .into_iter()
+            .map(|(t, v, u)| (t, u, v))
+            .collect(),
+    )
 }
 
 /// A ray against a ruled B-spline (degree 1 and one span along v, its weights the same along
@@ -1274,7 +1304,7 @@ fn ray_torus(
                 }
             }
         }
-        if s.distance(&(o + d * t)) < tol::POINT {
+        if s.distance(&(o + d * t)) < tol::point() {
             ts.push(t);
         }
     }
@@ -1531,7 +1561,7 @@ pub(crate) fn ray_hits_kept(
     for &fi in among {
         let f = &body.faces[fi];
         if let Some(bx) = boxes
-            && !line_meets_box(o, d, &bx[fi].grow(tol::POINT + tol::REL * span))
+            && !line_meets_box(o, d, &bx[fi].grow(tol::point() + tol::REL * span))
         {
             continue;
         }
@@ -1882,7 +1912,7 @@ impl<'a> Classifier<'a> {
             .collect();
         // (A margin over any the tests below grow a box by: they test the face's own box
         // again.)
-        let margin = tol::POINT.max(tol::REL_POINT * (1.0 + bbox.diagonal()));
+        let margin = tol::point().max(tol::REL_POINT * (1.0 + bbox.diagonal()));
         let tree = super::bvh::Bvh::new(boxes.iter().map(|b| b.grow(margin)).collect());
         let worst = body
             .edges
@@ -1942,7 +1972,7 @@ impl<'a> Classifier<'a> {
                     }
                     sides.push((fi, sign));
                 }
-                let size = self.bbox.diagonal().max(tol::POINT);
+                let size = self.bbox.diagonal().max(tol::point());
                 let slack = 1e-9 * (size + self.bbox.center().coords.norm());
                 let outside = |q: &P3| {
                     sides.iter().any(|&(fi, sign)| {
@@ -2452,5 +2482,68 @@ mod boxed_tests {
             }
         }
         assert!(found > 300, "{found}");
+    }
+}
+
+#[cfg(test)]
+mod ruled_ray_tests {
+    use super::*;
+    use crate::native::nurbs::{NurbsCurve, NurbsSurface};
+
+    /// A ray meets a segment swept along a helix (ruled along u: degree 1 across, the path
+    /// along v) at every turn, as it meets the same surface ruled along v: the seam of a cone
+    /// such a sweep winds round crossed it three times, the general search found one.
+    #[test]
+    fn ray_meets_a_ruled_sweep_either_way_round() {
+        let path = |r: f64, z0: f64| {
+            let n = 121;
+            let pts: Vec<P3> = (0..n)
+                .map(|i| {
+                    let t = i as f64 / (n - 1) as f64;
+                    let a = TAU * 3.0 * t + 0.3;
+                    P3::new(r * a.cos(), r * a.sin(), z0 + 24.0 * t)
+                })
+                .collect();
+            let ts: Vec<f64> = (0..n).map(|i| i as f64 / (n - 1) as f64).collect();
+            NurbsCurve::interpolate(&pts, &ts, 3, None, None)
+        };
+        let (a, b) = (path(8.0, 0.0), path(12.0, 0.0));
+        let across = NurbsSurface::new(
+            1,
+            3,
+            vec![0.0, 0.0, 1.0, 1.0],
+            a.knots.clone(),
+            vec![a.cps.clone(), b.cps.clone()],
+        )
+        .unwrap();
+        let along = NurbsSurface::new(
+            3,
+            1,
+            a.knots.clone(),
+            vec![0.0, 0.0, 1.0, 1.0],
+            a.cps
+                .iter()
+                .zip(&b.cps)
+                .map(|(p, q)| vec![*p, *q])
+                .collect(),
+        )
+        .unwrap();
+        // Up through the band at radius 10: it crosses it once a turn.
+        let (o, d) = (P3::new(10.0, 0.0, -5.0), V3::z());
+        let hit = |s: NurbsSurface| {
+            let mut t: Vec<f64> =
+                ray_surface(&Surface::Nurbs(std::sync::Arc::new(s)), &o, &d, 0.0, 40.0)
+                    .into_iter()
+                    .map(|h| h.0)
+                    .collect();
+            t.sort_by(f64::total_cmp);
+            t
+        };
+        let (x, y) = (hit(across), hit(along));
+        assert_eq!(x.len(), 3, "{x:?}");
+        assert_eq!(x.len(), y.len());
+        for (p, q) in x.iter().zip(&y) {
+            assert!((p - q).abs() < 1e-9, "{x:?} {y:?}");
+        }
     }
 }

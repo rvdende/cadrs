@@ -1086,7 +1086,7 @@ mod tests {
             EdgeName::new(c, d, 0),
         ];
         // All three meet at the hint.
-        let r = resolve(&gone, &candidates, |_| Some(0.0), tol::POINT);
+        let r = resolve(&gone, &candidates, |_| Some(0.0), tol::point());
         assert_eq!(r, Ok((1, Match::Geometric)));
     }
 
@@ -1107,13 +1107,13 @@ mod tests {
         ];
         let dist = [10.0, 5.0, 1.0, 0.5];
         assert_eq!(
-            resolve(&gone, &candidates, |i| Some(dist[i]), tol::POINT),
+            resolve(&gone, &candidates, |i| Some(dist[i]), tol::point()),
             Ok((1, Match::Renamed))
         );
         // No edge of the named face: lost.
         let elsewhere = EdgeName::new(side(o, 1, 6), unnamed, 0);
         assert_eq!(
-            resolve(&elsewhere, &candidates, |i| Some(dist[i]), tol::POINT),
+            resolve(&elsewhere, &candidates, |i| Some(dist[i]), tol::point()),
             Err(Lost)
         );
     }
@@ -1129,19 +1129,19 @@ mod tests {
         let candidates = [side(o, o.as_u128() as u64, 0), positional];
         let at_first = |i: usize| (i == 0).then_some(0.0);
         assert_eq!(
-            resolve(&positional, &candidates, at_first, tol::POINT),
+            resolve(&positional, &candidates, at_first, tol::point()),
             Ok((0, Match::Geometric))
         );
         // Nothing at the place: the name.
         assert_eq!(
-            resolve(&positional, &candidates, |_| None, tol::POINT),
+            resolve(&positional, &candidates, |_| None, tol::point()),
             Ok((1, Match::Exact))
         );
         // A sketch curve's side is not positional.
         let named = side(o, 99, 1);
         assert!(!named.is_positional());
         assert_eq!(
-            resolve(&named, &[side(o, 99, 0), named], at_first, tol::POINT),
+            resolve(&named, &[side(o, 99, 0), named], at_first, tol::point()),
             Ok((1, Match::Exact))
         );
     }

@@ -59,7 +59,7 @@ impl Chain<'_> {
     fn on(&self, fi: usize, q: &P3) -> bool {
         let f = &self.b.faces[fi];
         let (u, v) = f.surf.project(q, None);
-        if (f.surf.eval(u, v) - q).norm() > tol::POINT {
+        if (f.surf.eval(u, v) - q).norm() > tol::point() {
             return false;
         }
         let ps = self.polys(fi);
@@ -472,7 +472,7 @@ pub fn chain_tool(
         .skip(1)
         .copied()
         .chain([0.0, len])
-        .filter(|&sj| sj > total_lo + tol::POINT && sj < total_hi - tol::POINT)
+        .filter(|&sj| sj > total_lo + tol::point() && sj < total_hi - tol::point())
         .collect();
     breaks.push(total_hi);
     breaks.sort_by(f64::total_cmp);
@@ -657,7 +657,7 @@ pub fn chain_tool(
         let mut secs: Vec<(Vec<Piece>, Plane)> = Vec::new();
         let mut last_s = f64::NEG_INFINITY;
         for st in g {
-            if st.s - last_s < tol::POINT {
+            if st.s - last_s < tol::point() {
                 continue;
             }
             last_s = st.s;

@@ -1,0 +1,30 @@
+{
+  "adopted": true,
+  "at": 13,
+  "err": "{ message : BOOLEAN_NON_MANIFOLD_RESULT }",
+  "evaluated": 1795850368,
+  "guarded_steps": [],
+  "i": 862,
+  "log": [
+    {
+      "id": 6,
+      "msg": {
+        "solids": 1,
+        "vol": 2094.395102393197
+      },
+      "op": "revolve"
+    },
+    {
+      "id": 12,
+      "msg": {
+        "solids": 1,
+        "vol": 1696.460032938489
+      },
+      "op": "revolve"
+    }
+  ],
+  "script": "6c0fb9e1975cc475",
+  "source": "Onshape evalFeatureScript (Parasolid), case.fs",
+  "status": "error",
+  "warn": []
+}

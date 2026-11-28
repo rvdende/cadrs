@@ -1,0 +1,62 @@
+{
+  "adopted": true,
+  "at": 15,
+  "err": "{ message : BOOLEAN_NON_MANIFOLD_RESULT }",
+  "evaluated": 1795850907,
+  "guarded_steps": [],
+  "i": 5568,
+  "log": [
+    {
+      "id": 2,
+      "msg": {
+        "solids": 1,
+        "vol": 268082.573106329
+      },
+      "op": "sphere"
+    },
+    {
+      "id": 4,
+      "msg": {
+        "solids": 1,
+        "vol": 212174.790243045
+      },
+      "op": "sphere"
+    },
+    {
+      "id": 5,
+      "msg": {
+        "solids": 1,
+        "vol": 55907.78286328402
+      },
+      "op": "cut"
+    },
+    {
+      "id": 9,
+      "msg": {
+        "solids": 1,
+        "vol": 669.0864565016489
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 10,
+      "msg": {
+        "solids": 1,
+        "vol": 55325.888322226616
+      },
+      "op": "cut"
+    },
+    {
+      "id": 14,
+      "msg": {
+        "solids": 1,
+        "vol": 794.4307135301298
+      },
+      "op": "extrude"
+    }
+  ],
+  "script": "14c6ac83b14e2a50",
+  "source": "Onshape evalFeatureScript (Parasolid), case.fs",
+  "status": "error",
+  "warn": []
+}

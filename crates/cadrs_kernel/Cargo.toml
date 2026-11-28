@@ -11,6 +11,8 @@ nalgebra = { workspace = true, features = ["serde-serialize"] }
 serde.workspace = true
 uuid.workspace = true
 rayon.workspace = true
+# (The cadquery feature's `text`: glyph outlines.)
+ttf-parser = { workspace = true, optional = true }
 rustc-hash.workspace = true
 spade = "2.15"
 cadrs_gpu = { path = "../cadrs_gpu", optional = true }
@@ -38,4 +40,7 @@ testkit = []
 # GPU compute (Vulkan/Metal/DX12 through wgpu, rust-gpu kernels): large batches of the
 # mass-property quadrature on B-spline faces. Falls back to the CPU without a GPU.
 gpu = ["dep:cadrs_gpu"]
+# A CadQuery-compatible modelling layer (`cadquery`): Workplane, selectors and shapes on the
+# native kernel, for running CadQuery programs (crates/cadrs_py exposes it to Python).
+cadquery = ["dep:ttf-parser"]
 

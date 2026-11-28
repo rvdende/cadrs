@@ -2313,11 +2313,11 @@ pub fn read(bytes: &[u8]) -> R<(Body, Vec<String>)> {
 }
 
 /// Adds edges outside faces (chained into wires) and loose vertices (acorn points) to `b`. An
-/// edge end within [`super::tol::POINT`] of another such edge's end shares its vertex.
+/// edge end within [`super::tol::point()`] of another such edge's end shares its vertex.
 fn with_loose(b: &mut Body, edges: &[(Curve, f64, f64)], points: &[P3]) {
     let first_new = b.verts.len();
     let vertex = |b: &mut Body, p: P3| match (first_new..b.verts.len())
-        .find(|&v| (b.verts[v].p - p).norm() <= super::tol::POINT)
+        .find(|&v| (b.verts[v].p - p).norm() <= super::tol::point())
     {
         Some(v) => v,
         None => b.add_vertex(p),

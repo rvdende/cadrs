@@ -1,0 +1,260 @@
+{
+  "adopted": true,
+  "at": 79,
+  "err": "{ message : BOOLEAN_NON_MANIFOLD_RESULT }",
+  "evaluated": 1795851176,
+  "guarded_steps": [
+    7,
+    84,
+    85,
+    91,
+    92,
+    99,
+    100,
+    107,
+    108,
+    115,
+    116,
+    123,
+    124
+  ],
+  "i": 4123,
+  "log": [
+    {
+      "id": 3,
+      "msg": {
+        "solids": 1,
+        "vol": 37699.11184307751
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 5,
+      "msg": {
+        "solids": 1,
+        "vol": 7162.831250184726
+      },
+      "op": "shell"
+    },
+    {
+      "id": 11,
+      "msg": {
+        "solids": 1,
+        "vol": 549.0901565316942
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 15,
+      "msg": {
+        "solids": 1,
+        "vol": 877.2114910328074
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 16,
+      "msg": {
+        "solids": 2,
+        "vol": 1426.3016475645018
+      },
+      "op": "union"
+    },
+    {
+      "id": 20,
+      "msg": {
+        "solids": 1,
+        "vol": 1028.3481900601555
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 21,
+      "msg": {
+        "solids": 3,
+        "vol": 2454.6498376246573
+      },
+      "op": "union"
+    },
+    {
+      "id": 25,
+      "msg": {
+        "solids": 1,
+        "vol": 1079.5832529267948
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 26,
+      "msg": {
+        "solids": 4,
+        "vol": 3534.2330905514523
+      },
+      "op": "union"
+    },
+    {
+      "id": 30,
+      "msg": {
+        "solids": 1,
+        "vol": 1028.3481900601555
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 31,
+      "msg": {
+        "solids": 5,
+        "vol": 4562.581280611608
+      },
+      "op": "union"
+    },
+    {
+      "id": 35,
+      "msg": {
+        "solids": 1,
+        "vol": 877.2114910328074
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 36,
+      "msg": {
+        "solids": 6,
+        "vol": 5439.792771644416
+      },
+      "op": "union"
+    },
+    {
+      "id": 40,
+      "msg": {
+        "solids": 1,
+        "vol": 549.0901565316942
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 41,
+      "msg": {
+        "solids": 7,
+        "vol": 5988.88292817611
+      },
+      "op": "union"
+    },
+    {
+      "id": 45,
+      "msg": {
+        "solids": 1,
+        "vol": 549.0901565316942
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 46,
+      "msg": {
+        "solids": 5,
+        "vol": 6447.973084707803
+      },
+      "op": "union"
+    },
+    {
+      "id": 50,
+      "msg": {
+        "solids": 1,
+        "vol": 877.2114910328074
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 51,
+      "msg": {
+        "solids": 3,
+        "vol": 7175.1845757406145
+      },
+      "op": "union"
+    },
+    {
+      "id": 55,
+      "msg": {
+        "solids": 1,
+        "vol": 1028.3481900601555
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 56,
+      "msg": {
+        "solids": 1,
+        "vol": 7993.532765800767
+      },
+      "op": "union"
+    },
+    {
+      "id": 60,
+      "msg": {
+        "solids": 1,
+        "vol": 1079.5832529267948
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 61,
+      "msg": {
+        "solids": 1,
+        "vol": 8863.11601872756
+      },
+      "op": "union"
+    },
+    {
+      "id": 65,
+      "msg": {
+        "solids": 1,
+        "vol": 1028.3481900601555
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 66,
+      "msg": {
+        "solids": 1,
+        "vol": 9681.464208787716
+      },
+      "op": "union"
+    },
+    {
+      "id": 70,
+      "msg": {
+        "solids": 1,
+        "vol": 877.2114910328074
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 71,
+      "msg": {
+        "solids": 1,
+        "vol": 10408.675699820516
+      },
+      "op": "union"
+    },
+    {
+      "id": 75,
+      "msg": {
+        "solids": 1,
+        "vol": 549.0901565316942
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 76,
+      "msg": {
+        "solids": 1,
+        "vol": 10867.765856352216
+      },
+      "op": "union"
+    }
+  ],
+  "script": "e446d59bbf4f49ea",
+  "source": "Onshape evalFeatureScript (Parasolid), case.fs",
+  "status": "error",
+  "warn": []
+}

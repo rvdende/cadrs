@@ -1,0 +1,117 @@
+{
+  "adopted": true,
+  "at": 17,
+  "err": "{ message : BOOLEAN_NON_MANIFOLD_RESULT }",
+  "evaluated": 1795850567,
+  "guarded_steps": [
+    188,
+    189,
+    200,
+    201,
+    212,
+    213,
+    224,
+    225,
+    236,
+    237,
+    248,
+    249,
+    260,
+    261,
+    272,
+    273,
+    284,
+    285,
+    296,
+    297,
+    308,
+    309,
+    320,
+    321,
+    332,
+    333,
+    344,
+    345,
+    356,
+    357,
+    368,
+    369,
+    380,
+    381,
+    392,
+    393,
+    404,
+    405
+  ],
+  "i": 2329,
+  "log": [
+    {
+      "id": 2,
+      "msg": {
+        "solids": 1,
+        "vol": 7238.229473870882
+      },
+      "op": "sphere"
+    },
+    {
+      "id": 5,
+      "msg": {
+        "solids": 1,
+        "vol": 6911.999999999999
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 6,
+      "msg": {
+        "solids": 1,
+        "vol": 3619.114736935441
+      },
+      "op": "cut"
+    },
+    {
+      "id": 8,
+      "msg": {
+        "solids": 1,
+        "vol": 5575.279762570684
+      },
+      "op": "sphere"
+    },
+    {
+      "id": 11,
+      "msg": {
+        "solids": 1,
+        "vol": 5323.999999999999
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 12,
+      "msg": {
+        "solids": 1,
+        "vol": 2787.6398812853417
+      },
+      "op": "cut"
+    },
+    {
+      "id": 13,
+      "msg": {
+        "solids": 1,
+        "vol": 831.4748556500984
+      },
+      "op": "cut"
+    },
+    {
+      "id": 16,
+      "msg": {
+        "solids": 1,
+        "vol": 6.2831853071795845
+      },
+      "op": "extrude"
+    }
+  ],
+  "script": "d99dcd845fbbdcc2",
+  "source": "Onshape evalFeatureScript (Parasolid), case.fs",
+  "status": "error",
+  "warn": []
+}

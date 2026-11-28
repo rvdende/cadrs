@@ -1,0 +1,105 @@
+{
+  "entries": [
+    {
+      "line": 18,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 1
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        8,
+        20.905007438022025
+      ],
+      "kwargs": {},
+      "line": 18,
+      "op": "polygon",
+      "out": {
+        "wp": 2
+      },
+      "self": {
+        "wp": 1
+      }
+    },
+    {
+      "args": [
+        20.0
+      ],
+      "kwargs": {},
+      "line": 18,
+      "op": "extrude",
+      "out": {
+        "wp": 3
+      },
+      "self": {
+        "wp": 2
+      }
+    },
+    {
+      "args": [
+        ">Z"
+      ],
+      "kwargs": {},
+      "line": 20,
+      "op": "faces",
+      "out": {
+        "wp": 4
+      },
+      "self": {
+        "wp": 3
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {},
+      "line": 20,
+      "op": "workplane",
+      "out": {
+        "wp": 5
+      },
+      "self": {
+        "wp": 4
+      }
+    },
+    {
+      "args": [
+        4.0
+      ],
+      "kwargs": {},
+      "line": 20,
+      "op": "hole",
+      "out": {
+        "wp": 6
+      },
+      "self": {
+        "wp": 5
+      }
+    }
+  ],
+  "guarded": false,
+  "i": 27,
+  "name": "oct_prism_with_hole",
+  "result": {
+    "wp": 6
+  },
+  "status": "ok"
+}

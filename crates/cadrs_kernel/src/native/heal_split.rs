@@ -643,7 +643,7 @@ fn closed_across(b: &Body, fi: usize, dir: Dir) -> bool {
                         Dir::U => ((p.x - q.x).abs(), (p.y - q.y).abs()),
                         Dir::V => ((p.y - q.y).abs(), (p.x - q.x).abs()),
                     };
-                    dp > tol::POINT && other <= tol::REL_POINT * (1.0 + dp)
+                    dp > tol::point() && other <= tol::REL_POINT * (1.0 + dp)
                 }
             })
     })

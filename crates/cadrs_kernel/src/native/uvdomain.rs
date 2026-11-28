@@ -77,7 +77,7 @@ impl<'a> FaceDomain<'a> {
         };
         for u in shifts(u, self.ub, self.surf.u_periodic()) {
             for v in shifts(v, self.vb, self.surf.v_periodic()) {
-                match in_face(self.polys, self.surf, P2::new(u, v), tol::POINT) {
+                match in_face(self.polys, self.surf, P2::new(u, v), tol::point()) {
                     InFace::Inside => return true,
                     InFace::Boundary if !strict => return true,
                     _ => {}

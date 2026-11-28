@@ -1,0 +1,2974 @@
+{
+  "adopted": true,
+  "at": 394,
+  "err": "{ message : BOOLEAN_INVALID }",
+  "evaluated": 1795850349,
+  "guarded_steps": [],
+  "i": 493,
+  "log": [
+    {
+      "id": 4,
+      "msg": {
+        "solids": 1,
+        "vol": 2764.601535159017
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 7,
+      "msg": {
+        "solids": 1,
+        "vol": 4
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 8,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 9,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 10,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 11,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000004
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 12,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 13,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 14,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 15,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000004
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 16,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 17,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 18,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 19,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 20,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 21,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 22,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 23,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000005
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 26,
+      "msg": {
+        "solids": 1,
+        "vol": 4
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 27,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 28,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 29,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 30,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 31,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 32,
+      "msg": {
+        "solids": 1,
+        "vol": 4.0000000000000036
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 33,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 34,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 35,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 36,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000002
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 37,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 38,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000004
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 39,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 40,
+      "msg": {
+        "solids": 1,
+        "vol": 3.999999999999998
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 41,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 42,
+      "msg": {
+        "solids": 1,
+        "vol": 4.0000000000000036
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 43,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 44,
+      "msg": {
+        "solids": 1,
+        "vol": 4.0000000000000036
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 47,
+      "msg": {
+        "solids": 1,
+        "vol": 4
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 48,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 49,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 50,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 51,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000004
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 52,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 53,
+      "msg": {
+        "solids": 1,
+        "vol": 4
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 54,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 55,
+      "msg": {
+        "solids": 1,
+        "vol": 4.0000000000000036
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 56,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 57,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 58,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 59,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 60,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 61,
+      "msg": {
+        "solids": 1,
+        "vol": 4.0000000000000036
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 62,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 63,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 64,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 65,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 66,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 67,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000004
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 70,
+      "msg": {
+        "solids": 1,
+        "vol": 4
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 71,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 72,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 73,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 74,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 75,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 76,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 77,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 78,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000004
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 79,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 80,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 81,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 82,
+      "msg": {
+        "solids": 1,
+        "vol": 4.0000000000000036
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 83,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 84,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000004
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 85,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 86,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000006
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 87,
+      "msg": {
+        "solids": 1,
+        "vol": 4.0000000000000036
+      },
+      "op": "translate"
+    },
+    {
+      "id": 88,
+      "msg": {
+        "solids": 1,
+        "vol": 4.0000000000000036
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 89,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 90,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000005
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 91,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 92,
+      "msg": {
+        "solids": 1,
+        "vol": 4
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 95,
+      "msg": {
+        "solids": 1,
+        "vol": 4
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 96,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 97,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 98,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 99,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 100,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 101,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000008
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 102,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 103,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 104,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 105,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 106,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 107,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 108,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 109,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 110,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 111,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000008
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 112,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 113,
+      "msg": {
+        "solids": 1,
+        "vol": 3.999999999999997
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 114,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 115,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 116,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 117,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000008
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 118,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 119,
+      "msg": {
+        "solids": 1,
+        "vol": 3.999999999999997
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 122,
+      "msg": {
+        "solids": 1,
+        "vol": 4
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 123,
+      "msg": {
+        "solids": 1,
+        "vol": 4.0000000000000036
+      },
+      "op": "translate"
+    },
+    {
+      "id": 124,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 125,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 126,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000008
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 127,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 128,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000008
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 129,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 130,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 131,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 132,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 133,
+      "msg": {
+        "solids": 1,
+        "vol": 4.0000000000000036
+      },
+      "op": "translate"
+    },
+    {
+      "id": 134,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 135,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 136,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 137,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 138,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000008
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 139,
+      "msg": {
+        "solids": 1,
+        "vol": 4.0000000000000036
+      },
+      "op": "translate"
+    },
+    {
+      "id": 140,
+      "msg": {
+        "solids": 1,
+        "vol": 3.999999999999997
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 141,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 142,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 143,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 144,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000008
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 145,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 146,
+      "msg": {
+        "solids": 1,
+        "vol": 3.999999999999997
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 149,
+      "msg": {
+        "solids": 1,
+        "vol": 4
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 150,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 151,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 152,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 153,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 154,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 155,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000006
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 156,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 157,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000004
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 158,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 159,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 160,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 161,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000004
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 162,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 163,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000005
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 164,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 165,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000001
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 166,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 167,
+      "msg": {
+        "solids": 1,
+        "vol": 4
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 168,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 169,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000002
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 170,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 171,
+      "msg": {
+        "solids": 1,
+        "vol": 4
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 172,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 173,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 174,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 175,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000005
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 178,
+      "msg": {
+        "solids": 1,
+        "vol": 4
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 179,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 180,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 181,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 182,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 183,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 184,
+      "msg": {
+        "solids": 1,
+        "vol": 4.0000000000000036
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 185,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 186,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 187,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 188,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000008
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 189,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 190,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 191,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 192,
+      "msg": {
+        "solids": 1,
+        "vol": 3.999999999999999
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 193,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 194,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 195,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 196,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000004
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 197,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 198,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000002
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 199,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 200,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 201,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 202,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 203,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 204,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 205,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "translate"
+    },
+    {
+      "id": 206,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000001
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 209,
+      "msg": {
+        "solids": 1,
+        "vol": 4
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 210,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "translate"
+    },
+    {
+      "id": 211,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 212,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "translate"
+    },
+    {
+      "id": 213,
+      "msg": {
+        "solids": 1,
+        "vol": 4.0000000000000036
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 214,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "translate"
+    },
+    {
+      "id": 215,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000011
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 216,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "translate"
+    },
+    {
+      "id": 217,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 218,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "translate"
+    },
+    {
+      "id": 219,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000003
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 220,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "translate"
+    },
+    {
+      "id": 221,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000011
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 222,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "translate"
+    },
+    {
+      "id": 223,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 224,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "translate"
+    },
+    {
+      "id": 225,
+      "msg": {
+        "solids": 1,
+        "vol": 4.00000000000001
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 226,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "translate"
+    },
+    {
+      "id": 227,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000004
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 228,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "translate"
+    },
+    {
+      "id": 229,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000008
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 230,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "translate"
+    },
+    {
+      "id": 231,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000001
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 232,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "translate"
+    },
+    {
+      "id": 233,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 234,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "translate"
+    },
+    {
+      "id": 235,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000006
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 236,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "translate"
+    },
+    {
+      "id": 237,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000009
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 238,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "translate"
+    },
+    {
+      "id": 239,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000004
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 242,
+      "msg": {
+        "solids": 1,
+        "vol": 4
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 243,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "translate"
+    },
+    {
+      "id": 244,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 245,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000006
+      },
+      "op": "translate"
+    },
+    {
+      "id": 246,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000009
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 247,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "translate"
+    },
+    {
+      "id": 248,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000009
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 249,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "translate"
+    },
+    {
+      "id": 250,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000009
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 251,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "translate"
+    },
+    {
+      "id": 252,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 253,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "translate"
+    },
+    {
+      "id": 254,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000013
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 255,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "translate"
+    },
+    {
+      "id": 256,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000009
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 257,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000006
+      },
+      "op": "translate"
+    },
+    {
+      "id": 258,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000009
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 259,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "translate"
+    },
+    {
+      "id": 260,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 261,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "translate"
+    },
+    {
+      "id": 262,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000012
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 263,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "translate"
+    },
+    {
+      "id": 264,
+      "msg": {
+        "solids": 1,
+        "vol": 4.0000000000000115
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 265,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "translate"
+    },
+    {
+      "id": 266,
+      "msg": {
+        "solids": 1,
+        "vol": 4.0000000000000115
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 267,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000006
+      },
+      "op": "translate"
+    },
+    {
+      "id": 268,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 269,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "translate"
+    },
+    {
+      "id": 270,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 271,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000007
+      },
+      "op": "translate"
+    },
+    {
+      "id": 272,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000009
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 273,
+      "msg": {
+        "solids": 1,
+        "vol": 4.000000000000006
+      },
+      "op": "translate"
+    },
+    {
+      "id": 274,
+      "msg": {
+        "solids": 1,
+        "vol": 4.0000000000000115
+      },
+      "op": "rotate"
+    },
+    {
+      "id": 275,
+      "msg": {
+        "solids": 2,
+        "vol": 8.000000000000007
+      },
+      "op": "union"
+    },
+    {
+      "id": 276,
+      "msg": {
+        "solids": 3,
+        "vol": 12.00000000000001
+      },
+      "op": "union"
+    },
+    {
+      "id": 277,
+      "msg": {
+        "solids": 4,
+        "vol": 16.000000000000014
+      },
+      "op": "union"
+    },
+    {
+      "id": 278,
+      "msg": {
+        "solids": 5,
+        "vol": 20.000000000000018
+      },
+      "op": "union"
+    },
+    {
+      "id": 279,
+      "msg": {
+        "solids": 6,
+        "vol": 24.00000000000003
+      },
+      "op": "union"
+    },
+    {
+      "id": 280,
+      "msg": {
+        "solids": 7,
+        "vol": 28.00000000000003
+      },
+      "op": "union"
+    },
+    {
+      "id": 281,
+      "msg": {
+        "solids": 8,
+        "vol": 32.00000000000003
+      },
+      "op": "union"
+    },
+    {
+      "id": 282,
+      "msg": {
+        "solids": 8,
+        "vol": 36.00000000000004
+      },
+      "op": "union"
+    },
+    {
+      "id": 283,
+      "msg": {
+        "solids": 8,
+        "vol": 40.000000000000036
+      },
+      "op": "union"
+    },
+    {
+      "id": 284,
+      "msg": {
+        "solids": 9,
+        "vol": 44.000000000000036
+      },
+      "op": "union"
+    },
+    {
+      "id": 285,
+      "msg": {
+        "solids": 10,
+        "vol": 48.00000000000005
+      },
+      "op": "union"
+    },
+    {
+      "id": 286,
+      "msg": {
+        "solids": 11,
+        "vol": 52.00000000000005
+      },
+      "op": "union"
+    },
+    {
+      "id": 287,
+      "msg": {
+        "solids": 12,
+        "vol": 56.00000000000005
+      },
+      "op": "union"
+    },
+    {
+      "id": 288,
+      "msg": {
+        "solids": 13,
+        "vol": 60.00000000000006
+      },
+      "op": "union"
+    },
+    {
+      "id": 289,
+      "msg": {
+        "solids": 14,
+        "vol": 64.00000000000006
+      },
+      "op": "union"
+    },
+    {
+      "id": 290,
+      "msg": {
+        "solids": 14,
+        "vol": 68.00000000000007
+      },
+      "op": "union"
+    },
+    {
+      "id": 291,
+      "msg": {
+        "solids": 14,
+        "vol": 72.00000000000009
+      },
+      "op": "union"
+    },
+    {
+      "id": 292,
+      "msg": {
+        "solids": 14,
+        "vol": 76.00000000000006
+      },
+      "op": "union"
+    },
+    {
+      "id": 293,
+      "msg": {
+        "solids": 15,
+        "vol": 80.00000000000006
+      },
+      "op": "union"
+    },
+    {
+      "id": 294,
+      "msg": {
+        "solids": 16,
+        "vol": 84.00000000000007
+      },
+      "op": "union"
+    },
+    {
+      "id": 295,
+      "msg": {
+        "solids": 17,
+        "vol": 88.00000000000009
+      },
+      "op": "union"
+    },
+    {
+      "id": 296,
+      "msg": {
+        "solids": 18,
+        "vol": 92.00000000000009
+      },
+      "op": "union"
+    },
+    {
+      "id": 297,
+      "msg": {
+        "solids": 19,
+        "vol": 96.00000000000011
+      },
+      "op": "union"
+    },
+    {
+      "id": 298,
+      "msg": {
+        "solids": 20,
+        "vol": 100.00000000000009
+      },
+      "op": "union"
+    },
+    {
+      "id": 299,
+      "msg": {
+        "solids": 21,
+        "vol": 104.0000000000001
+      },
+      "op": "union"
+    },
+    {
+      "id": 300,
+      "msg": {
+        "solids": 21,
+        "vol": 108.00000000000011
+      },
+      "op": "union"
+    },
+    {
+      "id": 301,
+      "msg": {
+        "solids": 21,
+        "vol": 112.00000000000011
+      },
+      "op": "union"
+    },
+    {
+      "id": 302,
+      "msg": {
+        "solids": 21,
+        "vol": 116.00000000000011
+      },
+      "op": "union"
+    },
+    {
+      "id": 303,
+      "msg": {
+        "solids": 22,
+        "vol": 120.00000000000011
+      },
+      "op": "union"
+    },
+    {
+      "id": 304,
+      "msg": {
+        "solids": 23,
+        "vol": 124.00000000000014
+      },
+      "op": "union"
+    },
+    {
+      "id": 305,
+      "msg": {
+        "solids": 24,
+        "vol": 128.00000000000014
+      },
+      "op": "union"
+    },
+    {
+      "id": 306,
+      "msg": {
+        "solids": 25,
+        "vol": 132.00000000000017
+      },
+      "op": "union"
+    },
+    {
+      "id": 307,
+      "msg": {
+        "solids": 26,
+        "vol": 136.00000000000017
+      },
+      "op": "union"
+    },
+    {
+      "id": 308,
+      "msg": {
+        "solids": 27,
+        "vol": 140.00000000000017
+      },
+      "op": "union"
+    },
+    {
+      "id": 309,
+      "msg": {
+        "solids": 28,
+        "vol": 144.0000000000002
+      },
+      "op": "union"
+    },
+    {
+      "id": 310,
+      "msg": {
+        "solids": 29,
+        "vol": 148.0000000000002
+      },
+      "op": "union"
+    },
+    {
+      "id": 311,
+      "msg": {
+        "solids": 29,
+        "vol": 152.00000000000017
+      },
+      "op": "union"
+    },
+    {
+      "id": 312,
+      "msg": {
+        "solids": 29,
+        "vol": 156.0000000000002
+      },
+      "op": "union"
+    },
+    {
+      "id": 313,
+      "msg": {
+        "solids": 29,
+        "vol": 160.0000000000002
+      },
+      "op": "union"
+    },
+    {
+      "id": 314,
+      "msg": {
+        "solids": 29,
+        "vol": 164.0000000000002
+      },
+      "op": "union"
+    },
+    {
+      "id": 315,
+      "msg": {
+        "solids": 30,
+        "vol": 168.00000000000023
+      },
+      "op": "union"
+    },
+    {
+      "id": 316,
+      "msg": {
+        "solids": 31,
+        "vol": 172.00000000000023
+      },
+      "op": "union"
+    },
+    {
+      "id": 317,
+      "msg": {
+        "solids": 32,
+        "vol": 176.00000000000026
+      },
+      "op": "union"
+    },
+    {
+      "id": 318,
+      "msg": {
+        "solids": 33,
+        "vol": 180.00000000000026
+      },
+      "op": "union"
+    },
+    {
+      "id": 319,
+      "msg": {
+        "solids": 34,
+        "vol": 184.00000000000023
+      },
+      "op": "union"
+    },
+    {
+      "id": 320,
+      "msg": {
+        "solids": 35,
+        "vol": 188.00000000000023
+      },
+      "op": "union"
+    },
+    {
+      "id": 321,
+      "msg": {
+        "solids": 36,
+        "vol": 192.00000000000023
+      },
+      "op": "union"
+    },
+    {
+      "id": 322,
+      "msg": {
+        "solids": 36,
+        "vol": 196.00000000000028
+      },
+      "op": "union"
+    },
+    {
+      "id": 323,
+      "msg": {
+        "solids": 36,
+        "vol": 200.00000000000028
+      },
+      "op": "union"
+    },
+    {
+      "id": 324,
+      "msg": {
+        "solids": 36,
+        "vol": 204.00000000000028
+      },
+      "op": "union"
+    },
+    {
+      "id": 325,
+      "msg": {
+        "solids": 36,
+        "vol": 208.0000000000003
+      },
+      "op": "union"
+    },
+    {
+      "id": 326,
+      "msg": {
+        "solids": 36,
+        "vol": 212.0000000000003
+      },
+      "op": "union"
+    },
+    {
+      "id": 327,
+      "msg": {
+        "solids": 36,
+        "vol": 216.0000000000003
+      },
+      "op": "union"
+    },
+    {
+      "id": 328,
+      "msg": {
+        "solids": 36,
+        "vol": 220.0000000000003
+      },
+      "op": "union"
+    },
+    {
+      "id": 329,
+      "msg": {
+        "solids": 36,
+        "vol": 224.0000000000003
+      },
+      "op": "union"
+    },
+    {
+      "id": 330,
+      "msg": {
+        "solids": 36,
+        "vol": 228.0000000000003
+      },
+      "op": "union"
+    },
+    {
+      "id": 331,
+      "msg": {
+        "solids": 36,
+        "vol": 232.00000000000037
+      },
+      "op": "union"
+    },
+    {
+      "id": 332,
+      "msg": {
+        "solids": 36,
+        "vol": 236.0000000000003
+      },
+      "op": "union"
+    },
+    {
+      "id": 333,
+      "msg": {
+        "solids": 36,
+        "vol": 240.0000000000003
+      },
+      "op": "union"
+    },
+    {
+      "id": 334,
+      "msg": {
+        "solids": 36,
+        "vol": 244.00000000000037
+      },
+      "op": "union"
+    },
+    {
+      "id": 335,
+      "msg": {
+        "solids": 36,
+        "vol": 248.0000000000004
+      },
+      "op": "union"
+    },
+    {
+      "id": 336,
+      "msg": {
+        "solids": 36,
+        "vol": 252.00000000000037
+      },
+      "op": "union"
+    },
+    {
+      "id": 337,
+      "msg": {
+        "solids": 36,
+        "vol": 256.0000000000004
+      },
+      "op": "union"
+    },
+    {
+      "id": 338,
+      "msg": {
+        "solids": 36,
+        "vol": 259.9999999765222
+      },
+      "op": "union"
+    },
+    {
+      "id": 339,
+      "msg": {
+        "solids": 37,
+        "vol": 263.99999997652213
+      },
+      "op": "union"
+    },
+    {
+      "id": 340,
+      "msg": {
+        "solids": 38,
+        "vol": 267.99999997652213
+      },
+      "op": "union"
+    },
+    {
+      "id": 341,
+      "msg": {
+        "solids": 39,
+        "vol": 271.99999997652213
+      },
+      "op": "union"
+    },
+    {
+      "id": 342,
+      "msg": {
+        "solids": 40,
+        "vol": 275.9999999765221
+      },
+      "op": "union"
+    },
+    {
+      "id": 343,
+      "msg": {
+        "solids": 41,
+        "vol": 279.9999999765221
+      },
+      "op": "union"
+    },
+    {
+      "id": 344,
+      "msg": {
+        "solids": 42,
+        "vol": 283.9999999765221
+      },
+      "op": "union"
+    },
+    {
+      "id": 345,
+      "msg": {
+        "solids": 43,
+        "vol": 287.9999999765221
+      },
+      "op": "union"
+    },
+    {
+      "id": 346,
+      "msg": {
+        "solids": 44,
+        "vol": 291.999999976522
+      },
+      "op": "union"
+    },
+    {
+      "id": 347,
+      "msg": {
+        "solids": 44,
+        "vol": 295.999999976522
+      },
+      "op": "union"
+    },
+    {
+      "id": 348,
+      "msg": {
+        "solids": 44,
+        "vol": 299.999999976522
+      },
+      "op": "union"
+    },
+    {
+      "id": 349,
+      "msg": {
+        "solids": 44,
+        "vol": 303.999999976522
+      },
+      "op": "union"
+    },
+    {
+      "id": 350,
+      "msg": {
+        "solids": 44,
+        "vol": 307.9999999765221
+      },
+      "op": "union"
+    },
+    {
+      "id": 351,
+      "msg": {
+        "solids": 44,
+        "vol": 311.99999998826127
+      },
+      "op": "union"
+    },
+    {
+      "id": 352,
+      "msg": {
+        "solids": 45,
+        "vol": 315.9999999882612
+      },
+      "op": "union"
+    },
+    {
+      "id": 353,
+      "msg": {
+        "solids": 46,
+        "vol": 319.9999999882612
+      },
+      "op": "union"
+    },
+    {
+      "id": 354,
+      "msg": {
+        "solids": 47,
+        "vol": 323.9999999882612
+      },
+      "op": "union"
+    },
+    {
+      "id": 355,
+      "msg": {
+        "solids": 48,
+        "vol": 327.99999998826115
+      },
+      "op": "union"
+    },
+    {
+      "id": 356,
+      "msg": {
+        "solids": 49,
+        "vol": 331.99999998826115
+      },
+      "op": "union"
+    },
+    {
+      "id": 357,
+      "msg": {
+        "solids": 50,
+        "vol": 335.99999998826115
+      },
+      "op": "union"
+    },
+    {
+      "id": 358,
+      "msg": {
+        "solids": 51,
+        "vol": 339.9999999882611
+      },
+      "op": "union"
+    },
+    {
+      "id": 359,
+      "msg": {
+        "solids": 52,
+        "vol": 343.9999999882611
+      },
+      "op": "union"
+    },
+    {
+      "id": 360,
+      "msg": {
+        "solids": 53,
+        "vol": 347.9999999882611
+      },
+      "op": "union"
+    },
+    {
+      "id": 361,
+      "msg": {
+        "solids": 53,
+        "vol": 351.99999998826104
+      },
+      "op": "union"
+    },
+    {
+      "id": 362,
+      "msg": {
+        "solids": 53,
+        "vol": 355.9999999882611
+      },
+      "op": "union"
+    },
+    {
+      "id": 363,
+      "msg": {
+        "solids": 53,
+        "vol": 359.9999999882611
+      },
+      "op": "union"
+    },
+    {
+      "id": 364,
+      "msg": {
+        "solids": 53,
+        "vol": 363.9999999882611
+      },
+      "op": "union"
+    },
+    {
+      "id": 365,
+      "msg": {
+        "solids": 53,
+        "vol": 368.00000000000034
+      },
+      "op": "union"
+    },
+    {
+      "id": 366,
+      "msg": {
+        "solids": 53,
+        "vol": 372.0000000000004
+      },
+      "op": "union"
+    },
+    {
+      "id": 367,
+      "msg": {
+        "solids": 54,
+        "vol": 376.00000000000034
+      },
+      "op": "union"
+    },
+    {
+      "id": 368,
+      "msg": {
+        "solids": 55,
+        "vol": 380.0000000000004
+      },
+      "op": "union"
+    },
+    {
+      "id": 369,
+      "msg": {
+        "solids": 56,
+        "vol": 384.0000000000004
+      },
+      "op": "union"
+    },
+    {
+      "id": 370,
+      "msg": {
+        "solids": 57,
+        "vol": 388.0000000000004
+      },
+      "op": "union"
+    },
+    {
+      "id": 371,
+      "msg": {
+        "solids": 58,
+        "vol": 392.0000000000004
+      },
+      "op": "union"
+    },
+    {
+      "id": 372,
+      "msg": {
+        "solids": 59,
+        "vol": 396.0000000000004
+      },
+      "op": "union"
+    },
+    {
+      "id": 373,
+      "msg": {
+        "solids": 60,
+        "vol": 400.00000000000034
+      },
+      "op": "union"
+    },
+    {
+      "id": 374,
+      "msg": {
+        "solids": 61,
+        "vol": 404.00000000000034
+      },
+      "op": "union"
+    },
+    {
+      "id": 375,
+      "msg": {
+        "solids": 61,
+        "vol": 408.0000000000004
+      },
+      "op": "union"
+    },
+    {
+      "id": 376,
+      "msg": {
+        "solids": 61,
+        "vol": 412.00000000000034
+      },
+      "op": "union"
+    },
+    {
+      "id": 377,
+      "msg": {
+        "solids": 61,
+        "vol": 416.0000000000004
+      },
+      "op": "union"
+    },
+    {
+      "id": 378,
+      "msg": {
+        "solids": 61,
+        "vol": 420.0000000000004
+      },
+      "op": "union"
+    },
+    {
+      "id": 379,
+      "msg": {
+        "solids": 61,
+        "vol": 424.00000000000034
+      },
+      "op": "union"
+    },
+    {
+      "id": 380,
+      "msg": {
+        "solids": 61,
+        "vol": 428.0000000117397
+      },
+      "op": "union"
+    },
+    {
+      "id": 381,
+      "msg": {
+        "solids": 61,
+        "vol": 432.0000000117397
+      },
+      "op": "union"
+    },
+    {
+      "id": 382,
+      "msg": {
+        "solids": 62,
+        "vol": 436.00000001173953
+      },
+      "op": "union"
+    },
+    {
+      "id": 383,
+      "msg": {
+        "solids": 63,
+        "vol": 440.0000000117397
+      },
+      "op": "union"
+    },
+    {
+      "id": 384,
+      "msg": {
+        "solids": 64,
+        "vol": 444.0000000117397
+      },
+      "op": "union"
+    },
+    {
+      "id": 385,
+      "msg": {
+        "solids": 65,
+        "vol": 448.0000000117396
+      },
+      "op": "union"
+    },
+    {
+      "id": 386,
+      "msg": {
+        "solids": 66,
+        "vol": 452.0000000117396
+      },
+      "op": "union"
+    },
+    {
+      "id": 387,
+      "msg": {
+        "solids": 67,
+        "vol": 456.0000000117397
+      },
+      "op": "union"
+    },
+    {
+      "id": 388,
+      "msg": {
+        "solids": 68,
+        "vol": 460.0000000117397
+      },
+      "op": "union"
+    },
+    {
+      "id": 389,
+      "msg": {
+        "solids": 69,
+        "vol": 464.0000000117397
+      },
+      "op": "union"
+    },
+    {
+      "id": 390,
+      "msg": {
+        "solids": 70,
+        "vol": 468.0000000117397
+      },
+      "op": "union"
+    },
+    {
+      "id": 391,
+      "msg": {
+        "solids": 70,
+        "vol": 472.0000000117397
+      },
+      "op": "union"
+    },
+    {
+      "id": 392,
+      "msg": {
+        "solids": 70,
+        "vol": 476.0000000117397
+      },
+      "op": "union"
+    },
+    {
+      "id": 393,
+      "msg": {
+        "solids": 70,
+        "vol": 480.0000000117397
+      },
+      "op": "union"
+    }
+  ],
+  "script": "2b8f1d359a067991",
+  "source": "Onshape evalFeatureScript (Parasolid), case.fs",
+  "status": "error",
+  "warn": []
+}

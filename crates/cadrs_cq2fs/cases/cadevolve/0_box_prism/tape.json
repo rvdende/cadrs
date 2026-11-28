@@ -1,0 +1,52 @@
+{
+  "entries": [
+    {
+      "line": 2,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 1
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        10,
+        10,
+        10
+      ],
+      "kwargs": {},
+      "line": 2,
+      "op": "box",
+      "out": {
+        "wp": 2
+      },
+      "self": {
+        "wp": 1
+      }
+    }
+  ],
+  "guarded": false,
+  "i": 0,
+  "name": "box_prism",
+  "result": {
+    "wp": 2
+  },
+  "status": "ok"
+}

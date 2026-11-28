@@ -1,0 +1,51 @@
+{
+  "adopted": true,
+  "area": 1477.4974043464676,
+  "bbox": [
+    -10.0,
+    -10.0,
+    -9.797958971132712,
+    10.0,
+    10.0,
+    9.797958971132712
+  ],
+  "edges": 2.0,
+  "evaluated": 1795846211,
+  "faces": 2.0,
+  "guarded_steps": [],
+  "i": 29.0,
+  "log": [
+    {
+      "id": 2.0,
+      "msg": {
+        "solids": 1.0,
+        "vol": 4188.790204786391
+      },
+      "op": "sphere"
+    },
+    {
+      "id": 5.0,
+      "msg": {
+        "solids": 1.0,
+        "vol": 251.32741228718348
+      },
+      "op": "extrude"
+    },
+    {
+      "id": 6.0,
+      "msg": {
+        "solids": 1.0,
+        "vol": 3939.993078257247
+      },
+      "op": "cut"
+    }
+  ],
+  "other": [],
+  "script": "53f48802b67844b9",
+  "solids": 1.0,
+  "source": "Onshape evalFeatureScript (Parasolid), cq2fs case.fs",
+  "status": "ok",
+  "vertices": 0.0,
+  "vol": 3939.993078257247,
+  "warn": []
+}

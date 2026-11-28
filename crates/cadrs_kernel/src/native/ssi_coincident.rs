@@ -417,7 +417,7 @@ pub fn interior_boundary(
         (
             if d > tol && !rim(f) {
                 0
-            } else if d <= tol && in_box(b, ub, f, tol::POINT) {
+            } else if d <= tol && in_box(b, ub, f, tol::point()) {
                 1
             } else {
                 2

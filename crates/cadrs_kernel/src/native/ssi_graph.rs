@@ -272,7 +272,7 @@ fn polylines(g: Graph, b: &Surface, bb: &Bbox) -> Vec<Poly> {
             // repeats a closed curve's first point last). A branch whose two ends are one node
             // closes there by itself.
             if t0 && t1 && (c0 || c1) {
-                let node = (up[0].p - up[up.len() - 1].p).norm() <= super::tol::POINT;
+                let node = (up[0].p - up[up.len() - 1].p).norm() <= super::tol::point();
                 if c0 && c1 && node {
                     for mut l in [up, down] {
                         l.pop();
@@ -513,7 +513,7 @@ fn along_a_ruling(
             t += TAU;
         }
     }
-    let size = bb.diagonal().max(crate::native::tol::POINT);
+    let size = bb.diagonal().max(crate::native::tol::point());
     let span = vbox.1 - vbox.0;
     // The curve h = −γ/2β: nowhere within the boxes, or the pair is the numeric engine's.
     // Sampled along θ (not at a zero of β, where it runs off along the ruling or through the

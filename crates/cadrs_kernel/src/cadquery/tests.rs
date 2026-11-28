@@ -1,0 +1,810 @@
+//! The module's own checks: CadQuery programs and the volumes real CadQuery gives them.
+
+use super::workplane::{Combine, Until};
+use super::*;
+use crate::native::math::V3;
+
+fn xy() -> Workplane {
+    Workplane::named("XY", V3::zeros()).unwrap()
+}
+
+fn vol(w: &Workplane) -> f64 {
+    let s = w.shapes();
+    let s = if s.len() == 1 {
+        s[0].clone()
+    } else {
+        Shape::compound(s)
+    };
+    s.volume().unwrap()
+}
+
+#[test]
+fn box_with_a_hole_and_fillets() {
+    let w = xy()
+        .box_(10.0, 10.0, 10.0, (true, true, true), Combine::Fuse, true)
+        .unwrap();
+    assert!((vol(&w) - 1000.0).abs() < 1e-6);
+    let top = w
+        .select(ShapeType::Face, Some(&Selector::parse(">Z").unwrap()), None)
+        .unwrap();
+    assert_eq!(top.objects.len(), 1);
+    let h = top
+        .workplane(0.0, false, "ProjectedOrigin", None)
+        .unwrap()
+        .hole(2.0, None, true)
+        .unwrap();
+    assert!(
+        (vol(&h) - (1000.0 - std::f64::consts::PI * 10.0)).abs() < 1e-6,
+        "{}",
+        vol(&h)
+    );
+    let f = h
+        .select(ShapeType::Edge, Some(&Selector::parse("|Z").unwrap()), None)
+        .unwrap()
+        .fillet(1.0)
+        .unwrap();
+    // Four vertical edges rounded: each takes (1 - π/4)·10.
+    let want =
+        1000.0 - std::f64::consts::PI * 10.0 - 4.0 * (1.0 - std::f64::consts::PI / 4.0) * 10.0;
+    assert!((vol(&f) - want).abs() < 1e-6, "{} vs {want}", vol(&f));
+}
+
+/// Every edge of a prism chamfered, one of its upright edges nearly flat (the outline bent by a
+/// few degrees there): the flat corners where three chamfers meet take only the corner, as
+/// Parasolid's chamfer does (Onshape's evalFeatureScript, 2026-11-28: the volumes removed for a
+/// bend of 0, 0.3, 0.7 and 2 mm over 10). A disc wider than the corner took the chamfers' flanks
+/// too: a wavy slot's cutter (CADEvolve 5532) lost 109.5 mm³ where Parasolid's loses 45.0.
+#[test]
+fn chamfer_corners_nearly_flat_as_parasolid() {
+    for (bend, want) in [
+        (0.0, 15.333333333333284),
+        (0.3, 15.26559367198385),
+        (0.7, 15.178398511358044),
+        (2.0, 14.919057273908534),
+    ] {
+        let p = xy()
+            .polyline(
+                &[
+                    V3::new(0.0, 0.0, 0.0),
+                    V3::new(10.0, 0.0, 0.0),
+                    V3::new(20.0, bend, 0.0),
+                    V3::new(20.0, 10.0, 0.0),
+                    V3::new(0.0, 10.0, 0.0),
+                ],
+                false,
+                false,
+            )
+            .unwrap()
+            .close()
+            .unwrap()
+            .extrude(Until::Distance(2.0), Combine::Fuse, true, false, 0.0)
+            .unwrap();
+        let c = p
+            .select(ShapeType::Edge, None, None)
+            .unwrap()
+            .chamfer(0.5, None)
+            .unwrap();
+        let removed = vol(&p) - vol(&c);
+        assert!(
+            (removed - want).abs() < 1e-9,
+            "bend {bend}: {removed} vs {want}"
+        );
+    }
+}
+
+/// A chamfer of the circle where a sphere meets a plane: both new edges `d` from the old one in
+/// a straight line, as Parasolid puts them (Onshape's evalFeatureScript, 2026-11-28: the cap of
+/// a sphere of radius 12 above z = 8, its rim chamfered 0.5, is 531.1410166167934; with a
+/// through hole of diameter 2 and both its rims chamfered, CADEvolve generator 191,
+/// 517.7238739421834). The ball sized on the faces' tangent planes left 530.7959699 and
+/// 517.3788273: contacts 0.515 and 0.520 from the rim on the plane and the sphere.
+#[test]
+fn chamfered_sphere_rims_as_parasolid() {
+    let cap = || {
+        let sphere = xy()
+            .sphere(
+                12.0,
+                V3::new(0.0, 0.0, 1.0),
+                -90.0,
+                90.0,
+                360.0,
+                (true, true, true),
+                Combine::Fuse,
+                true,
+            )
+            .unwrap();
+        let slab = xy()
+            .workplane(8.0, false, "ProjectedOrigin", None)
+            .unwrap()
+            .rect(24.0, 24.0, (true, true), false)
+            .unwrap()
+            .extrude(Until::Distance(4.0), Combine::Fuse, true, false, 0.0)
+            .unwrap();
+        sphere.intersect_shapes(slab.shapes(), true).unwrap()
+    };
+    let bottom = Selector::parse("<Z").unwrap();
+    let one = cap()
+        .select(ShapeType::Face, Some(&bottom), None)
+        .unwrap()
+        .select(ShapeType::Edge, None, None)
+        .unwrap()
+        .chamfer(0.5, None)
+        .unwrap();
+    assert!(
+        (vol(&one) - 531.1410166167934).abs() < 1e-7,
+        "{}",
+        vol(&one)
+    );
+    let two = cap()
+        .select(ShapeType::Face, Some(&bottom), None)
+        .unwrap()
+        .workplane(0.0, false, "ProjectedOrigin", None)
+        .unwrap()
+        .hole(2.0, None, true)
+        .unwrap()
+        .select(ShapeType::Face, Some(&bottom), None)
+        .unwrap()
+        .select(ShapeType::Edge, None, None)
+        .unwrap()
+        .chamfer(0.5, None)
+        .unwrap();
+    assert!(
+        (vol(&two) - 517.7238739421834).abs() < 1e-7,
+        "{}",
+        vol(&two)
+    );
+}
+
+#[test]
+fn rect_and_circle_make_a_holed_plate() {
+    let w = xy()
+        .circle(3.0, false)
+        .unwrap()
+        .rect(10.0, 10.0, (true, true), false)
+        .unwrap();
+    let e = w
+        .extrude(Until::Distance(1.0), Combine::Fuse, true, false, 0.0)
+        .unwrap();
+    assert!(
+        (vol(&e) - 71.725_666_117_691_86).abs() < 1e-6,
+        "{}",
+        vol(&e)
+    );
+}
+
+#[test]
+fn polyline_close_extrude_and_taper() {
+    let w = xy()
+        .polyline(
+            &[
+                V3::new(0.0, 0.0, 0.0),
+                V3::new(4.0, 0.0, 0.0),
+                V3::new(4.0, 3.0, 0.0),
+            ],
+            false,
+            false,
+        )
+        .unwrap()
+        .close()
+        .unwrap();
+    let e = w
+        .extrude(Until::Distance(2.0), Combine::Fuse, true, false, 0.0)
+        .unwrap();
+    assert!((vol(&e) - 12.0).abs() < 1e-9);
+    let t = xy()
+        .rect(10.0, 10.0, (true, true), false)
+        .unwrap()
+        .extrude(Until::Distance(2.0), Combine::Fuse, true, false, 10.0)
+        .unwrap();
+    assert!(
+        (vol(&t) - 186.225_481_053_997_6).abs() < 1e-6,
+        "{}",
+        vol(&t)
+    );
+}
+
+#[test]
+fn selectors_index_as_cadquery() {
+    let b = xy()
+        .box_(10.0, 10.0, 10.0, (true, true, true), Combine::Fuse, true)
+        .unwrap();
+    let top = b
+        .select(ShapeType::Face, Some(&Selector::parse(">Z").unwrap()), None)
+        .unwrap();
+    let w = top
+        .workplane(0.0, false, "ProjectedOrigin", None)
+        .unwrap()
+        .rect(4.0, 4.0, (true, true), false)
+        .unwrap();
+    let b = w
+        .extrude(Until::Distance(5.0), Combine::Fuse, true, false, 0.0)
+        .unwrap();
+    let z = |s: &str| -> Vec<f64> {
+        b.select(ShapeType::Face, Some(&Selector::parse(s).unwrap()), None)
+            .unwrap()
+            .shapes()
+            .iter()
+            .map(|f| (f.center().z * 1000.0).round() / 1000.0)
+            .collect()
+    };
+    assert_eq!(z("<Z[0]"), vec![10.0]);
+    assert_eq!(z("<Z[1]"), vec![5.0]);
+    assert_eq!(z(">Z[0]"), vec![-5.0]);
+    assert_eq!(z(">Z[-2]"), vec![5.0]);
+    assert_eq!(z("<Z"), vec![-5.0]);
+}
+
+/// A tube and a spoke across its wall whose flat ends touch the tube's cylinders along a line
+/// (CadEvolve's hollow_cylinder_shell_with_double_spokes): OCCT unites them to 2764.6363.
+#[test]
+fn spoke_touching_both_cylinders_unites() {
+    let (ri, ro, h, w) = (10.0, 12.0, 20.0, 1.0);
+    let tube = xy()
+        .circle(ro, false)
+        .unwrap()
+        .circle(ri, false)
+        .unwrap()
+        .extrude(Until::Distance(h), Combine::Fuse, true, false, 0.0)
+        .unwrap();
+    let pts = [
+        V3::new(ri, -w / 2.0, 0.0),
+        V3::new(ro, -w / 2.0, 0.0),
+        V3::new(ro, w / 2.0, 0.0),
+        V3::new(ri, w / 2.0, 0.0),
+    ];
+    let spoke = xy()
+        .workplane(h / 4.0, false, "ProjectedOrigin", None)
+        .unwrap()
+        .polyline(&pts, false, false)
+        .unwrap()
+        .close()
+        .unwrap()
+        .extrude(Until::Distance(h / 2.0), Combine::Fuse, true, false, 0.0)
+        .unwrap()
+        .rotate(V3::zeros(), V3::z(), 22.5)
+        .unwrap();
+    let u = tube.union_wp(&spoke, true).unwrap();
+    assert!(
+        (vol(&u) - 2_764.636_266_429_097).abs() < 1e-6,
+        "{}",
+        vol(&u)
+    );
+}
+
+/// A filleted diagonal rib across a conical shell's wall (CadEvolve's
+/// frustum_cone_with_internal_diagonal_supports): OCCT unites them to 1348.8225 (its fillets
+/// approximated; ours exact, 3e-7 apart).
+#[test]
+fn filleted_rib_across_a_cone_wall_unites() {
+    let (r1, r2, h, t, w, d, fr) = (12.0, 6.0, 25.0, 1.0, 1.0, 2.0, 0.2);
+    let cone = |a: f64, b: f64| {
+        let w = xy()
+            .circle(a, false)
+            .unwrap()
+            .workplane(h, false, "ProjectedOrigin", None)
+            .unwrap()
+            .circle(b, false)
+            .unwrap();
+        w.loft(false, Combine::Fuse, true).unwrap()
+    };
+    let shell = cone(r1, r2)
+        .cut_shapes(cone(r1 - t, r2 - t).shapes(), true)
+        .unwrap();
+    let (sx, ex) = (r1 - t, r2);
+    let l = (ex - sx).hypot(h);
+    let (nx, nz) = (-h / l, (ex - sx) / l);
+    let hw = w / 2.0;
+    let pts = [
+        V3::new(sx + nx * hw, nz * hw, 0.0),
+        V3::new(sx - nx * hw, -nz * hw, 0.0),
+        V3::new(ex - nx * hw, h - nz * hw, 0.0),
+        V3::new(ex + nx * hw, h + nz * hw, 0.0),
+    ];
+    let rib = Workplane::named("XZ", V3::zeros())
+        .unwrap()
+        .polyline(&pts, false, false)
+        .unwrap()
+        .close()
+        .unwrap();
+    let rib = rib
+        .extrude(Until::Distance(d), Combine::Fuse, true, false, 0.0)
+        .unwrap();
+    let rib = rib
+        .select(ShapeType::Edge, None, None)
+        .unwrap()
+        .fillet(fr)
+        .unwrap();
+    let u = shell.union_wp(&rib, true).unwrap();
+    assert!(
+        (vol(&u) - 1_348.822_524_061_117).abs() < 1e-3,
+        "{}",
+        vol(&u)
+    );
+}
+
+/// A square rib swept along a helix (`parametricCurve`) grazing a tube's bore: its outer face
+/// crosses the bore in two helices close together (CadEvolve's oct_prism_with_internal_spoke_
+/// support and its kind). OCCT unites them to 2626.5596.
+#[test]
+fn helical_rib_grazing_a_bore_unites() {
+    let (r, h, turns, t) = (9.0, 20.0, 3.0, 0.8);
+    let pts: Vec<V3> = (0..=400)
+        .map(|i| {
+            let u = i as f64 / 400.0;
+            let a = std::f64::consts::TAU * turns * u;
+            V3::new(r * a.cos(), r * a.sin(), h * u)
+        })
+        .collect();
+    let path = xy().spline_approx(&pts, 1e-6, false, false, true).unwrap();
+    let path = path.shapes().remove(0);
+    let rib = xy().center(r, 0.0).rect(t, t, (true, true), false).unwrap();
+    let rib = rib
+        .sweep(&path, false, true, true, Combine::Fuse, true, "right", None)
+        .unwrap();
+    let tube = xy()
+        .circle(r + t / 2.0 + 2.0, false)
+        .unwrap()
+        .circle(r + t / 2.0, false)
+        .unwrap();
+    let tube = tube
+        .extrude(Until::Distance(h), Combine::Fuse, true, false, 0.0)
+        .unwrap();
+    let u = tube.union_wp(&rib, true).unwrap();
+    assert!((vol(&u) - 2626.5596).abs() < 1e-3, "{}", vol(&u));
+}
+
+/// Replays a boolean the oracle logged (`CADRS_REPLAY=<dir>/<pid>-<n>` and `CADRS_REPLAY_OP=
+/// Union|Subtract|Intersect`): its operands read back (`-0.body` the target, the rest tools).
+#[test]
+#[ignore = "a debugging aid: set CADRS_REPLAY"]
+fn replay_logged_boolean() {
+    use crate::Kernel;
+    let Ok(stem) = std::env::var("CADRS_REPLAY") else {
+        return;
+    };
+    let op = match std::env::var("CADRS_REPLAY_OP").as_deref() {
+        Ok("Union") => crate::BoolOp::Union,
+        Ok("Intersect") => crate::BoolOp::Intersect,
+        _ => crate::BoolOp::Subtract,
+    };
+    let mut k = crate::native::NativeKernel::new();
+    // CADRS_REPLAY_POINT: the session's merge distance (mm), as `Tolerances::with_point`
+    if let Ok(p) = std::env::var("CADRS_REPLAY_POINT") {
+        k.set_tolerances(crate::native::tol::Tolerances::with_point(
+            p.parse().unwrap(),
+        ))
+        .unwrap();
+    }
+    let mut ids = Vec::new();
+    for j in 0.. {
+        let Ok(bytes) = std::fs::read(format!("{stem}-{j}.body")) else {
+            break;
+        };
+        ids.push(k.read_body(&bytes).unwrap());
+    }
+    if let Ok(spec) = std::env::var("CADRS_REPLAY_FACE") {
+        // "<operand>:<face>": that face's coedges, their p-curves' ends.
+        let (bi, fi) = spec.split_once(':').unwrap();
+        let b = k.get(ids[bi.parse::<usize>().unwrap()]).unwrap().clone();
+        let f = &b.faces[fi.parse::<usize>().unwrap()];
+        if let crate::native::surface::Surface::Nurbs(ns) = &f.surf {
+            eprintln!(
+                "nurbs: degree {}×{}, poles {}×{}, knots {}×{}",
+                ns.du,
+                ns.dv,
+                ns.cps.len(),
+                ns.cps[0].len(),
+                ns.ku.len(),
+                ns.kv.len()
+            );
+        }
+        for (li, l) in f.loops.iter().enumerate() {
+            for c in l {
+                let e = &b.edges[c.edge];
+                let (s0, s1) = if c.fwd {
+                    (e.t[0], e.t[1])
+                } else {
+                    (e.t[1], e.t[0])
+                };
+                let kind = match &c.pc {
+                    crate::native::curve::Curve::Line { .. } => "line",
+                    crate::native::curve::Curve::Nurbs(_) => "nurbs",
+                    _ => "conic",
+                };
+                eprintln!(
+                    "loop {li} edge {} fwd {} {kind} pc {:?} → {:?} (mid {:?})",
+                    c.edge,
+                    c.fwd,
+                    c.pc.point(s0),
+                    c.pc.point(s1),
+                    c.pc.point(0.5 * (s0 + s1))
+                );
+            }
+        }
+    }
+    let r = k.boolean(op, ids[0], &ids[1..]);
+    match r {
+        Ok(r) => eprintln!("volume {}", k.mass_properties(r.bodies[0]).unwrap().volume),
+        Err(e) => panic!("{e}"),
+    }
+}
+
+/// A three-turn helix's p-curve on its cylinder runs on through the turns, its end three turns
+/// on from its start (not wrapped back into the first turn).
+#[test]
+fn helix_pcurve_unwraps_through_its_turns() {
+    use crate::native::math::{Frame, P3};
+    use crate::native::surface::Surface;
+    let g = super::make::helix(5.0 / 3.0, 5.0, 20.0, V3::zeros(), V3::z(), 360.0, false)
+        .unwrap()
+        .remove(0);
+    let f = Frame {
+        o: P3::origin(),
+        x: V3::x(),
+        y: V3::y(),
+        z: V3::z(),
+    };
+    let s = Surface::Cylinder { f, r: 20.0 };
+    let pc = crate::native::pcurve::pcurve(&s, &g.curve, g.t0, g.t1, None);
+    let (a, b) = (pc.point(g.t0), pc.point(g.t1));
+    assert!(
+        ((b.x - a.x) - 3.0 * std::f64::consts::TAU).abs() < 1e-6,
+        "{a:?} → {b:?}"
+    );
+    assert!((b.y - a.y - 5.0).abs() < 1e-6, "{a:?} → {b:?}");
+}
+
+/// A conical spiral sampled through `parametricCurve`'s fit is recognized as the spiral it is.
+#[test]
+fn sampled_conical_spiral_is_a_helix() {
+    let (r1, r2, h, turns) = (9.0, 6.0, 20.0, 3.0);
+    let pts: Vec<V3> = (0..=400)
+        .map(|i| {
+            let t = i as f64 / 400.0;
+            let (a, r) = (std::f64::consts::TAU * turns * t, r1 + (r2 - r1) * t);
+            V3::new(r * a.cos(), r * a.sin(), h * t)
+        })
+        .collect();
+    let g = super::make::spline_approx(&pts, 1e-6).unwrap();
+    let hx = super::ops::helix_of(&[g]).expect("a conical spiral");
+    assert!(
+        (hx.r0 - 9.0).abs() < 1e-5 && (hx.r1 - 6.0).abs() < 1e-5,
+        "{hx:?}"
+    );
+}
+
+/// A box placed on a plane facing down (a half turn about y) points down, as OCCT's: the turn
+/// was lost converting it to a quaternion.
+#[test]
+fn half_turned_placement_keeps_its_turn() {
+    let p = Plane::new(V3::new(1.0, 2.0, -3.0), None, V3::new(0.0, 0.0, -1.0)).unwrap();
+    let b = super::make::make_box(2.0, 4.0, 6.0, V3::zeros(), V3::z()).unwrap();
+    let bb = b.moved(&p.location()).unwrap().bounding_box().unwrap();
+    let want = [-1.0, 2.0, -9.0, 1.0, 6.0, -3.0];
+    let got = [bb.min.x, bb.min.y, bb.min.z, bb.max.x, bb.max.y, bb.max.z];
+    for (g, w) in got.iter().zip(want) {
+        assert!((g - w).abs() < 1e-6, "{got:?}");
+    }
+}
+
+/// An L bracket's end outlines rounded twice: first the edges along x, then those along z. The
+/// inner upright's round ends where it meets the first round of the base's top edge, the two
+/// mitred (CadEvolve's PrismaticMeshBracket); it ran on through the base. OCCT: 18739.2918.
+/// Open: OCCT treats the earlier round's face as a strip meeting the new one, extending it to
+/// the mitre too (x 5 → 3); our end there is traced and runs off the strip.
+#[test]
+#[ignore = "a round ending on an earlier round mitres with it (open)"]
+fn second_round_mitres_into_the_first() {
+    let pts: Vec<V3> = [
+        (0.0, 0.0),
+        (100.0, 0.0),
+        (100.0, 5.0),
+        (5.0, 5.0),
+        (5.0, 100.0),
+        (0.0, 100.0),
+    ]
+    .iter()
+    .map(|&(x, y)| V3::new(x, y, 0.0))
+    .collect();
+    let b = Workplane::named("XZ", V3::zeros())
+        .unwrap()
+        .polyline(&pts, false, false)
+        .unwrap()
+        .close()
+        .unwrap()
+        .extrude(Until::Distance(20.0), Combine::Fuse, true, false, 0.0)
+        .unwrap();
+    let round = |w: &Workplane, sel: &str| {
+        w.select(ShapeType::Edge, Some(&Selector::parse(sel).unwrap()), None)
+            .unwrap()
+            .fillet(2.0)
+            .unwrap()
+    };
+    let b = round(&round(&b, "|X"), "|Z");
+    let top = b
+        .select(ShapeType::Face, Some(&Selector::parse(">Y").unwrap()), None)
+        .unwrap();
+    assert_eq!(top.objects.len(), 1, "the end face stays whole");
+    assert!(
+        (vol(&b) - 18_739.291_805_537_59).abs() < 1e-6,
+        "{}",
+        vol(&b)
+    );
+}
+
+/// A polyline round an annulus, out along a cut to the bore, round the bore and closed back
+/// along the cut (CadEvolve's annular_wave_louvered_fin_collar): the wire keeps the bore, so
+/// the face is the annulus, as OCCT's. Two octagons, 30 and 20 across their corners.
+#[test]
+fn slit_annulus_polyline_keeps_its_bore() {
+    let n = 8;
+    let at = |r: f64, i: usize| {
+        let t = std::f64::consts::TAU * i as f64 / n as f64;
+        V3::new(r * t.cos(), r * t.sin(), 0.0)
+    };
+    let pts: Vec<V3> = (0..=n)
+        .map(|i| at(30.0, i))
+        .chain((0..=n).map(|i| at(20.0, n - i)))
+        .collect();
+    let w = xy().polyline(&pts, false, false).unwrap().close().unwrap();
+    let e = w
+        .extrude(Until::Distance(1.0), Combine::Fuse, true, false, 0.0)
+        .unwrap();
+    let oct = |r: f64| 2.0 * std::f64::consts::SQRT_2 * r * r;
+    assert!(
+        (vol(&e) - (oct(30.0) - oct(20.0))).abs() < 1e-6,
+        "{}",
+        vol(&e)
+    );
+}
+
+/// A slot cut radially into a 90° cone shell (CadEvolve's ventedSliceCone): the slot's sides,
+/// planes 0.5 off the cone's axis, meet the cone's patch in a hyperbola a sliver of the cone's
+/// turn wide, between the samples its intersection took; the cut found no curve and took the
+/// whole slot. OCCT: 99.2197565806.
+/// A frustum whose top is 1e-6 across, revolved: the top's corner lies within the merge
+/// distance of the axis, so on it, and the solid is the cone with an apex Parasolid makes
+/// (Onshape's evalFeatureScript of CADEvolve 2555: 2094.395102393, π·10²·20/3). Its top face
+/// was kept as a speck, and a box cut through the axis (the generator's first vane) left an
+/// open shell.
+#[test]
+fn speck_of_a_top_on_the_axis_revolves_to_an_apex() {
+    let cone = Workplane::named("XZ", V3::zeros())
+        .unwrap()
+        .move_to(0.0, 0.0)
+        .line_to(10.0, 0.0, false)
+        .unwrap()
+        .line_to(1e-6, 20.0, false)
+        .unwrap()
+        .line_to(0.0, 20.0, false)
+        .unwrap()
+        .close()
+        .unwrap()
+        .revolve(360.0, None, None, Combine::Fuse, true)
+        .unwrap();
+    let want = std::f64::consts::PI * 100.0 * 20.0 / 3.0;
+    assert!((vol(&cone) - want).abs() < 1e-9 * want, "{}", vol(&cone));
+    let vane = xy()
+        .transformed(V3::zeros(), V3::new(5.4999995, 0.0, 10.0))
+        .unwrap()
+        .box_(
+            10.999999,
+            0.5,
+            22.0,
+            (true, true, true),
+            Combine::Fuse,
+            true,
+        )
+        .unwrap();
+    let cut = cone
+        .cut_shapes(vec![vane.find_solid().unwrap()], true)
+        .unwrap();
+    assert!(vol(&cut) < want && vol(&cut) > 0.9 * want, "{}", vol(&cut));
+}
+
+#[test]
+fn slot_in_a_cone_shell_meets_its_sides() {
+    let cone = |r: f64| {
+        Workplane::named("XZ", V3::zeros())
+            .unwrap()
+            .move_to(0.0, 0.0)
+            .line_to(r, 0.0, false)
+            .unwrap()
+            .line_to(0.0, 20.0, false)
+            .unwrap()
+            .close()
+            .unwrap()
+            .revolve(90.0, None, None, Combine::Fuse, true)
+            .unwrap()
+    };
+    let shell = cone(10.0)
+        .cut_shapes(vec![cone(9.0).find_solid().unwrap()], true)
+        .unwrap();
+    let phi = (90.0f64 / 16.0).to_radians();
+    let n = V3::new(phi.cos(), phi.sin(), 0.0);
+    let p = Plane::new(n * 5.0 + V3::new(0.0, 0.0, 10.0), Some(V3::z()), n).unwrap();
+    let on = || Workplane::new(p);
+    let ex = |w: Workplane| {
+        w.extrude(Until::Distance(-0.5), Combine::Fuse, true, false, 0.0)
+            .unwrap()
+    };
+    let bar = ex(on().rect(10.0, 0.5, (true, true), false).unwrap());
+    let c1 = ex(on().center(5.0, 0.0).circle(0.25, false).unwrap());
+    let c2 = ex(on().center(-5.0, 0.0).circle(0.25, false).unwrap());
+    let cutter = bar
+        .union_wp(&c1, true)
+        .unwrap()
+        .union_wp(&c2, true)
+        .unwrap();
+    let r = shell
+        .cut_shapes(vec![cutter.find_solid().unwrap()], true)
+        .unwrap();
+    assert!((vol(&r) - 99.219_756_580_6).abs() < 1e-8, "{}", vol(&r));
+}
+
+/// A triangular winglet swept along a conical spiral round a lofted cone shell and united with
+/// it (CadEvolve's spiralWingletCone): the winglet's sides are ruled across (degree 1 in u),
+/// and the cone's seam meets one where it crosses the cone, once a turn; the general ray
+/// search found one of the three, and the shell split into pieces sharing a turn's edge.
+/// OCCT 1408.913, kentron 1408.377.
+#[test]
+fn winglet_on_a_conical_spiral_unites() {
+    let (r0, r1, h, turns) = (12.0, 6.0, 25.0, 3.0);
+    let cone = |a: f64, b: f64| {
+        xy().circle(a, false)
+            .unwrap()
+            .workplane(h, false, "ProjectedOrigin", None)
+            .unwrap()
+            .circle(b, false)
+            .unwrap()
+            .loft(false, Combine::Fuse, true)
+            .unwrap()
+    };
+    let shell = cone(r0, r1)
+        .cut_shapes(vec![cone(r0 - 1.0, r1 - 1.0).find_solid().unwrap()], true)
+        .unwrap();
+    let pts: Vec<V3> = (0..=100)
+        .map(|i| {
+            let t = i as f64 / 100.0;
+            let (r, a) = (r0 + (r1 - r0) * t, std::f64::consts::TAU * turns * t);
+            V3::new(r * a.cos(), r * a.sin(), h * t)
+        })
+        .collect();
+    let path = xy()
+        .spline_approx(&pts, 1e-6, false, false, true)
+        .unwrap()
+        .shapes()
+        .remove(0);
+    let profile = Workplane::named("XZ", V3::zeros())
+        .unwrap()
+        .transformed(V3::zeros(), V3::new(r0, 0.0, 0.0))
+        .unwrap()
+        .polyline(
+            &[
+                V3::new(0.0, -1.0, 0.0),
+                V3::new(0.0, 1.0, 0.0),
+                V3::new(0.5, 0.0, 0.0),
+            ],
+            false,
+            false,
+        )
+        .unwrap()
+        .close()
+        .unwrap();
+    let winglet = profile
+        .sweep(&path, true, true, true, Combine::Fuse, true, "right", None)
+        .unwrap();
+    let u = shell.union_wp(&winglet, true).unwrap();
+    assert!((vol(&u) - 1408.388).abs() < 0.02, "{}", vol(&u));
+}
+
+/// A ring of fins round a cylinder, each a 30° quad from the cylinder's radius out, its inner
+/// corners on it and its sides on its neighbours', united one at a time (CadEvolve's louvered
+/// cylinders): the last fin's top circle was dropped as running along the arc the earlier fins
+/// had left (five samples of the circle, all on an arc round most of the turn), and the shell
+/// came out open. Each fin adds its quad less the segment inside the cylinder.
+#[test]
+fn ring_of_fins_round_a_cylinder_closes() {
+    let (r1, r2, h, n) = (10.0, 12.0, 10.0, 12usize);
+    let half = std::f64::consts::PI / n as f64;
+    let mut body = xy()
+        .circle(r1, false)
+        .unwrap()
+        .extrude(Until::Distance(h), Combine::Fuse, true, false, 0.0)
+        .unwrap();
+    for j in 0..n {
+        let at = |r: f64, t: f64| V3::new(r * t.cos(), r * t.sin(), 0.0);
+        let fin = xy()
+            .transformed(V3::zeros(), V3::new(0.0, 0.0, 4.0))
+            .unwrap()
+            .polyline(
+                &[at(r1, -half), at(r1, half), at(r2, half), at(r2, -half)],
+                false,
+                false,
+            )
+            .unwrap()
+            .close()
+            .unwrap()
+            .extrude(Until::Distance(2.0), Combine::No, true, false, 0.0)
+            .unwrap()
+            .rotate(V3::zeros(), V3::z(), 360.0 / n as f64 * j as f64)
+            .unwrap();
+        body = body.union_wp(&fin, true).unwrap();
+    }
+    let pi = std::f64::consts::PI;
+    let quad = 0.5 * (2.0 * half).sin() * (r2 * r2 - r1 * r1);
+    let segment = 0.5 * r1 * r1 * (2.0 * half - (2.0 * half).sin());
+    let want = pi * r1 * r1 * h + n as f64 * 2.0 * (quad - segment);
+    assert!((vol(&body) - want).abs() < 1e-8, "{} {want}", vol(&body));
+}
+
+/// A square notch swept along a sampled helix, its profile square to the helix at the start
+/// (CadEvolve's cylinder_basic_with_helicoidal_notches): the fitted helix starts 1e-9 past the
+/// profile's plane, so the sweep took the plane's next crossing of the path, a turn on, as
+/// where the profile sits and swept both ways from there. Cut from the cylinder it runs round:
+/// OCCT 9362.8459 (its sweep approximated).
+#[test]
+fn helical_notch_starts_at_its_profile() {
+    let (r, h, turns) = (10.0, 30.0, 2.0);
+    let tau = std::f64::consts::TAU;
+    let pts: Vec<V3> = (0..=200)
+        .map(|i| {
+            let t = i as f64 / 200.0;
+            V3::new(
+                r * (tau * turns * t).cos(),
+                r * (tau * turns * t).sin(),
+                h * t,
+            )
+        })
+        .collect();
+    let path = xy()
+        .spline_approx(&pts, 1e-6, false, false, true)
+        .unwrap()
+        .shapes()
+        .remove(0);
+    let plane = Plane::new(V3::new(r, 0.0, 0.0), None, V3::new(0.0, r * tau * turns, h)).unwrap();
+    let notch = Workplane::new(plane)
+        .center(-0.5, 0.0)
+        .rect(1.0, 1.0, (true, true), false)
+        .unwrap()
+        .sweep(&path, false, true, true, Combine::Fuse, true, "right", None)
+        .unwrap();
+    let bb = notch.find_solid().unwrap().bounding_box().unwrap();
+    assert!(bb.min.z > -1.0 && bb.max.z < 30.0 + 1e-6, "{bb:?}");
+    let cyl = xy()
+        .circle(r, false)
+        .unwrap()
+        .extrude(Until::Distance(h), Combine::Fuse, true, false, 0.0)
+        .unwrap();
+    let cut = cyl
+        .cut_shapes(vec![notch.find_solid().unwrap()], true)
+        .unwrap();
+    assert!((vol(&cut) - 9362.8459).abs() < 5e-3, "{}", vol(&cut));
+}
+
+/// A sliver of a cylinder (a 5° segment of radius 20, its chord and arc meeting at 2.5°)
+/// can't take a 0.5 round on its long edges: a ball touching both faces there touches them
+/// some 23 from the edge, past the 0.87 the chord reaches. OCCT refuses; six such slivers of
+/// CadEvolve's ribbed_cylinder_with_mounting_tabs_and_spoke_cutouts came out four ways.
+#[test]
+fn round_too_large_for_a_sliver_is_refused() {
+    let (r, half) = (20.0f64, 2.5f64.to_radians());
+    let p = |a: f64| (r * a.cos(), r * a.sin());
+    let w = xy()
+        .move_to(p(-half).0, p(-half).1)
+        .three_point_arc(
+            V3::new(r, 0.0, 0.0),
+            V3::new(p(half).0, p(half).1, 0.0),
+            false,
+        )
+        .unwrap()
+        .close()
+        .unwrap()
+        .extrude(Until::Distance(30.0), Combine::Fuse, true, false, 0.0)
+        .unwrap();
+    let r = w
+        .select(ShapeType::Edge, Some(&Selector::parse("|Z").unwrap()), None)
+        .unwrap()
+        .fillet(0.5);
+    assert!(r.is_err(), "{:?}", r.map(|w| vol(&w)));
+}

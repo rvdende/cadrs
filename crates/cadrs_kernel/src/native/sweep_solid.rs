@@ -573,7 +573,7 @@ struct Outline {
 fn outline(sl: &Slicer, lo: Extreme, hi: Extreme, n: usize) -> Option<Outline> {
     let (mid, half) = (0.5 * (lo.key + hi.key), 0.5 * (hi.key - lo.key));
     let span = hi.key - lo.key;
-    let scale = lo.r.abs().max(hi.r.abs()).max(span).max(tol::POINT);
+    let scale = lo.r.abs().max(hi.r.abs()).max(span).max(tol::point());
     // At each end: the two sides just inside it; one point when they close on it.
     let end = |q: f64, at: Extreme| -> ((f64, f64), (f64, f64)) {
         match (sl.extreme(q, true, at.w), sl.extreme(q, false, at.w)) {
@@ -694,7 +694,7 @@ impl Section {
                 let size = cs
                     .iter()
                     .fold(0.0f64, |m, c| m.max(c.0.abs()).max(c.1.abs()))
-                    .max(tol::POINT);
+                    .max(tol::point());
                 let on_axis = |i: usize| cs[i % n].0.abs() <= 1e-9 * size;
                 // Edge i's outward normal (to the right of a counter-clockwise boundary).
                 let normal = |i: usize| -> Option<(f64, f64)> {
@@ -1670,7 +1670,7 @@ fn slid_torus(b: &Body, steps: &[RigidStep]) -> bool {
     let super::surface::Surface::Torus { f, .. } = &f.surf else {
         return false;
     };
-    let Some(d) = (to - from).try_normalize(tol::POINT) else {
+    let Some(d) = (to - from).try_normalize(tol::point()) else {
         return false;
     };
     let along = d.dot(&f.z).abs();
@@ -1868,7 +1868,7 @@ pub(crate) fn offset_meridian(b: &Body, d: f64) -> Option<Body> {
         return None;
     }
     let size = b.bbox().diagonal();
-    let near = 1e-9 * size.max(tol::POINT);
+    let near = 1e-9 * size.max(tol::point());
     let z = f.z.normalize();
     let x = f.x.normalize();
     let sense = if face.sense { 1.0 } else { -1.0 };
@@ -2040,7 +2040,7 @@ fn whole_turn_of_round(
     let radial = w - z * h;
     let d = radial.norm();
     // The axis must clear the body by a margin (else the shadow reaches it, or wraps it).
-    if !(d > rmaj + rmin + tol::POINT.max(1e-9 * d)) {
+    if !(d > rmaj + rmin + tol::point().max(1e-9 * d)) {
         return None;
     }
     let x = radial / d;
@@ -2128,7 +2128,7 @@ fn ellipsoid_of(b: &Body) -> Option<(P3, nalgebra::Matrix3<f64>)> {
     // Scaled about the points' middle for conditioning.
     let mid = P3::from(pts.iter().map(|p| p.coords).sum::<V3>() / pts.len() as f64);
     let size = pts.iter().map(|p| (p - mid).norm()).fold(0.0, f64::max);
-    if !(size > tol::POINT) {
+    if !(size > tol::point()) {
         return None;
     }
     let row = |p: &P3| {
@@ -2234,7 +2234,7 @@ fn polyhedron_turned(k: &mut NativeKernel, b: &Body, axis: Axis) -> Option<Resul
     if crate::native::env_flag!("CADRS_NO_POLYHEDRON_TURNED") {
         return None;
     }
-    let size = b.bbox().diagonal().max(tol::POINT);
+    let size = b.bbox().diagonal().max(tol::point());
     let eps = 1e-9 * size;
     let poly = super::polytope::Polytope::of_flat_body(b, eps)?;
     let faces = poly.rings();
@@ -2669,7 +2669,7 @@ fn ring_moved_flat(
     let rev = revolved(b)?;
     let at = nalgebra::Point2::new;
     let line = |a: P2, b: P2| Curve2::Line { a, b, source: None };
-    let size = b.bbox().diagonal().max(tol::POINT);
+    let size = b.bbox().diagonal().max(tol::point());
     let nil = 1e-9 * size;
     // The section's far side from its lowest point to its highest, and its near side from
     // its highest back down, each as curves in (ρ, h) with its ends; the near side none
@@ -2780,7 +2780,7 @@ fn ring_moved_flat(
             Curve2::Line { a, b, .. } => (a.x - b.x).abs() <= nil || (a.y - b.y).abs() <= nil,
             _ => matches!(rev.section, Section::Disk { .. }),
         });
-    if !(big.is_finite() && big > tol::POINT) {
+    if !(big.is_finite() && big > tol::point()) {
         return None;
     }
     let place = |t: f64| {
@@ -3027,7 +3027,7 @@ fn screwed_ball(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<R
     };
     let same = |s: &Surface| {
         matches!(s, Surface::Sphere { f, r: q }
-            if (f.o - centre).norm() <= tol::POINT && (q - r).abs() <= tol::POINT)
+            if (f.o - centre).norm() <= tol::point() && (q - r).abs() <= tol::point())
     };
     if !b.faces.iter().all(|f| same(&f.surf)) {
         return None;
@@ -3045,7 +3045,7 @@ fn screwed_ball(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<R
     };
     let z = axis.dir.into_inner();
     let rise = slide.dot(&z);
-    if turn <= 1e-9 || (slide - z * rise).norm() > tol::POINT {
+    if turn <= 1e-9 || (slide - z * rise).norm() > tol::point() {
         return None;
     }
     let pose = |t: f64| {
@@ -3728,7 +3728,7 @@ fn sweep_solid_at(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> R
             from,
             to,
         } => {
-            if !(rise.abs() > tol::POINT && to > from) {
+            if !(rise.abs() > tol::point() && to > from) {
                 return Err(KernelError::InvalidParameter(
                     "A screw needs a rise and a span along its axis".into(),
                 ));
@@ -3769,7 +3769,7 @@ fn sweep_solid_at(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> R
             };
             // The helix through a point of the region (its first pole's distance, at angle 0
             // of the plane), rising to `to`.
-            let r0 = reach.max(tol::POINT);
+            let r0 = reach.max(tol::point());
             let turns = (to - from) * kk / TAU;
             let path = helix_path(plane.origin, z, xr, yr, r0, TAU / kk, turns);
             // Swept by the screw's own motion (a path this short is too little of a helix for
@@ -3893,13 +3893,13 @@ fn cut_screwed_rod(
     else {
         return None;
     };
-    if !(rise.abs() > tol::POINT) {
+    if !(rise.abs() > tol::point()) {
         return None;
     }
     let kk = TAU / rise;
     let z = axis.dir.into_inner().normalize();
     let rod = std::sync::Arc::clone(k.get(target).ok()?);
-    let size = rod.bbox().diagonal().max(tol::POINT);
+    let size = rod.bbox().diagonal().max(tol::point());
     let near = 1e-9 * (1.0 + size + (axis.origin - P3::origin()).norm());
     if rod.solids.len() != 1 {
         return None;
@@ -4477,10 +4477,10 @@ pub fn offset_meshed(k: &mut NativeKernel, body: BodyId, distance: f64) -> Resul
     }
     let b = std::sync::Arc::clone(k.get(body)?);
     let md =
-        super::mesh_distance::MeshDistance::new(&b, 1e-3 * b.bbox().diagonal().max(tol::POINT))
+        super::mesh_distance::MeshDistance::new(&b, 1e-3 * b.bbox().diagonal().max(tol::point()))
             .ok_or(KernelError::Unsupported(
-                "offsetting a solid whose mesh doesn't close",
-            ))?;
+            "offsetting a solid whose mesh doesn't close",
+        ))?;
     let bb = b.bbox().grow(distance.max(0.0));
     let ext = bb.max - bb.min;
     let h = ext.max() / 100.0;
@@ -4526,7 +4526,7 @@ fn endless_within(target: &Body, tool: &Body, motion: &SolidMotion) -> Option<So
         .bbox()
         .diagonal()
         .max(tool.bbox().diagonal())
-        .max(tol::POINT);
+        .max(tol::point());
     let defl = 1e-3 * size;
     let points = |b: &Body| -> Vec<P3> {
         let (meshes, _) = super::tess::mesh_body(b, defl, 0.3);
@@ -4536,7 +4536,7 @@ fn endless_within(target: &Body, tool: &Body, motion: &SolidMotion) -> Option<So
             .chain(b.verts.iter().map(|v| v.p))
             .collect()
     };
-    let pad = 4.0 * defl + tol::POINT;
+    let pad = 4.0 * defl + tol::point();
     let height = |p: &P3| (p - o).dot(&z);
     let x = any_perpendicular(&z);
     let y = z.cross(&x);
@@ -4563,11 +4563,11 @@ fn endless_within(target: &Body, tool: &Body, motion: &SolidMotion) -> Option<So
         Some((s0, s1)) => {
             // A screw: the slide along the axis, through 0 at a turn of 0.
             let d = s1 - s0;
-            if d.cross(&z).norm() > tol::ANGULAR * d.norm().max(1.0) || d.norm() <= tol::POINT {
+            if d.cross(&z).norm() > tol::ANGULAR * d.norm().max(1.0) || d.norm() <= tol::point() {
                 return None;
             }
             let per = d.dot(&z) / (z_end - a);
-            if (s0.dot(&z) - per * a).abs() > tol::POINT || s0.cross(&z).norm() > tol::POINT {
+            if (s0.dot(&z) - per * a).abs() > tol::point() || s0.cross(&z).norm() > tol::point() {
                 return None;
             }
             let (h0, h1) = reach(target);
@@ -4627,7 +4627,7 @@ fn endless_within(target: &Body, tool: &Body, motion: &SolidMotion) -> Option<So
                         at = k;
                     }
                 }
-                let widen = 4.0 * defl / rmin.max(tol::POINT) + 1e-3;
+                let widen = 4.0 * defl / rmin.max(tol::point()) + 1e-3;
                 let len = TAU - gap + 2.0 * widen;
                 (len < TAU).then_some((angles[at] - widen, len))
             };
@@ -4887,7 +4887,7 @@ fn cut_by_leads(
     let clock = web_time::Instant::now();
     let (axis, angle, rise) = screw_of(steps)?;
     let travel = rise.norm();
-    if travel <= tol::POINT || angle.abs() < 2.0 * TAU {
+    if travel <= tol::point() || angle.abs() < 2.0 * TAU {
         return None;
     }
     // (Along the axis the way the screw advances.)
@@ -4896,7 +4896,7 @@ fn cut_by_leads(
     let o = axis.origin;
     let height = |p: &P3| (p - o).dot(&z);
     let t = std::sync::Arc::clone(k.get(target).ok()?);
-    let size = t.bbox().diagonal().max(tol::POINT);
+    let size = t.bbox().diagonal().max(tol::point());
     let near = 1e-9 * size;
     if t.solids.len() != 1 || t.verts.is_empty() {
         return None;
@@ -5265,7 +5265,7 @@ fn cut_plunges(
     let up = up.try_normalize(tol::TINY)?;
     let segs = super::sweep::path::path_segments(k, path).ok()?;
     let p0 = segs.first()?.start();
-    let near = tol::REL_POINT * b.bbox().diagonal().max(tol::POINT);
+    let near = tol::REL_POINT * b.bbox().diagonal().max(tol::point());
     let height = |p: &P3| p.coords.dot(&up);
     let corners = |bb: &Bbox| {
         let bb = *bb;
@@ -5382,7 +5382,7 @@ fn cut_end_mill_program(
     if b.faces.len() != 3 || b.solids.len() != 1 {
         return None;
     }
-    let size = b.bbox().diagonal().max(tol::POINT);
+    let size = b.bbox().diagonal().max(tol::point());
     let near = tol::REL_POINT * size;
     let along = |v: &V3| v.normalize().cross(&up).norm() < 1e-9;
     let (mut ends, mut radius) = (Vec::new(), None);
@@ -5646,7 +5646,7 @@ fn cut_ball_pass(
     let segs = super::sweep::path::path_segments(k, path).ok()?;
     let p0 = segs.first()?.start();
     let (centre, r, length) = super::sweep_ball_pass::ball_mill(b, &p0, &up)?;
-    let near = tol::REL_POINT * b.bbox().diagonal().max(tol::POINT);
+    let near = tol::REL_POINT * b.bbox().diagonal().max(tol::point());
     let mut centres = vec![p0 + up * centre];
     for s in &segs {
         let (a, z) = (s.start(), s.end());
@@ -6031,10 +6031,10 @@ fn cut_swept_in(
     meshing("a cut by a swept solid")?;
     let t = std::sync::Arc::clone(k.get(target)?);
     let tdist =
-        super::mesh_distance::MeshDistance::new(&t, 1e-3 * t.bbox().diagonal().max(tol::POINT))
+        super::mesh_distance::MeshDistance::new(&t, 1e-3 * t.bbox().diagonal().max(tol::point()))
             .ok_or(KernelError::Unsupported(
-                "cutting from a target whose mesh doesn't close",
-            ))?;
+            "cutting from a target whose mesh doesn't close",
+        ))?;
     let td = |p: &P3| -tdist.distance(p);
     let within = Some((t.bbox(), &td as &(dyn Fn(&P3) -> f64 + Sync)));
     let rev = revolved(&b);
@@ -6044,7 +6044,7 @@ fn cut_swept_in(
         None => {
             md = super::mesh_distance::MeshDistance::new(
                 &b,
-                1e-3 * b.bbox().diagonal().max(tol::POINT),
+                1e-3 * b.bbox().diagonal().max(tol::point()),
             )
             .ok_or(KernelError::Unsupported(
                 "sweeping a solid whose mesh doesn't close",
@@ -6092,7 +6092,7 @@ fn end_mill_along(
     let up = up.try_normalize(tol::TINY)?;
     let segs = super::sweep::path::path_segments(k, path).ok()?;
     let p0 = segs.first()?.start();
-    let size = b.bbox().diagonal().max(crate::native::tol::POINT);
+    let size = b.bbox().diagonal().max(crate::native::tol::point());
     let near = tol::REL_POINT * size.max((segs.last()?.end() - p0).norm());
     for s in &segs {
         for i in 0..=16 {
@@ -6263,10 +6263,11 @@ fn torus_along(
 /// [`meshed`] with the body's distance from its own mesh (closed, within a thousandth of its
 /// reach).
 fn meshed_body(k: &mut NativeKernel, b: &Body, place: &Place) -> Result<OpResult> {
-    let md = super::mesh_distance::MeshDistance::new(b, 1e-3 * b.bbox().diagonal().max(tol::POINT))
-        .ok_or(KernelError::Unsupported(
-            "sweeping a solid whose mesh doesn't close (for its distance)",
-        ))?;
+    let md =
+        super::mesh_distance::MeshDistance::new(b, 1e-3 * b.bbox().diagonal().max(tol::point()))
+            .ok_or(KernelError::Unsupported(
+                "sweeping a solid whose mesh doesn't close (for its distance)",
+            ))?;
     meshed(k, b, &|p| md.distance(p), place)
 }
 
@@ -6292,7 +6293,7 @@ fn upright_revolution_along(
     let segs = super::sweep::path::path_segments(k, path).ok()?;
     let (first, last) = (segs.first()?, segs.last()?);
     let p0 = first.start();
-    let size = b.bbox().diagonal().max(crate::native::tol::POINT);
+    let size = b.bbox().diagonal().max(crate::native::tol::point());
     let near = tol::REL_POINT * size.max((last.end() - p0).norm());
     // The path in the plane square to `up` through its start.
     for s in &segs {
@@ -6696,7 +6697,7 @@ impl PathFrames {
         let mut me = PathFrames {
             segs,
             table,
-            total: at.max(tol::POINT),
+            total: at.max(tol::point()),
             up,
             start: (nalgebra::Matrix3::identity(), P3::origin()),
         };
@@ -6858,7 +6859,7 @@ fn meshed_within(
     // The places sampled, and their inverses (world to body: x ↦ R x − e): 160, or more for a
     // motion that moves the body's box farther than a fiftieth of its reach between them.
     let bb0 = b.bbox();
-    let reach = bb0.diagonal().max(tol::POINT);
+    let reach = bb0.diagonal().max(tol::point());
     let mut nt = 160usize;
     let step_of = |nt: usize| {
         (0..nt)
@@ -6979,7 +6980,7 @@ fn ball_along(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<Res
     };
     let same = |s: &Surface| {
         matches!(s, Surface::Sphere { f, r: q }
-            if (f.o - centre).norm() <= tol::POINT && (q - r).abs() <= tol::POINT)
+            if (f.o - centre).norm() <= tol::point() && (q - r).abs() <= tol::point())
     };
     if !b.faces.iter().all(|f| same(&f.surf)) || b.solids.len() != 1 {
         return None;

@@ -1709,7 +1709,7 @@ fn prepare<'a>(
             why: format!("the swept torus: {why}"),
         }))
     };
-    let size = b.bbox().diagonal().max(super::tol::POINT);
+    let size = b.bbox().diagonal().max(super::tol::point());
     let mut tube = Tube::new(motion, fr, *rmaj, *rmin, size);
     // Σ regular (its tangents apart everywhere): its normal, and so the sheets, defined.
     let least = (0..=200usize)

@@ -36,7 +36,7 @@ fn moved_by_slabs(
 ) -> Option<crate::native::topo::Body> {
     let ef = b.edge_faces();
     // (The part's own size, however small: no floor at a millimetre.)
-    let size = b.bbox().diagonal().max(tol::POINT);
+    let size = b.bbox().diagonal().max(tol::point());
     let near = tol::REL_POINT * size;
     for &(f, d) in faces {
         let fi = f.0 as usize;
@@ -97,7 +97,7 @@ fn moved_by_slabs(
 /// is raised level with the one above): the sharp offset keeps it as a sliver of no area, which
 /// the slabs' union with its faces merged ([`moved_by_slabs`]) takes away.
 fn collapses_a_face(out: &crate::native::topo::Body) -> bool {
-    let size = out.bbox().diagonal().max(tol::POINT);
+    let size = out.bbox().diagonal().max(tol::point());
     let small = tol::REL_POINT * size * size;
     out.faces.iter().any(|f| {
         matches!(f.surf, Surface::Plane { .. })
@@ -112,7 +112,7 @@ fn collapses_a_face(out: &crate::native::topo::Body) -> bool {
 /// out). Faces moved into each other (a slot's walls pushed across it) are not this: they face
 /// each other, and their slabs' union is the move.
 fn passes_a_step(b: &crate::native::topo::Body, dist: &[f64]) -> bool {
-    let near = tol::REL_POINT * b.bbox().diagonal().max(tol::POINT);
+    let near = tol::REL_POINT * b.bbox().diagonal().max(tol::point());
     let ef = b.edge_faces();
     let plane = |i: usize| match &b.faces[i].surf {
         Surface::Plane { f } => Some((f.o, f.z * if b.faces[i].sense { 1.0 } else { -1.0 })),
@@ -158,7 +158,7 @@ fn passes_a_step(b: &crate::native::topo::Body, dist: &[f64]) -> bool {
 /// whose check passes but which has the closed slot's walls inside it; the slabs' union
 /// ([`moved_by_slabs`]) merges them away.
 fn lands_on_opposite(b: &crate::native::topo::Body, dist: &[f64]) -> bool {
-    let near = tol::REL_POINT * b.bbox().diagonal().max(tol::POINT);
+    let near = tol::REL_POINT * b.bbox().diagonal().max(tol::point());
     let plane = |i: usize| match &b.faces[i].surf {
         Surface::Plane { f } => Some((f.o, f.z * if b.faces[i].sense { 1.0 } else { -1.0 })),
         _ => None,

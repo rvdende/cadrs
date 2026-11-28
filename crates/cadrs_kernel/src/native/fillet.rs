@@ -126,6 +126,10 @@ fn failed(stage: &'static str, why: &str) -> KernelError {
     }
 }
 
+/// Why a fillet fails that no ball touches both faces at its edge's middle: the blend tool
+/// can't build it either (its rails cross), so it isn't tried ([`super::blend::fillet`]).
+pub(crate) const NO_BALL: &str = "the fillet is too large for the faces at the edge";
+
 /// A radius too large for the faces at its edge.
 fn too_large(why: &str) -> KernelError {
     KernelError::TooLarge {
@@ -825,9 +829,7 @@ fn edge_fillet(
         .filter_map(|i| wedge(b, &ef, ed.t[0] + (ed.t[1] - ed.t[0]) * i as f64 / 8.0).map(|w| w.2))
         .fold(std::f64::consts::PI, f64::min);
     ef.reach = ef.reach.max(2.0 * rr / (theta / 2.0).tan().max(1e-3) + rr);
-    ef.mid = ef
-        .ball(b, tm, None)
-        .ok_or_else(|| too_large("the fillet is too large for the faces at the edge"))?;
+    ef.mid = ef.ball(b, tm, None).ok_or_else(|| too_large(NO_BALL))?;
     // The centre on the side the faces' normals say (inside a convex edge, outside a concave
     // one), and the contacts on the faces' sides of the edge (not a far branch of a curved
     // surface).
@@ -7665,8 +7667,8 @@ fn split(b: &Body, f: &Face, cuts: &[usize], given: &dyn Fn(usize) -> Option<Cur
         let (p, q) = (a.uv_at(0.0), a.uv_at(1.0));
         a.v[0] == a.v[1]
             && (p - q).norm() <= tol::REL_POINT * (1.0 + p.coords.abs().max())
-            && (e.point(e.t[0]) - e.point(e.mid_t())).norm() <= e.tol.max(tol::POINT)
-            && (e.point(e.t[1]) - e.point(e.mid_t())).norm() <= e.tol.max(tol::POINT)
+            && (e.point(e.t[0]) - e.point(e.mid_t())).norm() <= e.tol.max(tol::point())
+            && (e.point(e.t[1]) - e.point(e.mid_t())).norm() <= e.tol.max(tol::point())
     };
     // So is a slit into the face: an arc out to a vertex and the next straight back along it (a
     // face a read or built model left with a crack), where no cut ends at its tip: the tracing
@@ -9038,7 +9040,7 @@ fn cliff(
         let xe = &b.edges[x];
         let tx = xe.curve.closest(&at.p, xe.t[0] - 1e6, xe.t[1] + 1e6);
         if tx >= xe.t[0] - tol::ROUNDOFF && tx <= xe.t[1] + tol::ROUNDOFF {
-            let xv = vertex_on_boundary(nb, g, &at.p, tol.max(tol::POINT)).ok_or_else(|| {
+            let xv = vertex_on_boundary(nb, g, &at.p, tol.max(tol::point())).ok_or_else(|| {
                 failed(
                     "corner",
                     "a fillet's cut round a corner isn't on the corner's edge",
@@ -10279,7 +10281,7 @@ impl FaceTest {
             .iter()
             .flatten()
             .map(|c| b.edges[c.edge].tol)
-            .fold(1e3 * tol::POINT, f64::max);
+            .fold(1e3 * tol::point(), f64::max);
         let make = || {
             let polys = super::classify::face_polygons(b, f);
             let boxes = super::classify::poly_boxes(&polys, &f.surf);
@@ -10556,7 +10558,7 @@ fn junction_point(b: &Body, ef: &EdgeFillet, ball: &Ball, k: usize) -> Option<(f
         }
         let t = x.curve.closest(&q, x.t[0], x.t[1]);
         let at = x.point(t);
-        if (at - q).norm() > reach || sd(g, &q) <= tol::POINT {
+        if (at - q).norm() > reach || sd(g, &q) <= tol::point() {
             continue;
         }
         // Across the edge from the face: against the way into the face there (its normal
@@ -11192,7 +11194,7 @@ fn ring_cut(
     let vs: Vec<usize> = corners
         .iter()
         .map(|(m, g)| {
-            vertex_on_boundary(nb, *g, &m.p, tol.max(tol::POINT)).ok_or_else(|| {
+            vertex_on_boundary(nb, *g, &m.p, tol.max(tol::point())).ok_or_else(|| {
                 failed(
                     "corner",
                     "a fillet's cut round a corner isn't on the corner's edge",
@@ -11485,7 +11487,7 @@ fn chamfer_offsets_angled_at(
         // The crossing nearest the edge: the other face's own, not its surface's far side.
         let sq = hits
             .into_iter()
-            .filter(|&x| x > tol::POINT)
+            .filter(|&x| x > tol::point())
             .min_by(|x, y| {
                 (line.point(*x) - p)
                     .norm()

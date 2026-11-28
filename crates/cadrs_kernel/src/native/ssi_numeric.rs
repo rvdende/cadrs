@@ -1054,7 +1054,7 @@ fn boundary_end(ctx: &Ctx, s: &Pt, out: &Pt) -> Option<Pt> {
     let mut best: Option<(f64, usize, f64)> = None;
     for (k, dom) in [(0usize, &ctx.a), (2usize, &ctx.bt)] {
         let (from, to) = if k == 0 { (s.a, out.a) } else { (s.b, out.b) };
-        let Some(off) = dom.locate(from, tol::POINT) else {
+        let Some(off) = dom.locate(from, tol::point()) else {
             continue;
         };
         for (axis, (x0, x1), lo, hi, free) in [
@@ -1530,7 +1530,7 @@ pub fn intersect_stats(
         return (Intersection::default(), stats);
     }
     let size = r.diagonal().max(tol::ROUNDOFF);
-    let tol = REL_TOL * size.max(tol::POINT);
+    let tol = REL_TOL * size.max(tol::point());
     let r = r.grow(tol::REL_POINT * size + tol);
     let ((pu0, pu1), (pv0, pv1)) = b.param_box();
     let bt = Dom::new(

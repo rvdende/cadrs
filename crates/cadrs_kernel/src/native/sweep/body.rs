@@ -108,7 +108,7 @@ impl Screw {
                 v: (0..=n).map(|i| s1 * i as f64 / n as f64).collect(),
                 deg,
             };
-            let q = o + crate::native::math::any_perpendicular(&z) * reach.max(tol::POINT);
+            let q = o + crate::native::math::any_perpendicular(&z) * reach.max(tol::point());
             let rail = me.rail_nurbs(&q);
             let err =
                 me.v.windows(2)
@@ -174,7 +174,7 @@ impl Screw {
     fn rail(&self, p: &P3) -> Option<Curve> {
         let w = p - self.o;
         let off = (w - self.z * w.dot(&self.z)).norm();
-        if off <= tol::POINT * 1e-3 && self.lift.abs() <= tol::TINY && self.rise.is_none() {
+        if off <= tol::point() * 1e-3 && self.lift.abs() <= tol::TINY && self.rise.is_none() {
             return None;
         }
         Some(Curve::Nurbs(std::sync::Arc::new(self.rail_nurbs(p))))
@@ -191,7 +191,7 @@ impl Screw {
             let h0 = w.dot(&self.z);
             let radial = w - self.z * h0;
             let r = radial.norm();
-            if r <= tol::POINT {
+            if r <= tol::point() {
                 return None;
             }
             let x = radial / r;

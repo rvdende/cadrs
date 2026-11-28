@@ -1,0 +1,145 @@
+{
+  "entries": [
+    {
+      "line": 16,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 1
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        6,
+        10.0
+      ],
+      "kwargs": {},
+      "line": 16,
+      "op": "polygon",
+      "out": {
+        "wp": 2
+      },
+      "self": {
+        "wp": 1
+      }
+    },
+    {
+      "args": [
+        20.0
+      ],
+      "kwargs": {},
+      "line": 16,
+      "op": "extrude",
+      "out": {
+        "wp": 3
+      },
+      "self": {
+        "wp": 2
+      }
+    },
+    {
+      "args": [
+        ">Z"
+      ],
+      "kwargs": {},
+      "line": 18,
+      "op": "faces",
+      "out": {
+        "wp": 4
+      },
+      "self": {
+        "wp": 3
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {},
+      "line": 18,
+      "op": "edges",
+      "out": {
+        "wp": 5
+      },
+      "self": {
+        "wp": 4
+      }
+    },
+    {
+      "args": [
+        1.0
+      ],
+      "kwargs": {},
+      "line": 18,
+      "op": "chamfer",
+      "out": {
+        "wp": 6
+      },
+      "self": {
+        "wp": 5
+      }
+    },
+    {
+      "args": [
+        "<Z"
+      ],
+      "kwargs": {},
+      "line": 20,
+      "op": "faces",
+      "out": {
+        "wp": 7
+      },
+      "self": {
+        "wp": 6
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {},
+      "line": 20,
+      "op": "edges",
+      "out": {
+        "wp": 8
+      },
+      "self": {
+        "wp": 7
+      }
+    },
+    {
+      "args": [
+        1.0
+      ],
+      "kwargs": {},
+      "line": 20,
+      "op": "chamfer",
+      "out": {
+        "wp": 9
+      },
+      "self": {
+        "wp": 8
+      }
+    }
+  ],
+  "guarded": false,
+  "i": 45,
+  "name": "beveled_hex_prism",
+  "result": {
+    "wp": 9
+  },
+  "status": "ok"
+}

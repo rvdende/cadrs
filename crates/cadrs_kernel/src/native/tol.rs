@@ -6,7 +6,7 @@
 //! - [`CONFUSION`] (1e-7): exact geometry. Two points closer are the same point; an entity's own
 //!   tolerance ([`super::topo::Vertex::tol`], [`super::topo::Edge::tol`]) never goes below it
 //!   (OCCT's `Precision::Confusion`).
-//! - [`POINT`] (1e-6): what an operation merges. A boolean pools vertices closer than this and
+//! - [`point`] (1e-6, [`POINT_DEFAULT`]; a session may set another): what an operation merges. A boolean pools vertices closer than this and
 //!   puts edge ends on edges within it; intersections computed numerically land within it. A
 //!   body's [`super::topo::Body::check`] accepts an edge end or a p-curve this far off when the
 //!   entity's own tolerance is smaller.
@@ -45,8 +45,8 @@
 //!   vector with no direction, `try_normalize(DEGENERATE)`; a span or a denominator of nothing):
 //!   values that cancel leave round-off of this order, far above [`TINY`].
 //!
-//! At the merge level (1e-6, [`POINT`]'s), for what an operation takes as the same:
-//! - [`POINT`]: absolute distances (mm);
+//! At the merge level (1e-6, [`POINT_DEFAULT`]'s), for what an operation takes as the same:
+//! - [`point`]: absolute distances (mm);
 //! - [`REL_POINT`]: a fraction of the size, span or parameter range it multiplies;
 //! - [`ANGULAR_POINT`]: directions taken as parallel or square, angles (radians) taken as 0 or π;
 //! - [`DIFF_STEP`]: the step of a finite difference, or of a nudge off a point into a face or
@@ -54,8 +54,35 @@
 
 /// Exact geometry: points closer than this are one point (mm). See the module docs.
 pub const CONFUSION: f64 = 1e-7;
-/// The default merge distance of an operation (mm). See the module docs.
-pub const POINT: f64 = 1e-6;
+/// The default merge distance of an operation (mm): [`point`] unless a session sets another.
+/// See the module docs.
+pub const POINT_DEFAULT: f64 = 1e-6;
+
+/// [`POINT_DEFAULT`] by its old name, for code outside the kernel written when the merge
+/// distance was a constant (the conformance adapters, as the tolerance cadrs declares): the
+/// kernel itself reads [`point`], which a session may set to another.
+pub const POINT: f64 = POINT_DEFAULT;
+
+/// The merge distance set for the process ([`set_point`]); 0 for none.
+static POINT_BITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The merge distance of an operation (mm): [`POINT_DEFAULT`], or the one the kernel session
+/// set ([`super::NativeKernel::set_tolerances`], e.g. [`Tolerances::parasolid`] to merge as
+/// Parasolid does). One value for the process: every session and the kernel's worker threads
+/// share it. See the module docs.
+#[inline]
+pub fn point() -> f64 {
+    match POINT_BITS.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => POINT_DEFAULT,
+        b => f64::from_bits(b),
+    }
+}
+
+/// Sets [`point`] for the process (the default again for [`POINT_DEFAULT`]).
+pub(crate) fn set_point(p: f64) {
+    let b = if p == POINT_DEFAULT { 0 } else { p.to_bits() };
+    POINT_BITS.store(b, std::sync::atomic::Ordering::Relaxed);
+}
 /// The largest gap between consecutive p-curves of a loop that is still closed (mm).
 pub const LOOP_GAP: f64 = 1e-5;
 /// The size box: coordinates and radii of a model stay within ±`SIZE` (mm, 100 km).
@@ -83,7 +110,7 @@ pub const ROUNDOFF_FINE: f64 = 1e-12;
 /// by. See the module docs.
 pub const DEGENERATE: f64 = 1e-12;
 
-/// [`POINT`] as a fraction of a size, span or range. See the module docs.
+/// [`POINT_DEFAULT`] as a fraction of a size, span or range. See the module docs.
 pub const REL_POINT: f64 = 1e-6;
 /// Directions closer than this (radians, or `1 − cos`, `|sin|` for unit vectors) are the same at
 /// the merge level. See the module docs.
@@ -104,12 +131,46 @@ pub fn small(size: f64) -> f64 {
     }
 }
 
+/// Whose rules the kernel follows where kernels legitimately differ, for comparing with another
+/// kernel. One for the process, as [`point`] ([`super::NativeKernel::set_rules`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum KernelRules {
+    /// cadrs's own: merge at [`POINT_DEFAULT`]; a union unites solids that touch at all, as
+    /// OCCT (and so CadQuery) does.
+    #[default]
+    Cadrs,
+    /// Parasolid's (and so Onshape's): merge at its linear precision, 1e-5 mm
+    /// ([`Tolerances::parasolid`]); a union unites only the bodies that meet properly (share
+    /// volume, or press a face together over more than the precision) and leaves the others as
+    /// separate parts, as Onshape's union leaves ribs whose fillets meet a wall in a strip
+    /// narrower than that.
+    Parasolid,
+}
+
+static RULES: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// The rules the process's operations follow ([`KernelRules`]).
+pub fn rules() -> KernelRules {
+    match RULES.load(std::sync::atomic::Ordering::Relaxed) {
+        1 => KernelRules::Parasolid,
+        _ => KernelRules::Cadrs,
+    }
+}
+
+pub(crate) fn set_rules(r: KernelRules) {
+    let v = match r {
+        KernelRules::Cadrs => 0,
+        KernelRules::Parasolid => 1,
+    };
+    RULES.store(v, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// The tolerances an operation runs with, carried by the kernel session
 /// ([`super::NativeKernel::tolerances`]) and passed explicitly to the operations that take
 /// them. `Default` is the model above.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Tolerances {
-    /// The merge distance of a boolean's first run ([`POINT`]).
+    /// The merge distance of a boolean's first run ([`point`]).
     pub point: f64,
     /// The merge distances of the runs after a first that leaves an open shell, in order.
     pub retries: [f64; 2],
@@ -121,7 +182,7 @@ impl Default for Tolerances {
     fn default() -> Self {
         // (Written out: 10.0 * POINT isn't exactly 1e-5 in floating point.)
         Self {
-            point: POINT,
+            point: POINT_DEFAULT,
             retries: [LOOP_GAP, 1e-4],
             confusion: CONFUSION,
         }
@@ -129,6 +190,23 @@ impl Default for Tolerances {
 }
 
 impl Tolerances {
+    /// A session merging at `point` (mm) on its first run, its retries ten and a hundred times
+    /// that, and entities holding no less than [`CONFUSION`] or a tenth of `point`, the smaller.
+    /// Parasolid's (and so Onshape's) linear precision is 1e-8 m: [`Self::parasolid`].
+    pub fn with_point(point: f64) -> Self {
+        Self {
+            point,
+            retries: [point * 10.0, point * 100.0],
+            confusion: CONFUSION.min(point * 0.1),
+        }
+    }
+
+    /// Parasolid's linear precision, 1e-8 m = 1e-5 mm (Onshape's `TOLERANCE.zeroLength` in
+    /// std's math.fs): points closer are one point there. For comparing with Onshape.
+    pub fn parasolid() -> Self {
+        Self::with_point(1e-5)
+    }
+
     /// The tolerances for a model of this size (its box's diagonal, mm): the defaults for a
     /// millimetre and more, to the bit; below that the merge distance and the retries shrink
     /// with the model ([`small`]), down to the smallest tolerance an entity holds, so that a
@@ -162,7 +240,7 @@ mod tests {
     use super::*;
 
     /// The defaults are the documented levels, and the constants the kernel used before
-    /// (`topo::TOL_MIN`, `boolean::VTOL`, the boolean's retries) are these.
+    /// (`topo::TOL_MIN`, `boolean::vtol()`, the boolean's retries) are these.
     #[test]
     fn defaults_are_the_model() {
         let t = Tolerances::default();
@@ -171,7 +249,7 @@ mod tests {
             (1e-7, 1e-6, [1e-5, 1e-4])
         );
         assert_eq!(super::super::topo::TOL_MIN, CONFUSION);
-        assert_eq!(super::super::boolean::VTOL, POINT);
+        assert_eq!(super::super::boolean::vtol(), POINT_DEFAULT);
         assert!(t.validate().is_ok());
         // The named round-off margins are the literals they replaced, bit for bit.
         assert_eq!([REL, ANGULAR, ROUNDOFF], [1e-9; 3]);
@@ -179,7 +257,10 @@ mod tests {
             [REL_FINE, ANGULAR_FINE, ROUNDOFF_FINE, DEGENERATE],
             [1e-12; 4]
         );
-        assert_eq!([POINT, REL_POINT, ANGULAR_POINT, DIFF_STEP], [1e-6; 4]);
+        assert_eq!(
+            [POINT_DEFAULT, REL_POINT, ANGULAR_POINT, DIFF_STEP],
+            [1e-6; 4]
+        );
         assert!(
             Tolerances {
                 point: f64::NAN,

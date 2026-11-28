@@ -1,0 +1,147 @@
+{
+  "entries": [
+    {
+      "line": 3,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 1
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        30,
+        20,
+        15
+      ],
+      "kwargs": {},
+      "line": 3,
+      "op": "box",
+      "out": {
+        "wp": 2
+      },
+      "self": {
+        "wp": 1
+      }
+    },
+    {
+      "line": 4,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 3
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "zDir": [
+          0.0,
+          -1.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": [
+          0,
+          0,
+          7.5
+        ],
+        "rotate": [
+          0,
+          15,
+          0
+        ]
+      },
+      "line": 5,
+      "op": "transformed",
+      "out": {
+        "wp": 4
+      },
+      "self": {
+        "wp": 3
+      }
+    },
+    {
+      "args": [
+        60,
+        30
+      ],
+      "kwargs": {},
+      "line": 6,
+      "op": "rect",
+      "out": {
+        "wp": 5
+      },
+      "self": {
+        "wp": 4
+      }
+    },
+    {
+      "args": [
+        20
+      ],
+      "kwargs": {
+        "both": true
+      },
+      "line": 7,
+      "op": "extrude",
+      "out": {
+        "wp": 6
+      },
+      "self": {
+        "wp": 5
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 6
+        }
+      ],
+      "kwargs": {},
+      "line": 8,
+      "op": "cut",
+      "out": {
+        "wp": 7
+      },
+      "self": {
+        "wp": 2
+      }
+    }
+  ],
+  "guarded": false,
+  "i": 12,
+  "name": "wedge_basic",
+  "result": {
+    "wp": 7
+  },
+  "status": "ok"
+}

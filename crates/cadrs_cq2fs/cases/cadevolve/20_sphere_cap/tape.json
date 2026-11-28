@@ -1,0 +1,121 @@
+{
+  "entries": [
+    {
+      "line": 2,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 1
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        12
+      ],
+      "kwargs": {},
+      "line": 2,
+      "op": "sphere",
+      "out": {
+        "wp": 2
+      },
+      "self": {
+        "wp": 1
+      }
+    },
+    {
+      "line": 3,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 3
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [],
+      "kwargs": {
+        "offset": 8
+      },
+      "line": 3,
+      "op": "workplane",
+      "out": {
+        "wp": 4
+      },
+      "self": {
+        "wp": 3
+      }
+    },
+    {
+      "args": [
+        24,
+        24,
+        24
+      ],
+      "kwargs": {},
+      "line": 3,
+      "op": "box",
+      "out": {
+        "wp": 5
+      },
+      "self": {
+        "wp": 4
+      }
+    },
+    {
+      "args": [
+        {
+          "wp": 5
+        }
+      ],
+      "kwargs": {},
+      "line": 4,
+      "op": "intersect",
+      "out": {
+        "wp": 6
+      },
+      "self": {
+        "wp": 2
+      }
+    }
+  ],
+  "guarded": false,
+  "i": 20,
+  "name": "sphere_cap",
+  "result": {
+    "wp": 6
+  },
+  "status": "ok"
+}

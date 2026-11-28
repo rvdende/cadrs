@@ -1369,6 +1369,7 @@ pub fn blend(
         }
     }
     let mut cur = Tracked::of((*b).clone());
+    let (mut cut_volume, mut fill_volume) = (0.0_f64, 0.0_f64);
     let mut radius_at: std::collections::HashMap<usize, f64> = Default::default();
     // Corner faces where a fill meets two cuts (by vertex): the plane, its normal towards the
     // material it cuts away. The cuts there stay above it.
@@ -1766,8 +1767,10 @@ pub fn blend(
             }
         }
         let op = if tool.convex {
+            cut_volume += super::mass::body_volume(&tb).abs();
             BoolOp::Subtract
         } else {
+            fill_volume += super::mass::body_volume(&tb).abs();
             BoolOp::Union
         };
         cur = cur.apply(&tb, &ts, op)?;
@@ -1783,8 +1786,29 @@ pub fn blend(
                 vertex: VertexId(vertex_index(&b, v) as u64),
             },
         )? {
+            cut_volume += super::mass::body_volume(&tool).abs();
             cur = cur.apply(&tool, &src, BoolOp::Subtract)?;
         }
+    }
+    // The tools cut away no more than they hold and fill no more: a result past that went
+    // wrong in a boolean (a chamfer of a louvered loft's every edge left a sixth of it). (Before
+    // the pieces the blend cuts off are dropped below, which takes their volume too.)
+    let (before, after) = (
+        super::mass::body_volume(&b),
+        super::mass::body_volume(&cur.body),
+    );
+    let slack = 1e-6 * (before.abs() + cut_volume + fill_volume) + tol::point();
+    if crate::native::env_flag!("CADRS_BLEND_DEBUG") {
+        eprintln!("blend: volume {before} -> {after}; tools cut {cut_volume}, fill {fill_volume}");
+    }
+    if after < before - cut_volume - slack || after > before + fill_volume + slack {
+        return Err(KernelError::InvalidResult {
+            op: "blend",
+            why: format!(
+                "the blend changed the volume by {:.3e}, more than its tools hold ({cut_volume:.3e} cut, {fill_volume:.3e} filled)",
+                after - before
+            ),
+        });
     }
     let cur = cur.with_solids_of_input(b.solids.len())?;
     // A solid must stay a solid (an open result means a tool went wrong).
@@ -1802,7 +1826,7 @@ pub fn blend(
         let ed = &b.edges[e];
         let left = [0.25, 0.5, 0.75].into_iter().all(|w| {
             let p = ed.curve.point(ed.t[0] + (ed.t[1] - ed.t[0]) * w);
-            after.classify(&p, tol::POINT) == crate::PointClass::OnBoundary
+            after.classify(&p, tol::point()) == crate::PointClass::OnBoundary
         });
         if left {
             return Err(KernelError::InvalidResult {
@@ -2111,6 +2135,11 @@ fn check_overlaps(b: &Body, edges: &[EdgeBlend]) -> Result<()> {
                                 .iter()
                                 .any(|p| in_strip(ei, fi, fwd_i, ai, p)))
                     {
+                        if crate::native::env_flag!("CADRS_BLEND_DEBUG") {
+                            eprintln!(
+                                "blend: edges {ei} and {ej} overlap on face {fi}: {d} apart, setbacks {ai} + {aj}"
+                            );
+                        }
                         return Err(KernelError::TooLarge { op: "blend", why: "the blends of two edges overlap: the size is too large for the face between them".into() });
                     }
                 }
@@ -2214,7 +2243,7 @@ fn consumed_face(b: &Body, edges: &[EdgeId], r: f64) -> Option<f64> {
 /// The width of face `f` when it is flat and two of `edges` bound it on opposite sides exactly
 /// two radii `r` apart.
 fn consumed_width(b: &Body, f: usize, edges: &[EdgeId], r: f64) -> Option<f64> {
-    let close = tol::POINT.max(tol::REL_POINT * r);
+    let close = tol::point().max(tol::REL_POINT * r);
     let line = |e: usize| -> Option<(P3, V3)> {
         let ed = &b.edges[e];
         let Curve::Line { .. } = ed.curve else {
@@ -2222,7 +2251,7 @@ fn consumed_width(b: &Body, f: usize, edges: &[EdgeId], r: f64) -> Option<f64> {
         };
         let (p, q) = (ed.point(ed.t[0]), ed.point(ed.t[1]));
         let d = q - p;
-        (d.norm() > tol::POINT).then(|| (p, d / d.norm()))
+        (d.norm() > tol::point()).then(|| (p, d / d.norm()))
     };
     let face = &b.faces[f];
     if !matches!(face.surf, Surface::Plane { .. }) {
@@ -2288,7 +2317,7 @@ pub(super) fn on_face(b: &Body, f: usize, p: &P3) -> bool {
 /// Face `f` as a [`RoundFace`] of the `picked` edges' fillets of radius `r`, when it is one
 /// (and its walls reach a radius under it all along, so the round cuts nothing beyond them).
 fn round_face(b: &Body, f: usize, picked: &[usize], r: f64) -> Option<RoundFace> {
-    let close = tol::POINT.max(tol::REL_POINT * r);
+    let close = tol::point().max(tol::REL_POINT * r);
     let (_, n) = face_plane(b, f)?;
     let [lp] = &b.faces[f].loops[..] else {
         return None;
@@ -2303,7 +2332,7 @@ fn round_face(b: &Body, f: usize, picked: &[usize], r: f64) -> Option<RoundFace>
         };
         let (p, q) = (ed.point(ed.t[0]), ed.point(ed.t[1]));
         let d = q - p;
-        (d.norm() > tol::POINT).then(|| (p, d / d.norm()))
+        (d.norm() > tol::point()).then(|| (p, d / d.norm()))
     };
     // The picked pair of opposite edges two radii apart (one pair only: a square face of
     // side 2r with all four edges picked has no direction).
@@ -2554,7 +2583,7 @@ fn full_round_corners(
     let rounds: Vec<RoundFace> = (0..b.faces.len())
         .filter_map(|f| round_face(&b, f, &picked, r))
         .collect();
-    let close = tol::POINT.max(tol::REL_POINT * r);
+    let close = tol::point().max(tol::REL_POINT * r);
     // Each round's tool's range along its axis, and the corners: (round, its end, the edge
     // there, the ball centre).
     let mut ranges: Vec<[f64; 2]> = Vec::new();
@@ -2924,7 +2953,11 @@ pub fn fillet(
                 return Ok(res);
             }
             Err(e) => {
-                if crate::native::env_flag!("CADRS_LOCAL_FILLET_ONLY") {
+                // (No ball touches both faces at an edge's middle: a round too large for a
+                // sliver, 2.5° between its faces. The tool built from such sections crosses
+                // itself and cut six like slivers four ways; OCCT refuses them.)
+                let no_ball = matches!(&e, KernelError::TooLarge { why, .. } if why == super::fillet::NO_BALL);
+                if no_ball || crate::native::env_flag!("CADRS_LOCAL_FILLET_ONLY") {
                     return Err(e);
                 }
                 if crate::native::env_flag!("CADRS_BLEND_DEBUG") {
@@ -3063,6 +3096,18 @@ pub fn chamfer(
         && std::env::var_os("CADRS_NO_LOCAL_FILLET").is_none()
     {
         let sharp: Vec<usize> = sharp.iter().map(|e| e.0 as usize).collect();
+        // Rims (whole circles between faces turned about their axes): each contact `d` from
+        // the edge in a straight line, in closed form ([`super::rim_blend::rims_chamfer_at`]);
+        // exact on a face curving across the rim, where the local chamfer's ball isn't.
+        if !sharp.is_empty()
+            && std::env::var_os("CADRS_NO_RIM_BLEND").is_none()
+            && let Some((out, src)) = super::rim_blend::rims_chamfer_at(&b, body, &sharp, d)
+        {
+            if crate::native::env_flag!("CADRS_BLEND_DEBUG") {
+                eprintln!("chamfer: the rim's in closed form, {d} from the edge");
+            }
+            return Ok(Tracked { body: out, src }.into_result(k, body));
+        }
         if let Some(local) = super::fillet::chamfer_equal_edges(&b, body, &sharp, d) {
             let local = local.and_then(|(out, src)| {
                 // (The local result's edges are merged and its tolerances fitted already.)
@@ -3279,7 +3324,7 @@ pub fn flat_corners(
         .map(|e| e.0 as usize)
         .collect();
     // (The part's own size, however small: no floor at a millimetre.)
-    let size = b.bbox().diagonal().max(tol::POINT);
+    let size = b.bbox().diagonal().max(tol::point());
     let near = tol::REL_POINT * size;
     let mut tools: Vec<(Body, usize)> = Vec::new();
     for v in 0..b.verts.len() {
@@ -3340,16 +3385,15 @@ pub fn flat_corners(
         if beyond <= near || pts.iter().any(|q| (q - c).dot(&n).abs() > near) {
             continue;
         }
-        let reach = pts.iter().map(|q| (q - c).norm()).fold(0.0, f64::max);
-        let id = k.primitive(&Primitive::Cylinder {
-            base: c,
-            axis: nalgebra::Unit::new_normalize(n),
-            radius: 1.5 * reach,
-            height: 1.5 * beyond + d,
-        })?;
-        let tool = std::sync::Arc::clone(k.get(id.bodies[0])?);
-        k.release(id.bodies[0]);
-        tools.push(((*tool).clone(), v));
+        // The corner itself: the pyramid from the vertex (pushed half as far again out, past the
+        // solid) down to the points, cut off by their plane. (A disc on the plane, wider than
+        // the points, took the chamfers' flanks too where the corner is nearly flat: a seam of
+        // a polyline extruded and every edge chamfered, CADEvolve 5532, lost 0.65 mm³ a corner
+        // where Parasolid's chamfer, and the chamfers made one group at a time, lose nothing.)
+        let Some(tool) = corner_pyramid(p + (p - c) * 0.5, &pts, c, n, near) else {
+            continue;
+        };
+        tools.push((tool, v));
     }
     if tools.is_empty() {
         return Ok(r);
@@ -3377,10 +3421,54 @@ pub fn flat_corners(
             vertex: VertexId(vertex_index(&b, v) as u64),
         });
         let tool_src = vec![vec![mark]; tool.faces.len()];
+        let solids = cur.body.solids.len();
         cur = cur.apply(&tool, &tool_src, BoolOp::Subtract)?;
+        // A corner's cut takes the corner only: a disc that reaches through a thin wall beyond
+        // it (a louvered loft's every edge chamfered) cut the body into dozens of pieces.
+        if cur.body.solids.len() > solids {
+            k.release(*out);
+            return Err(KernelError::InvalidResult {
+                op: "chamfer",
+                why: "a flat corner's cut reaches past its corner and splits the solid".into(),
+            });
+        }
     }
     k.release(*out);
     Ok(cur.into_result(k, body))
+}
+
+/// The solid pyramid from `apex` to the polygon of `pts` (in the plane through `c` square to
+/// `n`, `n` toward the apex): the corner a flat corner's cut takes ([`flat_corners`]).
+fn corner_pyramid(apex: P3, pts: &[P3], c: P3, n: V3, eps: f64) -> Option<Body> {
+    let u = (pts[0] - c).try_normalize(tol::TINY)?;
+    let w = n.cross(&u);
+    let mut ring: Vec<P3> = pts.to_vec();
+    ring.sort_by(|a, b| {
+        let ang = |q: &P3| (q - c).dot(&w).atan2((q - c).dot(&u));
+        ang(a).total_cmp(&ang(b))
+    });
+    let mut bb = super::math::Bbox::empty();
+    bb.add(&apex);
+    for q in &ring {
+        bb.add(q);
+    }
+    let mut poly = super::polytope::Polytope::of_box(&bb.grow(1.0 + bb.diagonal()));
+    // keep the apex's side of the points' plane
+    if !poly.clip(c, -n, eps) {
+        return None;
+    }
+    let inside = P3::from((apex.coords + c.coords) * 0.5);
+    for i in 0..ring.len() {
+        let (a, b) = (ring[i], ring[(i + 1) % ring.len()]);
+        let mut m = (a - apex).cross(&(b - apex)).try_normalize(tol::TINY)?;
+        if m.dot(&(inside - apex)) > 0.0 {
+            m = -m;
+        }
+        if !poly.clip(apex, m, eps) {
+            return None;
+        }
+    }
+    poly.body(eps)
 }
 
 /// `opts` with the first distance's side ([`ChamferSpec::TwoDistances`]) made explicit: the
@@ -3515,7 +3603,7 @@ fn iso_ends(out: &mut Body, fi: usize) {
         let e = out.edges[ei].clone();
         let (p0, p1) = (out.verts[e.v[0]].p, out.verts[e.v[1]].p);
         let (s0, s1) = (iso.closest(&p0, v0, v1), iso.closest(&p1, v0, v1));
-        let size = (p1 - p0).norm().max(tol::POINT);
+        let size = (p1 - p0).norm().max(tol::point());
         if (iso.point(s0) - p0).norm() > 1e-7 * size
             || (iso.point(s1) - p1).norm() > 1e-7 * size
             || (s1 - s0).abs() <= tol::TINY
@@ -3872,6 +3960,9 @@ pub fn chamfer_tool(
             told,
         )
     {
+        if crate::native::env_flag!("CADRS_BLEND_DEBUG") {
+            eprintln!("chamfer: the rim's in closed form");
+        }
         return Ok(Tracked { body: out, src }.into_result(k, body));
     }
     blend(k, body, &list, false)
@@ -3980,7 +4071,7 @@ fn swallow_narrow_faces(b: &Body, edges: &[EdgeId], r: f64) -> Result<Option<(Bo
             .map(|x| (x, super::fillet::edge_distance(&nb, x, &m)))
             .min_by(|p, q| p.1.total_cmp(&q.1));
         match near {
-            Some((x, d)) if d <= tol::POINT * (1.0 + r) => {
+            Some((x, d)) if d <= tol::point() * (1.0 + r) => {
                 if !out.contains(&EdgeId(x as u64)) {
                     out.push(EdgeId(x as u64));
                 }
@@ -4707,7 +4798,7 @@ fn chain_tool_lofted(
         (starts[a.0] + a.1 * lens[a.0]).total_cmp(&(starts[c.0] + c.1 * lens[c.0]))
     });
     stations.dedup_by(|a, c| {
-        ((starts[a.0] + a.1 * lens[a.0]) - (starts[c.0] + c.1 * lens[c.0])).abs() < tol::POINT
+        ((starts[a.0] + a.1 * lens[a.0]) - (starts[c.0] + c.1 * lens[c.0])).abs() < tol::point()
     });
     let mut sections = Vec::new();
     for &(k, fr) in &stations {

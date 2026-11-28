@@ -551,7 +551,7 @@ impl<'a> Tool<'a> {
             ends,
             polys,
             boxes,
-            size: b.bbox().diagonal().max(super::tol::POINT),
+            size: b.bbox().diagonal().max(super::tol::point()),
         }
     }
 
@@ -6074,7 +6074,7 @@ pub(super) fn cut(
             tl.runs.len()
         );
     }
-    let tsize = tb.bbox().diagonal().max(super::tol::POINT);
+    let tsize = tb.bbox().diagonal().max(super::tol::point());
     // The tool's ends must be clear of the target (else its places there bound the cut too).
     let (
         RigidStep::Turn {

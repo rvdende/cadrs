@@ -1,0 +1,80 @@
+{
+  "entries": [
+    {
+      "line": 6,
+      "obj": null,
+      "op": "Workplane",
+      "out": {
+        "wp": 1
+      },
+      "plane": {
+        "origin": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "xDir": [
+          1.0,
+          0.0,
+          -0.0
+        ],
+        "zDir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "args": [
+        10.0,
+        10.0,
+        10.0
+      ],
+      "kwargs": {},
+      "line": 6,
+      "op": "box",
+      "out": {
+        "wp": 2
+      },
+      "self": {
+        "wp": 1
+      }
+    },
+    {
+      "args": [
+        "|Z"
+      ],
+      "kwargs": {},
+      "line": 7,
+      "op": "edges",
+      "out": {
+        "wp": 3
+      },
+      "self": {
+        "wp": 2
+      }
+    },
+    {
+      "args": [
+        1.0
+      ],
+      "kwargs": {},
+      "line": 7,
+      "op": "fillet",
+      "out": {
+        "wp": 4
+      },
+      "self": {
+        "wp": 3
+      }
+    }
+  ],
+  "guarded": false,
+  "i": 34,
+  "name": "box_with_edge_fillets",
+  "result": {
+    "wp": 4
+  },
+  "status": "ok"
+}
