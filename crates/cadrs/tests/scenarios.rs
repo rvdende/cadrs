@@ -68,7 +68,6 @@ const KNOWN_FAILING: &[(&str, &str)] = &[
     ("cam_studio_mill", "runs for over 5 minutes"),
     ("course_pcb_ex3_idf_assembly", "the EMN placement differs"),
     ("course_ps6_control_arm", "no sketch-dialog-accept"),
-    ("course_ps8_reducer_coupling", "no sketch-dialog-accept"),
     (
         "pcb_board_from_sketch",
         "the board reads 38 × 38, not 28 × 38",

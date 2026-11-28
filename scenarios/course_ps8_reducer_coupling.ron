@@ -236,6 +236,7 @@ Scenario(
         WaitFor("sketch-dialog"),
         Click(xyz(133.223, 0, 43.18)),
         Key("N"),
+        Key("F"),
         Scroll(world(-10.7, 0.9), -2),
         Wait(10),
         Hover(world(-10.7, 0.9)),
@@ -319,6 +320,8 @@ Scenario(
         Hover(ui_at("viewport-area", 0.873, 0.943)),
         Wait(3),
         Screenshot("08-extrude-2-add-0-75"),
+        ExpectValue("parts", 1),
+        ExpectValue("errors", 0),
         Key("Enter"),
         // Step 8: rename the part (ex2-step8).
         RightClick(ui("part-row-part-1")),
