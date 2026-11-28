@@ -55,6 +55,7 @@ Scenario(
         Hover(world(62.55, 20.79)),
         Wait(3),
         Screenshot("04-undo-and-duplicate-refused"),
+        Click(ui("part-row-part-1")),
         Click(ui("view-mass")),
         WaitFor("mass-dialog"),
         ExpectText("mass-dialog", "37500.000"),
