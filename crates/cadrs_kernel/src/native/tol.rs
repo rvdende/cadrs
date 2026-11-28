@@ -58,6 +58,11 @@ pub const CONFUSION: f64 = 1e-7;
 /// See the module docs.
 pub const POINT_DEFAULT: f64 = 1e-6;
 
+/// [`POINT_DEFAULT`] by its old name, for code outside the kernel written when the merge
+/// distance was a constant (the conformance adapters, as the tolerance cadrs declares): the
+/// kernel itself reads [`point`], which a session may set to another.
+pub const POINT: f64 = POINT_DEFAULT;
+
 /// The merge distance set for the process ([`set_point`]); 0 for none.
 static POINT_BITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
