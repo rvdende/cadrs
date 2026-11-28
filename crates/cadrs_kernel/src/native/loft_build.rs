@@ -807,7 +807,9 @@ fn assemble_rows(
     };
     // A ruled patch between two coaxial circular arcs joined along their meridians is that
     // cone or cylinder (a loft of two circles about one axis, as OCCT's).
-    let conical = |r: usize, i: usize| -> Option<Surface> { ruled_cone(&rows[r][i]) };
+    let conical = |r: usize, i: usize| -> Option<Surface> {
+        ruled_cone(&rows[r][i]).or_else(|| skinned_cylinder(&rows[r][i]))
+    };
     let triangle = |r: usize, i: usize| -> Option<Surface> {
         let at_point = (r == 0 && points[0]) || (r + 1 == nr && points[1]);
         if !at_point {
@@ -1073,6 +1075,46 @@ fn circle_of(c: &NurbsCurve) -> Option<(P3, V3, f64)> {
         }
     }
     Some((center, nrm, r))
+}
+
+/// The cylinder a patch skinned through several sections lies on: when every column of its
+/// poles (along v) lies on a line along one direction D, each column's weights the same, the
+/// patch is its first row's curve moved along D (a point is Σ βᵢ(u)·(Aᵢ + sᵢ(v)·D) / Σ βᵢ(u)),
+/// so a row that is an arc of a circle about an axis along D puts it on that cylinder, whatever
+/// its parameters along v (a smooth loft through equal sections spaced unevenly). None
+/// otherwise (and for cones, whose lines meet at the apex: their points need not combine onto
+/// it).
+fn skinned_cylinder(s: &NurbsSurface) -> Option<Surface> {
+    if s.cps.first()?.len() < 3 {
+        return None;
+    }
+    let row = iso(s, true, false);
+    let (o, n, r) = circle_of(&row)?;
+    let size = r.max(1.0);
+    for col in &s.cps {
+        let w0 = col[0].w;
+        if col.iter().any(|h| (h.w - w0).abs() > 1e-12 * w0.abs()) {
+            return None;
+        }
+        let p0 = dehom(&col[0]);
+        for h in &col[1..] {
+            let q = dehom(h) - p0;
+            if q.cross(&n).norm() > tol::REL * size {
+                return None;
+            }
+        }
+    }
+    let x = (row.point(row.range().0) - o).try_normalize(tol::DEGENERATE)?;
+    let x = (x - n * x.dot(&n)).try_normalize(tol::DEGENERATE)?;
+    Some(Surface::Cylinder {
+        f: Frame {
+            o,
+            x,
+            y: n.cross(&x),
+            z: n,
+        },
+        r,
+    })
 }
 
 /// The cone or cylinder a ruled patch (degree 1 across) lies on: when its two edges are arcs
@@ -1478,6 +1520,25 @@ fn polar_match(secs: &mut [Sec]) -> Result<()> {
     Ok(())
 }
 
+/// Whether a skinned surface doubles back along v anywhere: the step between neighbouring
+/// samples of an iso-u curve turning more than a right angle.
+fn folds_along_v(s: &NurbsSurface) -> bool {
+    let (u0, u1) = (s.ku[s.du], s.ku[s.ku.len() - 1 - s.du]);
+    let (v0, v1) = (s.kv[s.dv], s.kv[s.kv.len() - 1 - s.dv]);
+    let n = 128;
+    (1..8).any(|i| {
+        let u = u0 + (u1 - u0) * i as f64 / 8.0;
+        let pts: Vec<P3> = (0..=n)
+            .map(|k| s.point(u, v0 + (v1 - v0) * k as f64 / n as f64))
+            .collect();
+        let steps: Vec<V3> = pts.windows(2).map(|w| w[1] - w[0]).collect();
+        let size = steps.iter().map(|d| d.norm()).fold(0.0, f64::max);
+        steps.windows(2).any(|w| {
+            w[0].norm() > 1e-9 * size && w[1].norm() > 1e-9 * size && w[0].dot(&w[1]) < 0.0
+        })
+    })
+}
+
 /// The plane of a planar loop of parts (Newell's normal), if it is planar.
 fn wire_plane(parts: &[Part]) -> Option<Plane> {
     let mut pts = Vec::new();
@@ -1695,9 +1756,12 @@ fn loft_exact_with(
     // The sections at evenly spaced parameters, as OCCT's (and kentron's) smooth lofts put them
     // (by the distance between centres the profile through four coaxial circles bulged 4 %
     // less than both): the surface then agrees with theirs.
+    let chord: Vec<f64> = v.iter().map(|x| x / total).collect();
     let v: Vec<f64> = (0..n_secs)
         .map(|i| i as f64 / (n_secs - 1) as f64)
         .collect();
+    // (The smooth faces' section curves, skinned once all are known: see below.)
+    let mut smooth: Vec<Vec<NurbsCurve>> = Vec::new();
     for pi in 0..count {
         let mut curves: Vec<NurbsCurve> = Vec::new();
         let mut template: Option<NurbsCurve> = None;
@@ -1807,8 +1871,18 @@ fn loft_exact_with(
                     .collect::<Vec<_>>(),
             );
         } else {
-            surfs.push(skin(&curves, &v));
+            smooth.push(curves);
         }
+    }
+    // Even parameters fold a surface back on itself where the sections are spaced unevenly
+    // enough (equal sections at 0, 1 and 5 along a line: the cubic through them doubles back,
+    // adding area and no volume); then all of the loft's faces (their shared edges alike) take
+    // the sections by the distance between their centres.
+    if !smooth.is_empty() {
+        let skinned = |v: &[f64]| smooth.iter().map(|c| skin(c, v)).collect::<Vec<_>>();
+        let even = skinned(&v);
+        let folded = even.iter().any(folds_along_v);
+        surfs.extend(if folded { skinned(&chord) } else { even });
     }
     let caps = if closed_v {
         [None, None]
