@@ -570,7 +570,6 @@ pub fn fit_op(
             Fit::Complete(cs) => FitOp::Complete(Box::new(add(cs))),
             Fit::Partial => FitOp::Partial,
             Fit::Satisfied => FitOp::Satisfied,
-            Fit::Satisfied => FitOp::Satisfied,
             Fit::Invalid => FitOp::Invalid,
         };
     }
