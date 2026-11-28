@@ -35,7 +35,7 @@ Scenario(
         Wait(3),
         Screenshot("01b-drawing-in-the-flat-view"),
         Click(ui("sketch-dialog-accept")),
-        MoveTo(1420, 900),
+        Hover(flat(88.3, -79.1)),
         Wait(3),
         Screenshot("02-sketch-on-the-flat-in-the-flat-view"),
         // The menu on the sketch's line: Edit Sketch 2 and Show dimensions join it (lesson 15
@@ -45,7 +45,7 @@ Scenario(
         Key("Escape"),
         RightClick(ui("smt-flat")),
         Click(ui("smt-flat-drawing")),
-        MoveTo(1420, 900),
+        Hover(ui_at("create-drawing-dialog", 0.8875, 0.9)),
         Wait(3),
         Screenshot("03-create-drawing-of-flat-pattern"),
     ],

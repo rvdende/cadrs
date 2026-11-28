@@ -16,7 +16,7 @@ Scenario(
         Key("Enter"),
         WaitFor("eda-mode-bar"),
         // GS4: symbols.
-        MoveTo(800, 500),
+        Hover(flat(113.5, 112.3)),
         Key("A"),
         WaitFor("eda-chooser"),
         Click(ui("eda-chooser-filter-field")),
@@ -38,7 +38,7 @@ Scenario(
         Key("Enter"),
         Click(flat(101.6, 101.6)),
         Custom("eda-zoom 70 60 230 140"),
-        MoveTo(1100, 860),
+        Hover(flat(170.6, 59.8)),
         Screenshot("02-symbols-placed"),
         // GS5: R1 up, D1 under it, turned.
         Click(flat(203.2, 101.6)),
@@ -49,7 +49,7 @@ Scenario(
         Click(flat(203.2, 93.98)),
         Key("R"),
         Key("Escape"),
-        MoveTo(1100, 860),
+        Hover(flat(170.6, 59.8)),
         Screenshot("03-moved-and-rotated"),
         // GS6: the loop.
         Key("W"),
@@ -64,7 +64,7 @@ Scenario(
         Click(flat(101.6, 76.2)),
         Click(flat(101.6, 97.79)),
         Key("Escape"),
-        MoveTo(1100, 860),
+        Hover(flat(170.6, 59.8)),
         Screenshot("04-wired"),
         // GS7: power ports and the label.
         Key("P"),
@@ -91,7 +91,7 @@ Scenario(
         Type("led"),
         Click(ui("eda-label-ok")),
         Click(flat(203.2, 104.14)),
-        MoveTo(1100, 860),
+        Hover(flat(170.6, 59.8)),
         Screenshot("05-power-and-label"),
         // GS9: values.
         Hover(flat(203.2, 93.98)),

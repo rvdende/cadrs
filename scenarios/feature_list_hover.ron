@@ -25,7 +25,7 @@ Scenario(
         Hover(ui("feature-fillet-1")),
         Wait(10),
         Screenshot("03-fillet-1-hovered"),
-        MoveTo(1420, 900),
+        Hover(world(100.5, -8)),
         Wait(5),
         Screenshot("04-no-hover"),
     ],

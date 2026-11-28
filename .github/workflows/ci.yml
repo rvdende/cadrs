@@ -18,6 +18,10 @@ env:
   CARGO_INCREMENTAL: 0
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
   CARGO_PROFILE_TEST_DEBUG: line-tables-only
+  # .cargo/config.toml's Linux flags without -Zthreads=8: an 8-thread front end per rustc, on a
+  # 4-core runner building 4 crates at once, takes more memory than it has (the build was
+  # killed, exit 143). The target's variable replaces the config's flags for Linux only.
+  CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: -C link-arg=-fuse-ld=mold -Zshare-generics=y
 
 jobs:
   # Per push and pull request: every crate is rustfmt-clean (default style; run `cargo fmt --all`
@@ -113,6 +117,18 @@ jobs:
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           df -h /
+
+      # The whole workspace's debug build outgrew the runner's memory (16 GB) when the kernel
+      # grew: the runner was killed, or lost, mid-build. With swap it runs slower instead.
+      - name: Swap
+        run: |
+          sudo swapoff -a
+          sudo rm -f /mnt/swapfile /swapfile
+          sudo fallocate -l 16G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
 
       - name: System packages
         run: |
@@ -239,6 +255,9 @@ jobs:
     timeout-minutes: 150
     env:
       BREP_BENCH_REV: 4273a001e20fdac3667315eb03f2e73950452d88
+      # Built outside cadrs's tree, where .cargo/config.toml (clang, mold) doesn't reach: no
+      # flags, as before the workflow's Linux flags.
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: ""
     steps:
       - uses: actions/checkout@v4
         with:

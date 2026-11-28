@@ -29,7 +29,7 @@ Scenario(
         Click(ui("sweep-path-field")),
         Click(xyz(0, 0, 25)),
         ExpectText("sweep-profile-field", "Sketch 1"),
-        MoveTo(1420, 900),
+        Hover(world(29.6, 16.8)),
         Wait(3),
         Screenshot("01-sweep-whole-sketch-profile"),
         Click(ui("sweep-dialog-accept")),
@@ -68,7 +68,7 @@ Scenario(
         // The loft framed with the rod in view (P3.11, P3.10 judge: the rod was clipped behind
         // the dialog).
         Custom("view 45 35.26 22 -10 25 0.1"),
-        MoveTo(1420, 900),
+        Hover(world(78.5, 5.1)),
         Wait(3),
         Screenshot("02-loft-from-a-curved-face"),
     ],

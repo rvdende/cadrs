@@ -65,42 +65,15 @@ fn looks_like_missing_gpu(stderr: &str) -> bool {
 /// `CADRS_KNOWN_FAILING=1` runs them.
 const KNOWN_FAILING: &[(&str, &str)] = &[
     ("cam_machine_from_assembly", "runs for over 5 minutes"),
-    ("cam_studio_mill", "runs for over 5 minutes"),
     (
-        "course_asm_mates_tangent_width",
-        "mate-dialog-accept stays disabled",
+        "cam_studio_mill",
+        "passes, in about 4 minutes (the preview's exact stock cuts): left out for speed",
     ),
-    (
-        "course_drw_ex3_update",
-        "dim-label-225 is not found to double-click",
-    ),
-    (
-        "course_dv_derived_options",
-        "the derived parts' volume is 37500, not 75000",
-    ),
-    (
-        "course_dv_ex1_two_copies",
-        "the derived parts' volume is 37500, not 75000",
-    ),
-    (
-        "course_dv_ex2_update",
-        "the derived parts' volume is 37500, not 75000",
-    ),
-    ("course_er_open_linked", "the mass dialog shows no part"),
-    ("course_pcb_ex1_board", "no part-row-part-3"),
     ("course_pcb_ex3_idf_assembly", "the EMN placement differs"),
-    ("course_ps6_control_arm", "no sketch-dialog-accept"),
-    ("course_ps8_reducer_coupling", "no sketch-dialog-accept"),
-    ("course_s16_text", "no extrude-dialog"),
-    (
-        "course_s1_new_sketch_context_menu",
-        "no viewport-new-sketch",
-    ),
     (
         "pcb_board_from_sketch",
         "the board reads 38 × 38, not 28 × 38",
     ),
-    ("sm_p3i3_table", "no smt-flat-select-other"),
 ];
 
 /// At most `CADRS_JOBS` scenario apps at once: a counting semaphore over the test threads.
@@ -2689,4 +2662,28 @@ fn scenario_model_plate_cut() {
     // A plate with a hole, then a notch cut from a sketch on Front, each through the UI; the
     // scenario checks the part's volume and area after each extrude.
     run_scenario("model_plate_cut");
+}
+
+#[test]
+#[ignore = "app scenarios; run with: cargo test -r -p cadrs -F app-tests --test scenarios -- --ignored"]
+fn scenario_configurations() {
+    run_scenario("configurations");
+}
+
+#[test]
+#[ignore = "app scenarios; run with: cargo test -r -p cadrs -F app-tests --test scenarios -- --ignored"]
+fn scenario_configurations_drawing() {
+    run_scenario("configurations_drawing");
+}
+
+#[test]
+#[ignore = "app scenarios; run with: cargo test -r -p cadrs -F app-tests --test scenarios -- --ignored"]
+fn scenario_configurations_properties() {
+    run_scenario("configurations_properties");
+}
+
+#[test]
+#[ignore = "app scenarios; run with: cargo test -r -p cadrs -F app-tests --test scenarios -- --ignored"]
+fn scenario_configurations_render() {
+    run_scenario("configurations_render");
 }

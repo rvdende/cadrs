@@ -30,7 +30,7 @@ Scenario(
         Screenshot("01-pin-table"),
         Click(ui("eda-pins-ok")),
         Custom("eda-fit"),
-        MoveTo(1100, 900),
+        Hover(flat(8.09, -17.66)),
         Screenshot("02-symbol"),
         // The footprint: a pad, then an array of eight down a column.
         Click(ui("eda-mode-footprint")),
@@ -49,7 +49,7 @@ Scenario(
         Type("-2"),
         Screenshot("03-pad-array"),
         Click(ui("eda-array-ok")),
-        MoveTo(1100, 900),
+        Hover(flat(6.47, -16.75)),
         Screenshot("04-column"),
         // A second column: one pad across from pad 8, arrayed upwards, then renumbered.
         Click(ui("fp-pad")),
@@ -70,7 +70,7 @@ Scenario(
         Click(ui("fp-renumber")),
         WaitFor("eda-renumber"),
         Click(ui("eda-renumber-ok")),
-        MoveTo(1100, 900),
+        Hover(flat(6.47, -16.75)),
         Screenshot("05-renumbered"),
     ],
 )

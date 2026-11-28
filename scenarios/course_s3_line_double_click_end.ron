@@ -27,7 +27,7 @@ Scenario(
         Screenshot("03-line-tool-still-active-new-chain"),
         Key("Escape"),
         Key("Escape"),
-        MoveTo(1400, 850),
+        Hover(world(123.1, -81.8)),
         Wait(3),
         Screenshot("04-done"),
     ],

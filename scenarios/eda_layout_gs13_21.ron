@@ -25,7 +25,7 @@ Scenario(
         Screenshot("01-board-setup"),
         Click(ui("eda-setup-ok")),
         // GS14.
-        MoveTo(1100, 860),
+        Hover(flat(39.7, 1.3)),
         Key("F8"),
         WaitFor("eda-update-dialog"),
         Click(ui("eda-update-run")),
@@ -33,14 +33,14 @@ Scenario(
         Screenshot("02-update-pcb"),
         Click(ui("eda-update-close")),
         Custom("eda-zoom -5 -5 95 55"),
-        MoveTo(1100, 860),
+        Hover(flat(57.9, -0.1)),
         Screenshot("03-footprints-and-ratsnest"),
         // GS15.
         Click(ui("pcb-outline")),
         Click(flat(0.0, 0.0)),
         Click(flat(45.0, 50.0)),
         Custom("eda-zoom -5 -5 60 55"),
-        MoveTo(1100, 860),
+        Hover(flat(39.7, 1.3)),
         Screenshot("04-outline"),
         // GS16: BT1 to the back, D1 and R1 below it.
         Hover(flat(44.77, 25.0)),
@@ -59,7 +59,7 @@ Scenario(
         Key("R"),
         Key("R"),
         Key("Escape"),
-        MoveTo(1100, 860),
+        Hover(flat(39.7, 1.3)),
         Screenshot("05-placed"),
         // GS17.
         Hover(flat(8.0, 11.46)),
@@ -73,7 +73,7 @@ Scenario(
         Click(flat(37.0, 20.0)),
         Key("V"),
         Click(flat(37.0, 11.5)),
-        MoveTo(1100, 860),
+        Hover(flat(39.7, 1.3)),
         Screenshot("06-routed"),
         // GS18.
         Key("PageDown"),
@@ -82,7 +82,7 @@ Scenario(
         Click(flat(45.0, 0.0)),
         Click(flat(45.0, 50.0)),
         DoubleClick(flat(0.0, 50.0)),
-        MoveTo(1100, 860),
+        Hover(flat(39.7, 1.3)),
         Screenshot("07-zone-filled"),
         // GS19.
         Click(ui("pcb-drc")),
@@ -104,7 +104,7 @@ Scenario(
         // GS20.
         Click(ui("eda-mode-3d")),
         Key("F"),
-        MoveTo(1100, 860),
+        Hover(world(52.1, -3.7)),
         Screenshot("10-3d"),
     ],
 )

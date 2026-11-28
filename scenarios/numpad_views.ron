@@ -7,7 +7,7 @@ Scenario(
     start: Some("document"),
     steps: [
         Wait(10),
-        MoveTo(1300, 700),
+        Hover(world(128.5, -27)),
         Screenshot("01-isometric"),
         Key("Numpad9"),
         Wait(30),

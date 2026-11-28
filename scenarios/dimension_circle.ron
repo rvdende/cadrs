@@ -11,7 +11,7 @@ Scenario(
         WaitFor("document-shell"),
         Click(ui("sketch")),
         WaitFor("sketch-dialog"),
-        ClickAt(678, 559),
+        Click(world(-43.7, -43.9)),
         Key("N"),
         // A circle, an arc, a V of two lines and a slanted line.
         Key("C"),
@@ -82,7 +82,7 @@ Scenario(
         ClickWorld(28, -38),
         Key("Enter"),
         Key("Escape"),
-        MoveTo(1420, 780),
+        Hover(world(128.2, -64.1)),
         Wait(2),
         Screenshot("09-diameter-radius-angle-aligned"),
     ],

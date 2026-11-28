@@ -9,7 +9,7 @@ Scenario(
         Click(ui("document-name")),
         Type("Box"),
         Key("Enter"),
-        MoveTo(1300, 700),
+        Hover(world(128.5, -27)),
         Screenshot("01-short-name"),
         Click(ui("document-name")),
         Key("End"),

@@ -5,7 +5,7 @@ Scenario(
         WaitFor("document-shell"),
         Custom("ujoint-drawing"),
         Key("F"),
-        MoveTo(1500, 960),
+        Hover(ui_at("tab-bar", 0.942, 0.111)),
         Wait(5),
         Screenshot("01-drawing"),
     ],

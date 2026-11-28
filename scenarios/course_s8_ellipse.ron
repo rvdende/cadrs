@@ -33,7 +33,7 @@ Scenario(
         Type("40"),
         Key("Enter"),
         Key("Escape"),
-        MoveTo(1350, 850),
+        Hover(world(110.5, -81.8)),
         Wait(3),
         Screenshot("04-axes-90-40"),
         Click(ui("sketch-dialog-accept")),

@@ -15,7 +15,7 @@ Scenario(
         Screenshot("01-empty-studio"),
         Click(ui("pcb-add-board")),
         WaitFor("pcb-name-edit"),
-        MoveTo(1100, 900),
+        Hover(flat(194.9, 3.9)),
         Screenshot("02-board-created"),
         Key("Ctrl+A"),
         Type("Power monitor"),

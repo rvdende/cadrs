@@ -22,7 +22,7 @@ Scenario(
         Click(ui("cam-f-document")),
         Click(ui("cam-f-document-option-1")),
         ExpectText("cam-dialog", "Block"),
-        MoveTo(1420, 900),
+        Hover(world(197.9, -104)),
         Wait(3),
         Screenshot("01-insert-from-other-document"),
         Click(ui("cam-dialog-accept")),
@@ -30,7 +30,7 @@ Scenario(
         // The block's part ("Part 1" in the source) at V1.
         ExpectText("cam-tree", "Part 1 V1"),
         Custom("cam fit"),
-        MoveTo(1420, 900),
+        Hover(world(68.8, 5)),
         Wait(3),
         Screenshot("02-inserted"),
     ],

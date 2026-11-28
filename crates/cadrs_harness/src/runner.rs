@@ -331,6 +331,11 @@ fn fail(world: &mut World, msg: String) {
     }
     error!("scenario failed: {msg}");
     eprintln!("scenario failed: {msg}");
+    if crate::record::enabled() {
+        let runner = world.resource::<Runner>();
+        let (out, rest) = (runner.out_dir.clone(), runner.steps.clone());
+        crate::record::record_unreached(world, &out, rest.iter());
+    }
     world.resource_mut::<Runner>().done = true;
     world.write_message(AppExit::error());
 }
@@ -525,6 +530,10 @@ pub fn drive(world: &mut World) {
     }
     match expand(world, &step) {
         Ok(frames) => {
+            if crate::record::enabled() {
+                let out = world.resource::<Runner>().out_dir.clone();
+                crate::record::record(world, &out, &step);
+            }
             let mut runner = world.resource_mut::<Runner>();
             runner.retries = 0;
             runner.settle = None;
@@ -563,6 +572,9 @@ pub fn drive(world: &mut World) {
 
 /// Whether the step has a target placed by the current view (`world()` or `xyz()`).
 fn uses_view(step: &Step) -> bool {
+    if crate::record::enabled() && !step.pixel_positions().is_empty() {
+        return true;
+    }
     let view = |t: &Target| matches!(t, Target::World(..) | Target::Xyz(..) | Target::Flat(..));
     match step {
         Step::Click(t)

@@ -40,7 +40,7 @@ Scenario(
         Screenshot("02-dialog"),
         Click(ui("board-create-ok")),
         Wait(20),
-        MoveTo(1420, 780),
+        Hover(world(14.6, -45.6)),
         Wait(10),
         Screenshot("03-created"),
         Custom("board size"),

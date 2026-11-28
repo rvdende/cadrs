@@ -38,7 +38,7 @@ Scenario(
         Click(xyz(7.07, -15, 37.07)),
         Key("Escape"),
         Key("N"),
-        MoveTo(1400, 850),
+        Hover(world(88.4, -58.7)),
         Wait(3),
         Screenshot("02-silhouettes-used"),
     ],

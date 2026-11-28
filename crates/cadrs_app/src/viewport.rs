@@ -2067,7 +2067,8 @@ fn view_shortcuts(
                 commands.queue(crate::view_options::zoom_to_selection);
             }
             KeyCode::KeyF if !shift => {
-                let mut pts = scene_points(doc.as_deref(), *kind, planes.0, Some(&cache));
+                let editing = session.as_ref().map(|s| s.feature);
+                let mut pts = scene_points(doc.as_deref(), *kind, planes.0, Some(&cache), editing);
                 // In an assembly with a mate dialog's or a drag's preview, the instances as drawn
                 // (Final part 3: `course_asm_variables` 02 was fitted to the pin where it was
                 // before the pick); else the shown occurrences, as before (Final part 4: the
@@ -2127,6 +2128,9 @@ fn fit_points(world: &World) -> Vec<Vec3> {
         kind,
         planes,
         world.get_resource::<crate::parts::PartCache>(),
+        world
+            .get_resource::<crate::sketch::SketchSession>()
+            .map(|s| s.feature),
     );
     if kind == ActiveKind::Assembly {
         // The instances as drawn: a mate dialog's or a drag's placements included.
@@ -2448,7 +2452,8 @@ pub const ZOOM_KEY_FACTOR: f32 = 1.25;
 pub const DRAG_ZOOM_PER_PX: f32 = 1.006;
 
 /// The points zoom to fit frames: the default planes (the ones shown) and every sketch of the
-/// active Part Studio (the origin for an Assembly).
+/// active Part Studio that is shown, and `editing`, the sketch being edited, though a feature
+/// uses it (the origin for an Assembly).
 ///
 /// The parts come from `cache` when it holds the active tab's (rebuilt on the rebuild thread);
 /// otherwise they are rebuilt here, which waits for the rebuild thread.
@@ -2457,6 +2462,7 @@ pub fn scene_points(
     kind: ActiveKind,
     planes: [bool; 3],
     cache: Option<&crate::parts::PartCache>,
+    editing: Option<FeatureId>,
 ) -> Vec<Vec3> {
     let mut pts = Vec::new();
     if kind == ActiveKind::PcbStudio {
@@ -2514,7 +2520,7 @@ pub fn scene_points(
     // Reflector's revolve profile 400 mm up, doesn't count).
     let hidden = crate::parts::hidden_sketches(el, el.features(), None);
     for f in el.features() {
-        if hidden.contains(&f.id) {
+        if hidden.contains(&f.id) && Some(f.id) != editing {
             continue;
         }
         let Some(sk) = f.sketch() else { continue };

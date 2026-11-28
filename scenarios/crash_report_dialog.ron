@@ -9,7 +9,7 @@ Scenario(
         WaitFor("app-menu"),
         Custom("crash-dialog"),
         WaitFor("crash-dialog"),
-        MoveTo(1500, 960),
+        Hover(ui_at("crash-dialog", 0.9375, 0.96)),
         Wait(3),
         Screenshot("01-crash-dialog"),
         Key("Escape"),

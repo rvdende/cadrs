@@ -18,7 +18,9 @@ Onshape-style CAD in Rust + Bevy (main, 0.21-dev). Local notes in `docs/` (git-i
     `ExpectText`) and the test's own checks, as CI's "Scenarios" job runs them. A few also
     compare screenshots with local goldens (GPU; `CADRS_BLESS=1` records new baselines,
     `CADRS_SKIP_IMAGES=1` skips them, `CADRS_IMAGES=1` compares every scenario's). Check what a
-    scenario does with `Expect…` steps rather than a screenshot.
+    scenario does with `Expect…` steps rather than a screenshot. Steps name what they act on
+    (`ui("name")`, `ui_at(..)`, `world(..)`, `xyz(..)`, `flat(..)`), never pixel positions
+    (a test checks; `tools/name_targets.py` converts a recorded run's).
 - Headless scenario: `cargo run -r -- --headless --scenario <name>` → `target/scenarios/<name>/`
   (`--no-gpu`: nothing drawn, no screenshots, runs anywhere).
 - Public documents seed peer: `cadrs --public-seed [--data-dir <dir>]` (no window; prints its
