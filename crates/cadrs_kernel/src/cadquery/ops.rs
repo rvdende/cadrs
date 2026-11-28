@@ -897,7 +897,24 @@ pub fn loft(items: &[LoftItem], ruled: bool) -> CqResult<Shape> {
     }
     let mut keep = Vec::new();
     let mut sections = Vec::new();
-    for it in items {
+    let last = items.len() - 1;
+    for (k, it) in items.iter().enumerate() {
+        // An end section within a few point tolerances across is a point (a loft to a circle
+        // of a micron is a cone to its apex: as a section, its cap fell on the face it ended
+        // on, too small to imprint there, and the micron's edge was left open).
+        let speck = match it {
+            LoftItem::Wire(w) if k == 0 || k == last => {
+                let pts: Vec<V3> = w.iter().flat_map(|g| g.polyline(1e-9)).collect();
+                super::geom::BoundBox::of_points(pts.iter())
+                    .filter(|b| b.diagonal() <= 4.0 * crate::native::tol::POINT)
+                    .map(|b| (b.min + b.max) * 0.5)
+            }
+            _ => None,
+        };
+        if let Some(c) = speck {
+            sections.push(crate::LoftSection::Point(P3::from(c)));
+            continue;
+        }
         match it {
             LoftItem::Point(p) => sections.push(crate::LoftSection::Point(P3::from(*p))),
             LoftItem::Wire(w) => {
