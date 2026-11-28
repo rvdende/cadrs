@@ -118,6 +118,18 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           df -h /
 
+      # The whole workspace's debug build outgrew the runner's memory (16 GB) when the kernel
+      # grew: the runner was killed, or lost, mid-build. With swap it runs slower instead.
+      - name: Swap
+        run: |
+          sudo swapoff -a
+          sudo rm -f /mnt/swapfile /swapfile
+          sudo fallocate -l 16G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
+
       - name: System packages
         run: |
           sudo apt-get update
