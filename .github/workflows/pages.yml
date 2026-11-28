@@ -39,6 +39,18 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
+      # Release builds of the app outgrew the runner's memory (16 GB) when the kernel grew (the
+      # release's runners were lost mid-build, v0.2.10). With swap they run slower instead.
+      - name: Swap
+        run: |
+          sudo swapoff -a
+          sudo rm -f /mnt/swapfile /swapfile
+          sudo fallocate -l 16G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
+
       # clang and mold link the build scripts (.cargo/config.toml's host settings).
       - name: System packages
         env:
