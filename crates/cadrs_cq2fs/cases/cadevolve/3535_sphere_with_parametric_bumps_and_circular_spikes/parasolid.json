@@ -1575,7 +1575,7 @@
       "op": "rotate"
     }
   ],
-  "script": "404c836a0d37fe18",
+  "script": "24b20b7ebcf8229f",
   "source": "Onshape evalFeatureScript (Parasolid), case.fs",
   "status": "error",
   "warn": []

@@ -1508,6 +1508,15 @@ pub fn edges_to_wires(py: Python<'_>, edges: &Bound<'_, PyAny>, tol: f64) -> PyR
     )
 }
 
+/// `_cadrs.import_step(fileName)`: the file's shape (`importers.importStep` wraps it in a
+/// Workplane).
+#[pyfunction(name = "import_step")]
+pub fn import_step_fn(py: Python<'_>, file_name: &str) -> PyResult<Py<PyAny>> {
+    let bytes =
+        std::fs::read(file_name).map_err(|e| PyValueError::new_err(format!("{file_name}: {e}")))?;
+    wrap(py, ops::import_step(&bytes).py()?)
+}
+
 /// `loft(sections, cap, ruled)`.
 #[pyfunction(name = "loft", signature = (s, cap=true, ruled=false))]
 pub fn loft_fn(

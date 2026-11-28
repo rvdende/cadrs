@@ -25,7 +25,7 @@
     }
   ],
   "other": [],
-  "script": "b7b54c21e90ce2dc",
+  "script": "395f9ef860a3cd07",
   "solids": 1.0,
   "source": "Onshape evalFeatureScript (Parasolid), cq2fs case.fs",
   "status": "ok",

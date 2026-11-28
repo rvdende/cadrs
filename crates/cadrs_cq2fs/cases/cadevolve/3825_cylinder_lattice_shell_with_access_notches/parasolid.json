@@ -1471,7 +1471,7 @@
       "op": "box"
     }
   ],
-  "script": "b643a30871a722d7",
+  "script": "4e84c3726d598ef4",
   "source": "Onshape evalFeatureScript (Parasolid), case.fs",
   "status": "error",
   "warn": []

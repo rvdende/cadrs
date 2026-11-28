@@ -15,7 +15,7 @@
       "op": "box"
     }
   ],
-  "script": "928d5427fed7ba35",
+  "script": "18d762fe054e3096",
   "source": "Onshape evalFeatureScript (Parasolid), case.fs",
   "status": "error",
   "warn": []

@@ -27,7 +27,7 @@ const nid = function(st, prefix) {
     var s = st[];
     s.n = s.n + 1;
     st[] = s;
-    return makeId(prefix ~ s.n);
+    return s.base + (prefix ~ s.n);   // under the case's own id (a feature's ops must be under its id)
 };
 
 const v3 = function(a) {
@@ -471,7 +471,7 @@ const isShapeObj = function(o) { return o.t == "solid" || o.t == "face" || o.t =
 // Edge.makeSpline through the points (GeomAPI_Interpolate in CadQuery): Onshape's fit spline
 // through the same points, with the end tangents where given. Both interpolate, but OCCT's
 // parametrization may not be Onshape's: the result carries a warning.
-const skSpline = function(sk, nm, e, to2, P, st) {
+const cqSkSpline = function(sk, nm, e, to2, P, st) {
     warn(st, "spline: Onshape's interpolation through the points, not OCCT's GeomAPI_Interpolate");
     var pts = [];
     for (var p in e.pts) pts = append(pts, to2(p));
@@ -512,7 +512,7 @@ const sketchRegions = function(c, st, wires) {
                 var r1 = e.r1; var r2 = e.r2;
                 if (r2 > r1) { major = vector(-major[1], major[0]); r1 = e.r2; r2 = e.r1; }
                 skEllipse(sk, nm, {"center": to2(e.c), "majorRadius": r1 * MM, "minorRadius": r2 * MM, "majorAxis": normalize(major)});
-            } else if (e.k == "spline") skSpline(sk, nm, e, to2, P, st);
+            } else if (e.k == "spline") cqSkSpline(sk, nm, e, to2, P, st);
         }
     }
     skSolve(sk);
@@ -1147,7 +1147,7 @@ const pathEdges = function(c, st, p) {
             if (e.k == "line") skLineSegment(sk, "p" ~ j, {"start": to2(e.a), "end": to2(e.b)});
             else if (e.k == "arc") skArc(sk, "p" ~ j, {"start": to2(e.a), "mid": to2(e.m), "end": to2(e.b)});
             else if (e.k == "circle") skCircle(sk, "p" ~ j, {"center": to2(e.c), "radius": e.r * MM});
-            else if (e.k == "spline") skSpline(sk, "p" ~ j, e, to2, planar, st);
+            else if (e.k == "spline") cqSkSpline(sk, "p" ~ j, e, to2, planar, st);
             else cqUnsup("sweep path edge " ~ e.k);
         }
         skSolve(sk);
@@ -1498,7 +1498,7 @@ const cqMeasure = function(c, st, res) {
     const B = qUnion(qs);
     const faces = qOwnedByBody(B, EntityType.FACE);
     const bb = evBox3d(c, {"topology": B, "tight": true});
-    return {"status": "ok",
+    return {"status": "ok", "result_q": B,
             "vol": evVolume(c, {"entities": B, "accuracy": "HIGH"}) / (MM ^ 3),
             "area": evArea(c, {"entities": faces}) / (MM ^ 2),
             "solids": size(ents(c, qBodyType(qEntityFilter(B, EntityType.BODY), BodyType.SOLID))),
@@ -1508,7 +1508,7 @@ const cqMeasure = function(c, st, res) {
             "bbox": [bb.minCorner[0] / MM, bb.minCorner[1] / MM, bb.minCorner[2] / MM, bb.maxCorner[0] / MM, bb.maxCorner[1] / MM, bb.maxCorner[2] / MM],
             "other": other, "warn": st[].warn, "log": st[].log};
 };
-const newState = function() { return new box({"wps": {}, "ctx": [], "shapes": {}, "n": 0, "log": [], "warn": [], "cur": 0}); };
+const newState = function(base) { return new box({"base": base, "wps": {}, "ctx": [], "shapes": {}, "n": 0, "log": [], "warn": [], "cur": 0}); };
 const atStep = function(st, i) { var s = st[]; s.cur = i; st[] = s; };
 const stepVol = function(c, st, out, op) {   // after a solid-producing step: its solids and volume
     const w = st[].wps[out];
@@ -1518,9 +1518,8 @@ const stepVol = function(c, st, out, op) {   // after a solid-producing step: it
     logStep(c, st, out, op, {"solids": size(ents(c, q)), "vol": evVolume(c, {"entities": q}) / (MM ^ 3)});
 };
 
-const case_5452 = function() {
-    var c = newContextWithDefaults();
-    var st = newState();
+const case_5452 = function(c, base) {
+    var st = newState(base);
     try {
         atStep(st, 1);
         cqWorkplaneNew(c, st, 1, {"plane": {"origin": [0, 0, 0], "xDir": [1, 0, 0], "zDir": [0, -1, 0]}, "obj": undefined});
@@ -3229,6 +3228,6 @@ const case_5452 = function() {
     }
 };
     var out = {};
-    out["c5452"] = case_5452();
+    { var r = case_5452(newContextWithDefaults(), makeId("q")); r.result_q = undefined; out["c5452"] = r; }
     return out;
 }

@@ -34,7 +34,7 @@
       "op": "cut"
     }
   ],
-  "script": "07fbd76f4b96c525",
+  "script": "6ba59a3205b914aa",
   "source": "Onshape evalFeatureScript (Parasolid), case.fs",
   "status": "error",
   "warn": []

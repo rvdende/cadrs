@@ -1134,6 +1134,21 @@ pub fn solid_of_shell(s: &Shape) -> CqResult<Shape> {
     Ok(Shape::of_body(op1(|k| k.sew_solid(&[b.0], 1e-6))?))
 }
 
+/// `importers.importStep`: a STEP file's bodies (each solid one, as the kernel's reader splits
+/// them), a compound when there are several.
+pub fn import_step(bytes: &[u8]) -> CqResult<Shape> {
+    let ids = session(|k| k.import_step(bytes))?;
+    let mut shapes: Vec<Shape> = ids
+        .into_iter()
+        .map(|id| Shape::of_body(super::adopt(id)))
+        .collect();
+    Ok(if shapes.len() == 1 {
+        shapes.remove(0)
+    } else {
+        Shape::compound(shapes)
+    })
+}
+
 /// The shape as a STEP file.
 pub fn export_step(s: &Shape) -> CqResult<Vec<u8>> {
     let b = s.body()?;

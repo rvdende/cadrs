@@ -278,7 +278,7 @@
       "op": "extrude"
     }
   ],
-  "script": "b3cc6a601abde459",
+  "script": "b8055bdd36c83d1e",
   "source": "Onshape evalFeatureScript (Parasolid), case.fs",
   "status": "error",
   "warn": []

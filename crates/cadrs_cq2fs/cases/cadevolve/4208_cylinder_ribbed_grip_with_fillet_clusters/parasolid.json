@@ -1271,7 +1271,7 @@
       "op": "union"
     }
   ],
-  "script": "5323be87cdd0432f",
+  "script": "173002936ff4cbbc",
   "source": "Onshape evalFeatureScript (Parasolid), case.fs",
   "status": "error",
   "warn": []

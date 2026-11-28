@@ -3753,7 +3753,7 @@
     }
   ],
   "other": [],
-  "script": "70fb61806121d87f",
+  "script": "8400f1515ca325e0",
   "solids": 1,
   "source": "Onshape evalFeatureScript (Parasolid), case.fs",
   "status": "ok",

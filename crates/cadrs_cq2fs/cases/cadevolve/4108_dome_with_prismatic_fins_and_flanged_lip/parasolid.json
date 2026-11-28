@@ -1113,7 +1113,7 @@
       "op": "revolve"
     }
   ],
-  "script": "fa62d53a091927fb",
+  "script": "a92c8b36a19a4188",
   "source": "Onshape evalFeatureScript (Parasolid), case.fs",
   "status": "error",
   "warn": []

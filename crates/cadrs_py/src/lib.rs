@@ -24,6 +24,7 @@ fn _cadrs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(shapes::edges_to_wires, m)?)?;
     m.add_function(wrap_pyfunction!(shapes::loft_fn, m)?)?;
     m.add_function(wrap_pyfunction!(shapes::text_fn, m)?)?;
+    m.add_function(wrap_pyfunction!(shapes::import_step_fn, m)?)?;
     m.add_function(wrap_pyfunction!(set_tolerance, m)?)?;
     m.add_function(wrap_pyfunction!(tolerance, m)?)?;
     m.add_function(wrap_pyfunction!(set_rules, m)?)?;

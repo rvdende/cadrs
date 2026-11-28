@@ -13,6 +13,7 @@
 //! cq2fs cadrs <set.json> [--out f] [--tolerance parasolid|<mm>]
 //!                                               run the set on cadrs's CadQuery (crates/cadrs_py)
 //! cq2fs compare <set.json> [--cadrs <results.jsonl>] [--out report.json]
+//! cq2fs step <set.json> --doc <url> [--batch 10] STEP and Parasolid files of Onshape's builds (src/step.rs)
 //! cq2fs steps <set.json> <i>                    each Workplane call's solids and volume, Parasolid
 //!                                               beside cadrs, and where they first differ
 //! ```
@@ -26,6 +27,7 @@ mod emit;
 mod selector;
 mod serve;
 mod sigs;
+mod step;
 
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
@@ -414,6 +416,7 @@ fn main() -> Result<()> {
         "cadrs" => compare::run_cadrs(rest)?,
         "compare" => compare::run(rest)?,
         "steps" => steps(rest)?,
+        "step" => step::run(rest)?,
         _ => bail!(
             "usage: cq2fs scan|translate|selectors|add|record|emit|serve|cadrs|compare (see src/main.rs)"
         ),
