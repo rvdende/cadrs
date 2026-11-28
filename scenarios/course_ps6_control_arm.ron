@@ -226,6 +226,10 @@ Scenario(
         Hover(ui_at("viewport-area", 0.873, 0.943)),
         Wait(3),
         Screenshot("08-one-part-sketch-hidden-again"),
+        // Hub ring (Ø70 less the Ø35 bore and the keyway), the right web and eye ring 40 mm,
+        // the left web and eye ring 25 mm, the webs between the circles' outer tangents.
+        ExpectValue("parts", 1),
+        ExpectNear("volume Part 1", 368749.705, 0.01),
         // Step 5: Parts list → right-click → Rename.
         RightClick(ui("part-row-part-1")),
         WaitFor("part-rename"),

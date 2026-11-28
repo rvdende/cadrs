@@ -387,6 +387,12 @@ fn constraint_activation(
             tool.tool = SketchTool::Select;
             *last = SketchTool::Select;
         }
+        // There already: the picks are done with.
+        FitOp::Satisfied => {
+            selection.0.clear();
+            tool.tool = SketchTool::Select;
+            *last = SketchTool::Select;
+        }
         // The selection is the first pick; the tool waits for the rest.
         FitOp::Partial => {}
         FitOp::Invalid => {
@@ -522,6 +528,15 @@ pub fn pick_for_constraint(
             selection.0.extend(axis);
         }
         FitOp::Partial => {}
+        // There already (a line drawn tangent infers its Tangent): the picks are done with, as
+        // if it had been added, so the next pick starts the next set.
+        FitOp::Satisfied => {
+            let axis = (kind == ConstraintKind::Symmetric)
+                .then(|| selection.0.first().copied())
+                .flatten();
+            selection.0.clear();
+            selection.0.extend(axis);
+        }
         FitOp::Invalid => {
             // Start again from this pick if it can begin a set.
             selection.0.clear();

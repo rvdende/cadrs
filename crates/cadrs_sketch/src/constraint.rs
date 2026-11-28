@@ -478,6 +478,9 @@ pub enum Fit {
     Complete(Vec<Constraint>),
     /// Not enough yet (the tool waits for more picks).
     Partial,
+    /// The selection fits, but every constraint it would add is there already: the picks are
+    /// done with, and there is nothing to add.
+    Satisfied,
     /// The selection does not fit this constraint.
     Invalid,
 }
@@ -533,6 +536,8 @@ fn classify(s: &Sketch, e: crate::SketchEntity) -> Option<Pick> {
 pub enum FitOp {
     Complete(Box<crate::SketchOp>),
     Partial,
+    /// See [`Fit::Satisfied`].
+    Satisfied,
     Invalid,
 }
 
@@ -564,6 +569,8 @@ pub fn fit_op(
         return match fit(kind, s, sel) {
             Fit::Complete(cs) => FitOp::Complete(Box::new(add(cs))),
             Fit::Partial => FitOp::Partial,
+            Fit::Satisfied => FitOp::Satisfied,
+            Fit::Satisfied => FitOp::Satisfied,
             Fit::Invalid => FitOp::Invalid,
         };
     }
@@ -608,6 +615,7 @@ pub fn fit_op(
             ])))
         }
         Fit::Partial => FitOp::Partial,
+        Fit::Satisfied => FitOp::Satisfied,
         Fit::Invalid => FitOp::Invalid,
     }
 }
@@ -817,14 +825,18 @@ pub fn fit(kind: ConstraintKind, s: &Sketch, sel: &[crate::SketchEntity]) -> Fit
     // Drop constraints that say nothing (the origin fixed) or are there already.
     match result {
         Fit::Complete(v) => {
-            let v: Vec<Constraint> = v
-                .into_iter()
-                .filter(|c| !c.is_trivial() && !s.constraints.values().any(|x| x.same_as(c)))
-                .collect();
+            let v: Vec<Constraint> = v.into_iter().filter(|c| !c.is_trivial()).collect();
             if v.is_empty() {
-                Fit::Invalid
+                return Fit::Invalid;
+            }
+            let new: Vec<Constraint> = v
+                .into_iter()
+                .filter(|c| !s.constraints.values().any(|x| x.same_as(c)))
+                .collect();
+            if new.is_empty() {
+                Fit::Satisfied
             } else {
-                Fit::Complete(v)
+                Fit::Complete(new)
             }
         }
         f => f,

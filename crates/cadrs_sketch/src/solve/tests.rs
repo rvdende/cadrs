@@ -748,10 +748,10 @@ fn tools_fit_selections() {
         Fit::Partial
     );
     assert_eq!(fit(ConstraintKind::Parallel, &s, &[e(top)]), Fit::Partial);
-    // Already there.
+    // Already there: done with, nothing to add.
     assert_eq!(
         fit(ConstraintKind::Parallel, &s, &[e(top), e(bottom)]),
-        Fit::Invalid
+        Fit::Satisfied
     );
     assert_eq!(
         fit(ConstraintKind::Perpendicular, &s, &[e(c), e(left)]),
