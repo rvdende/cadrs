@@ -77,7 +77,7 @@ Scenario(
         Click(ui("panel-sheet-metal")),
         Click(ui("smt-context")),
         Click(ui("smt-context-option-1")),
-        Hover(ui_at("smt-flat", 0.732, 0.927)),
+        Hover(flat(237.7, -46.6)),
         Wait(3),
         Screenshot("09-loft-add-one-flat"),
     ],

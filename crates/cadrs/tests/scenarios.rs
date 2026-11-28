@@ -93,14 +93,9 @@ const KNOWN_FAILING: &[(&str, &str)] = &[
     ("course_ps8_reducer_coupling", "no sketch-dialog-accept"),
     ("course_s16_text", "no extrude-dialog"),
     (
-        "course_s1_new_sketch_context_menu",
-        "no viewport-new-sketch",
-    ),
-    (
         "pcb_board_from_sketch",
         "the board reads 38 × 38, not 28 × 38",
     ),
-    ("sm_p3i3_table", "no smt-flat-select-other"),
 ];
 
 /// At most `CADRS_JOBS` scenario apps at once: a counting semaphore over the test threads.
@@ -2689,4 +2684,28 @@ fn scenario_model_plate_cut() {
     // A plate with a hole, then a notch cut from a sketch on Front, each through the UI; the
     // scenario checks the part's volume and area after each extrude.
     run_scenario("model_plate_cut");
+}
+
+#[test]
+#[ignore = "app scenarios; run with: cargo test -r -p cadrs -F app-tests --test scenarios -- --ignored"]
+fn scenario_configurations() {
+    run_scenario("configurations");
+}
+
+#[test]
+#[ignore = "app scenarios; run with: cargo test -r -p cadrs -F app-tests --test scenarios -- --ignored"]
+fn scenario_configurations_drawing() {
+    run_scenario("configurations_drawing");
+}
+
+#[test]
+#[ignore = "app scenarios; run with: cargo test -r -p cadrs -F app-tests --test scenarios -- --ignored"]
+fn scenario_configurations_properties() {
+    run_scenario("configurations_properties");
+}
+
+#[test]
+#[ignore = "app scenarios; run with: cargo test -r -p cadrs -F app-tests --test scenarios -- --ignored"]
+fn scenario_configurations_render() {
+    run_scenario("configurations_render");
 }

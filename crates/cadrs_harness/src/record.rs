@@ -180,6 +180,7 @@ fn round_to(v: f32, d: usize) -> f32 {
 }
 
 const VIEW_NAMES: &[&str] = &["viewport-area", "viewport-backdrop"];
+const FLAT_NAMES: &[&str] = &["smt-flat", "smt-flat-image"];
 
 /// A control small enough that any point of it does the same (a button, a list row); in a
 /// larger node (a panel, a 3D view) the point is kept.
@@ -191,10 +192,21 @@ pub fn name_point(world: &mut World, p: Vec2, exact: bool) -> (String, String) {
     let px = p.round();
     let hit = top_node(world, p);
     let named = hit.and_then(|h| named_ancestor(world, h));
+    // The sheet metal panel's flat view: its own `flat(..)` points; while it is shown, the flat
+    // mapping is its, not the 3D view's.
+    let sheet_flat = first_named(world, "smt-flat").is_some();
+    let in_flat = named
+        .as_ref()
+        .is_some_and(|(_, n)| FLAT_NAMES.contains(&n.as_str()));
     let in_view = match &named {
         None => true,
         Some((_, n)) => VIEW_NAMES.contains(&n.as_str()),
     };
+    if (in_flat || (in_view && !sheet_flat))
+        && let Some(t) = flat_target(world, px)
+    {
+        return t;
+    }
     if in_view && let Some(t) = view_target(world, px) {
         return t;
     }
@@ -245,7 +257,7 @@ fn name_point_ui(world: &mut World, p: Vec2, exact: bool) -> (String, String) {
     (ui_at_exact(p, &name, center, size), why.into())
 }
 
-fn view_target(world: &mut World, px: Vec2) -> Option<(String, String)> {
+fn flat_target(world: &mut World, px: Vec2) -> Option<(String, String)> {
     if let Some(m) = world.get_resource::<FlatToScreen>().and_then(|m| m.0) {
         let det = m.x_axis.perp_dot(m.y_axis);
         if det.abs() > 1e-6 {
@@ -265,6 +277,10 @@ fn view_target(world: &mut World, px: Vec2) -> Option<(String, String)> {
             }
         }
     }
+    None
+}
+
+fn view_target(world: &mut World, px: Vec2) -> Option<(String, String)> {
     if let Some(m) = world.get_resource::<WorldToScreen>().and_then(|m| m.0) {
         let det = m.x_axis.perp_dot(m.y_axis);
         // Not edge-on.

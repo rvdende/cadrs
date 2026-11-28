@@ -35,7 +35,7 @@ Scenario(
         // X6: the flat view shows where the collision is (the failed model keeps its context).
         Click(ui("panel-sheet-metal")),
         WaitFor("smt-panel"),
-        Hover(flat(-168.5, -88.7)),
+        Hover(world(133.5, -94.6)),
         Wait(3),
         Screenshot("02b-flat-view-collision"),
         Click(ui("panel-sheet-metal")),

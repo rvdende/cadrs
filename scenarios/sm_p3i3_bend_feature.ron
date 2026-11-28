@@ -32,7 +32,7 @@ Scenario(
         Key("Ctrl+A"),
         Type("5"),
         Key("Enter"),
-        Hover(flat(-49.6, -6.1)),
+        Hover(world(171.6, -103.9)),
         Wait(3),
         Screenshot("01-bend-feature-radius-5-no-modify-joint"),
         RightClick(ui("smt-bend-row-0")),

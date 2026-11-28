@@ -179,7 +179,7 @@ Scenario(
         Click(ui("smt-context")),
         Screenshot("11a-context-dropdown"),
         Key("Escape"),
-        Hover(ui_at("smt-flat", 0.732, 0.924)),
+        Hover(flat(144, -142)),
         Wait(3),
         Screenshot("11-flat-without-the-rework"),
     ],

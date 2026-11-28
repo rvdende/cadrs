@@ -85,7 +85,7 @@ Scenario(
         // P3I.8: the louvers' outlines and centermarks in the flat view (SM20.3).
         Key("Escape"),
         Click(ui("panel-sheet-metal")),
-        Hover(ui_at("smt-flat", 0.732, 0.927)),
+        Hover(flat(141.4, -67.4)),
         Wait(3),
         Screenshot("09-flat-view-with-louvers"),
         // The Form's eye hides its sketch (the outlines) on the flat view, as Onshape's
@@ -93,7 +93,7 @@ Scenario(
         Hover(ui("feature-form-1")),
         Wait(10),
         Click(ui("feature-form-1-visibility")),
-        Hover(ui_at("smt-flat", 0.732, 0.927)),
+        Hover(flat(141.4, -67.4)),
         Wait(3),
         Screenshot("10-form-hidden-flat-without-outlines"),
     ],
