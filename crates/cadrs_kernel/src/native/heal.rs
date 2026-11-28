@@ -1131,131 +1131,6 @@ pub fn count_indirect(b: &Body) -> usize {
     b.faces.iter().filter(|f| indirect(&f.surf)).count()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::native::NativeKernel;
-    use crate::native::topo::CheckLevel;
-
-    fn body_of(k: &NativeKernel, s: crate::native::draw::Shape) -> Body {
-        match s {
-            crate::native::draw::Shape::Body(id) => (**k.get(id).unwrap()).clone(),
-            _ => unreachable!(),
-        }
-    }
-
-    fn valid(b: &Body) {
-        let e = b.check_with(CheckLevel::Full);
-        assert!(e.is_empty(), "{e:?}");
-    }
-
-    fn volume(b: &Body) -> f64 {
-        crate::native::mass::body_volume(b)
-    }
-
-    /// A cylinder (a whole turn) split by angle, split closed, made revolution and B-spline:
-    /// valid every time, the same volume, the faces as expected.
-    #[test]
-    fn upgrades_of_a_cylinder() {
-        let mut k = NativeKernel::new();
-        let s = k.pcylinder(2.0, 5.0).unwrap();
-        let b = body_of(&k, s);
-        let v0 = volume(&b);
-        valid(&b);
-        let ncurved = |b: &Body| {
-            b.faces
-                .iter()
-                .filter(|f| !matches!(f.surf, Surface::Plane { .. }))
-                .count()
-        };
-        for (op, curved) in [
-            (
-                HealOp::SplitAngle {
-                    max_angle: 95f64.to_radians(),
-                },
-                4,
-            ),
-            (HealOp::SplitClosed, 2),
-            (HealOp::ToRevolution, 1),
-            (HealOp::ToBSpline, 1),
-        ] {
-            let h = heal(&b, &[op]).unwrap();
-            valid(&h.body);
-            assert_eq!(ncurved(&h.body), curved, "{op:?}");
-            assert!(
-                (volume(&h.body) - v0).abs() < 1e-6 * v0,
-                "{op:?}: {} vs {v0}",
-                volume(&h.body)
-            );
-            assert_eq!(h.from.len(), h.body.faces.len());
-        }
-    }
-
-    /// A sphere split by angle and closed: the poles' edges split with it.
-    #[test]
-    fn upgrades_of_a_sphere() {
-        let mut k = NativeKernel::new();
-        let s = k.psphere(3.0).unwrap();
-        let b = body_of(&k, s);
-        let v0 = volume(&b);
-        for op in [
-            HealOp::SplitAngle { max_angle: 1.0 },
-            HealOp::SplitClosed,
-            HealOp::ToBSpline,
-        ] {
-            let h = heal(&b, &[op]).unwrap();
-            valid(&h.body);
-            assert!(
-                (volume(&h.body) - v0).abs() < 1e-6 * v0,
-                "{op:?}: {} vs {v0}",
-                volume(&h.body)
-            );
-        }
-    }
-
-    /// A box mirrored (its frames left-handed) made direct: no indirect faces left, the body
-    /// unchanged in volume and valid.
-    #[test]
-    fn direct_faces_of_a_mirrored_box() {
-        let mut k = NativeKernel::new();
-        let s = k.pcylinder(1.0, 2.0).unwrap();
-        let m = Affine {
-            m: nalgebra::Matrix3::from_diagonal(&V3::new(1.0, -1.0, 1.0)),
-            t: V3::zeros(),
-        };
-        let b = body_of(&k, s).transformed(&m);
-        assert!(count_indirect(&b) > 0);
-        valid(&b);
-        let h = heal(&b, &[HealOp::DirectFaces]).unwrap();
-        assert_eq!(count_indirect(&h.body), 0);
-        valid(&h.body);
-        assert!((volume(&h.body) - volume(&b)).abs() < 1e-9);
-    }
-
-    /// Fix and the tolerance steps leave a sound body as it is (in volume and validity).
-    #[test]
-    fn fix_keeps_a_sound_body() {
-        let mut k = NativeKernel::new();
-        let s = k.pcylinder(2.0, 5.0).unwrap();
-        let b = body_of(&k, s);
-        let h = heal(
-            &b,
-            &[
-                HealOp::Fix {
-                    precision: 1e-3,
-                    max_tolerance: 5e-3,
-                },
-                HealOp::SameParameter { tolerance: 1e-3 },
-                HealOp::UpdateTolerance,
-            ],
-        )
-        .unwrap();
-        valid(&h.body);
-        assert_eq!(h.body.faces.len(), b.faces.len());
-        assert!((volume(&h.body) - volume(&b)).abs() < 1e-9);
-    }
-}
-
 /// Edges a file gives as B-splines between two analytic faces, put on the two surfaces' own
 /// intersection where that follows the file's curve. Parasolid writes its intersection curves
 /// to STEP as cubic B-splines within its edge tolerance, not on the faces: 5.6 µm off a
@@ -1455,4 +1330,129 @@ pub fn reintersect_spline_edges(b: &mut Body) -> usize {
         }
     }
     n
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::native::NativeKernel;
+    use crate::native::topo::CheckLevel;
+
+    fn body_of(k: &NativeKernel, s: crate::native::draw::Shape) -> Body {
+        match s {
+            crate::native::draw::Shape::Body(id) => (**k.get(id).unwrap()).clone(),
+            _ => unreachable!(),
+        }
+    }
+
+    fn valid(b: &Body) {
+        let e = b.check_with(CheckLevel::Full);
+        assert!(e.is_empty(), "{e:?}");
+    }
+
+    fn volume(b: &Body) -> f64 {
+        crate::native::mass::body_volume(b)
+    }
+
+    /// A cylinder (a whole turn) split by angle, split closed, made revolution and B-spline:
+    /// valid every time, the same volume, the faces as expected.
+    #[test]
+    fn upgrades_of_a_cylinder() {
+        let mut k = NativeKernel::new();
+        let s = k.pcylinder(2.0, 5.0).unwrap();
+        let b = body_of(&k, s);
+        let v0 = volume(&b);
+        valid(&b);
+        let ncurved = |b: &Body| {
+            b.faces
+                .iter()
+                .filter(|f| !matches!(f.surf, Surface::Plane { .. }))
+                .count()
+        };
+        for (op, curved) in [
+            (
+                HealOp::SplitAngle {
+                    max_angle: 95f64.to_radians(),
+                },
+                4,
+            ),
+            (HealOp::SplitClosed, 2),
+            (HealOp::ToRevolution, 1),
+            (HealOp::ToBSpline, 1),
+        ] {
+            let h = heal(&b, &[op]).unwrap();
+            valid(&h.body);
+            assert_eq!(ncurved(&h.body), curved, "{op:?}");
+            assert!(
+                (volume(&h.body) - v0).abs() < 1e-6 * v0,
+                "{op:?}: {} vs {v0}",
+                volume(&h.body)
+            );
+            assert_eq!(h.from.len(), h.body.faces.len());
+        }
+    }
+
+    /// A sphere split by angle and closed: the poles' edges split with it.
+    #[test]
+    fn upgrades_of_a_sphere() {
+        let mut k = NativeKernel::new();
+        let s = k.psphere(3.0).unwrap();
+        let b = body_of(&k, s);
+        let v0 = volume(&b);
+        for op in [
+            HealOp::SplitAngle { max_angle: 1.0 },
+            HealOp::SplitClosed,
+            HealOp::ToBSpline,
+        ] {
+            let h = heal(&b, &[op]).unwrap();
+            valid(&h.body);
+            assert!(
+                (volume(&h.body) - v0).abs() < 1e-6 * v0,
+                "{op:?}: {} vs {v0}",
+                volume(&h.body)
+            );
+        }
+    }
+
+    /// A box mirrored (its frames left-handed) made direct: no indirect faces left, the body
+    /// unchanged in volume and valid.
+    #[test]
+    fn direct_faces_of_a_mirrored_box() {
+        let mut k = NativeKernel::new();
+        let s = k.pcylinder(1.0, 2.0).unwrap();
+        let m = Affine {
+            m: nalgebra::Matrix3::from_diagonal(&V3::new(1.0, -1.0, 1.0)),
+            t: V3::zeros(),
+        };
+        let b = body_of(&k, s).transformed(&m);
+        assert!(count_indirect(&b) > 0);
+        valid(&b);
+        let h = heal(&b, &[HealOp::DirectFaces]).unwrap();
+        assert_eq!(count_indirect(&h.body), 0);
+        valid(&h.body);
+        assert!((volume(&h.body) - volume(&b)).abs() < 1e-9);
+    }
+
+    /// Fix and the tolerance steps leave a sound body as it is (in volume and validity).
+    #[test]
+    fn fix_keeps_a_sound_body() {
+        let mut k = NativeKernel::new();
+        let s = k.pcylinder(2.0, 5.0).unwrap();
+        let b = body_of(&k, s);
+        let h = heal(
+            &b,
+            &[
+                HealOp::Fix {
+                    precision: 1e-3,
+                    max_tolerance: 5e-3,
+                },
+                HealOp::SameParameter { tolerance: 1e-3 },
+                HealOp::UpdateTolerance,
+            ],
+        )
+        .unwrap();
+        valid(&h.body);
+        assert_eq!(h.body.faces.len(), b.faces.len());
+        assert!((volume(&h.body) - volume(&b)).abs() < 1e-9);
+    }
 }
