@@ -105,9 +105,19 @@ pub struct TessParams {
     /// sides only: a triangle whose longest side is on the face's boundary keeps it, as the
     /// boundary is shared with the neighbouring face.
     pub max_aspect: f64,
+    /// Seeded coarsely and refined only where the chord asks ([`crate::TessQuality::Fast`]).
+    pub fast: bool,
 }
 
 impl TessParams {
+    /// The same made `mode`'s way.
+    pub fn with_quality(self, mode: crate::TessQuality) -> Self {
+        Self {
+            fast: mode == crate::TessQuality::Fast,
+            ..self
+        }
+    }
+
     /// Chord deviation and angle, no edge length or aspect limit.
     ///
     /// # Errors
@@ -119,6 +129,7 @@ impl TessParams {
             angle,
             max_edge: 0.0,
             max_aspect: 0.0,
+            fast: false,
         };
         p.validate()?;
         Ok(p)
@@ -186,6 +197,7 @@ impl TessParams {
             },
             max_edge: 0.0,
             max_aspect: 0.0,
+            fast: false,
         }
     }
 
@@ -945,11 +957,15 @@ fn steps_at(dom: &Domain, u: f64, v: f64, span: (f64, f64), defl: f64, ang: f64)
     // than twice the chord needs no step across it, however fast its rulings turn: a ruled
     // sliver 0.01 mm wide along a helical gear's tooth, its rulings swinging round, took a
     // million-point grid (the twist's step 6·10⁻⁴ across, rows 0.005 mm apart along).
+    // A way counts as stepped only where its step is shorter than the face: a way straight to
+    // rounding (a fitted helicoid's rulings, S_vv·n 10⁻¹² and its step 10⁵ across a face 1
+    // wide) has no rows either, and its step stood for a row's length in the twist's, which
+    // came out 10⁻⁶: a grid at its limit and the refinement minutes over it.
     let cm = d[4].dot(&nn).abs();
     let (lu, lv) = (d[1].norm(), d[2].norm());
     let narrow = |l: f64, w: f64| l * w <= 2.0 * defl;
     if cm > 1e-9 * lu * lv && lu > tol::DEGENERATE && lv > tol::DEGENERATE {
-        match (su.is_finite(), sv.is_finite()) {
+        match (su < span.0, sv < span.1) {
             (true, false) if narrow(lv, span.1) => {}
             (false, true) if narrow(lu, span.0) => {}
             (true, false) => sv = 4.0 * defl / (cm * su),
@@ -961,8 +977,24 @@ fn steps_at(dom: &Domain, u: f64, v: f64, span: (f64, f64), defl: f64, ang: f64)
             (true, true) => {}
         }
     }
+    // No step shorter on the face than half the chord, each way: a chord that short is within
+    // the chord however the surface bends across it. Where a side of the face collapses (a
+    // blend run out to a point, a pole), the surface moves next to nothing a unit of the
+    // parameter there and its bend per unit of it is huge: the step it asks is 10⁻⁵ of the
+    // range and nothing on the face (a face blend's sheet took a million-point grid, 23 s).
+    if lu > tol::DEGENERATE {
+        su = su.max(0.5 * defl / lu);
+    }
+    if lv > tol::DEGENERATE {
+        sv = sv.max(0.5 * defl / lv);
+    }
+    let _ = span;
     (su, sv)
 }
+
+/// The most grid lines a [`crate::TessQuality::Fast`] mesh seeds a face with each way
+/// ([`seed_grid`]).
+const SEED_LINES: usize = 128;
 
 /// The most lines a face's grid has each way (its intervals: one more than its lines). (Enough
 /// for a ball 5 m across meshed to a hundredth of a millimetre, about 1 600 lines round; the
@@ -1124,6 +1156,18 @@ fn seed_grid(
     });
     if us.is_empty() && vs.is_empty() {
         return grid;
+    }
+    // Fast: no more than [`SEED_LINES`] lines each way. A line runs the whole face, so the
+    // lines a tight bend asks for in one place (a face blend's sheet running out to a point, 7
+    // by 71 mm) fill the rest of it too: 258 000 points and 3.7 s on screen. The refinement
+    // after splits only the triangles that miss the chord, where they are.
+    if p.fast {
+        if us.len() > SEED_LINES {
+            us = uniform(ubox.0, ubox.1, SEED_LINES);
+        }
+        if vs.len() > SEED_LINES {
+            vs = uniform(vbox.0, vbox.1, SEED_LINES);
+        }
     }
     let (wu, wv) = ((ubox.1 - ubox.0) * mu, (vbox.1 - vbox.0) * mv);
     // A face narrower one way than the chord takes no lines across that way: a chord across
@@ -2538,7 +2582,13 @@ fn split_shared_sides(
 fn face_mesh_key(body: &Body, f: &Face, es: &[(Vec<f64>, Vec<P3>)], p: &TessParams) -> u128 {
     use std::hash::Hasher;
     let mut h = super::fingerprint::Key128::new();
-    h.f64s(&[p.chord, p.angle, p.max_edge, p.max_aspect]);
+    h.f64s(&[
+        p.chord,
+        p.angle,
+        p.max_edge,
+        p.max_aspect,
+        f64::from(u8::from(p.fast)),
+    ]);
     h.surface(&f.surf);
     h.write_u8(f.sense as u8);
     let mut first: HashMap<usize, usize> = HashMap::default();
@@ -2592,7 +2642,8 @@ impl MeshCache {
             + m.uvs.len() * size_of::<P2>()
             + m.indices.len() * size_of::<[u32; 3]>();
         if self.new_bytes + bytes > Self::KEPT {
-            self.old = std::mem::take(&mut self.new);
+            let new = std::mem::take(&mut self.new);
+            super::par::discard(std::mem::replace(&mut self.old, new));
             self.new_bytes = 0;
         }
         self.new_bytes += bytes;
@@ -2602,7 +2653,13 @@ impl MeshCache {
 
 fn mesh_cache() -> std::sync::MutexGuard<'static, MeshCache> {
     static CACHE: std::sync::LazyLock<std::sync::Mutex<MeshCache>> =
-        std::sync::LazyLock::new(Default::default);
+        std::sync::LazyLock::new(|| {
+            // (Emptied by [`crate::native::clear_caches`].)
+            super::par::kept_cache(|| {
+                *CACHE.lock().unwrap_or_else(|e| e.into_inner()) = Default::default();
+            });
+            Default::default()
+        });
     CACHE.lock().unwrap_or_else(|e| e.into_inner())
 }
 

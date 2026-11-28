@@ -219,7 +219,9 @@ fn cross_hole_fillet() {
 /// moves it should explain why; last moved, by up to 1e-4, when blend strips were fitted to
 /// 1e-6 of the part's size, not 1e-5: at w 0.5 the fits to 1e-7, 1e-8 and 1e-9 take off
 /// 39.00406, 39.00404 and 39.00404 at fillet 1, so the volume now stands 6.6e-4 from where the
-/// fit converges, not 3.3e-3); w²/2 of rim at 0.5 puts the rim at 312 mm at fillet 1 and 293
+/// fit converges, not 3.3e-3; then by 4.6e-4 at fillet 1 and 5e-5 at 4, every width alike, when
+/// a sphere face's volume was integrated along its edges' own arcs, not their fitted p-curves:
+/// the input's volume, not the chamfers'); w²/2 of rim at 0.5 puts the rim at 312 mm at fillet 1 and 293
 /// at fillet 4, two loops round the opening less its rounds' corners.
 fn shell_opening_chamfer(data: &[u8], edges: &[u64], want: [f64; 4]) {
     let mut k = NativeKernel::new();
@@ -258,10 +260,10 @@ fn shell_opening_chamfer_fillet1() {
             60, 70, 71, 78, 100, 111, 128, 130, 132, 134, 136,
         ],
         [
-            39.003378820627404,
-            156.55710586599162,
-            356.89158323180163,
-            648.1800024108015,
+            39.003799773490755,
+            156.557592238707,
+            356.89204396142304,
+            648.1805115334282,
         ],
     );
 }
@@ -278,10 +280,10 @@ fn shell_opening_chamfer_fillet4() {
             60, 70, 71, 99, 110, 127, 129, 134, 136, 138,
         ],
         [
-            36.63185666299978,
-            147.1030018206293,
-            334.91504055220867,
-            607.2608593208934,
+            36.63186953021068,
+            147.10300699868822,
+            334.91508792310196,
+            607.2609417868298,
         ],
     );
 }

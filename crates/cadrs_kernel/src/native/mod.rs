@@ -157,6 +157,7 @@ pub mod distance;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod distance;
+mod distance_mesh;
 #[cfg(feature = "testkit")]
 pub mod edge_bop;
 #[cfg(not(feature = "testkit"))]
@@ -207,6 +208,7 @@ pub mod fillet_geom;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod fillet_geom;
+pub(crate) mod fillet_prism;
 #[cfg(feature = "testkit")]
 pub mod fingerprint;
 #[cfg(not(feature = "testkit"))]
@@ -319,6 +321,7 @@ pub mod recognize;
 #[cfg(not(feature = "testkit"))]
 #[allow(dead_code, reason = "items only the test kit uses")]
 pub(crate) mod recognize;
+pub(crate) mod region2;
 pub(crate) mod rim_blend;
 #[cfg(feature = "testkit")]
 pub mod silhouette;
@@ -461,3 +464,5 @@ pub use nurbs::{NurbsCurve, NurbsSurface};
 pub use surface::{D2, Surface};
 pub use tess::keep_meshes;
 pub use topo::{Body, BodyBuilder, CheckLevel, Coedge, Edge, Face, Shell, Solid, Vertex, Wire};
+
+pub use par::{clear_caches, run_on_this_thread};

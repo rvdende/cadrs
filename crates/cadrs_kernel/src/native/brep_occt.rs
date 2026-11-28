@@ -570,6 +570,7 @@ pub(crate) fn spline_surface(
     }
     let kv = rows[0].knots.clone();
     Ok(NurbsSurface {
+        screw: None,
         du,
         dv,
         ku,

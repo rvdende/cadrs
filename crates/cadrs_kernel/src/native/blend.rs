@@ -49,7 +49,25 @@ impl Tracked {
 
     /// Combines with a tool whose faces carry `tool_src`.
     pub fn apply(&self, tool: &Body, tool_src: &[Vec<FaceSrc>], op: BoolOp) -> Result<Tracked> {
-        let r: BoolOut = match boolean_bodies_flush(&self.body, tool, op) {
+        self.apply_joined(tool, tool_src, op).map(|(t, _)| t)
+    }
+
+    /// [`Self::apply`], and whether the tool was a cavity joined to the body rather than cut
+    /// ([`super::boolean::flush_cavity`]): the result's volume is then the body's less the
+    /// tool's exactly.
+    pub fn apply_joined(
+        &self,
+        tool: &Body,
+        tool_src: &[Vec<FaceSrc>],
+        op: BoolOp,
+    ) -> Result<(Tracked, bool)> {
+        // (A cavity flush with a face of a convex body, open through it: joined, not cut.)
+        let flush = (op == BoolOp::Subtract)
+            .then(|| super::boolean::flush_cavity(&self.body, tool))
+            .flatten();
+        let joined = flush.is_some();
+        let r: BoolOut = match flush.map_or_else(|| boolean_bodies_flush(&self.body, tool, op), Ok)
+        {
             Ok(r) => r,
             Err(e) => {
                 super::kernel::dump("tracked-target", &self.body, &format!("{op:?}"));
@@ -73,7 +91,7 @@ impl Tracked {
                 out
             })
             .collect();
-        Ok(Tracked { body: r.body, src })
+        Ok((Tracked { body: r.body, src }, joined))
     }
 
     /// With no more solids than the input had (`n`): the largest kept. A blend never splits a
@@ -2882,17 +2900,21 @@ pub fn fillet(
     }) {
         // The result's edges merge where the trimming split them for nothing (as every blend's
         // do): it must stay valid.
-        let local =
-            super::fillet::fillet_edges_laws(&b, body, &laws, false).and_then(|(out, src)| {
-                // (The local result's edges are merged and its tolerances fitted already.)
-                match local_problem(&b, &out) {
-                    Some(e) => Err(KernelError::InvalidResult {
-                        op: "fillet",
-                        why: format!("the local fillet isn't valid: {e}"),
-                    }),
-                    None => Ok((out, src)),
-                }
-            });
+        // (Its input's volume as the caller measured it, for the closed forms' checks.)
+        let known = k.known_volume(body);
+        let local = super::mass::with_known_volume(&b, known, || {
+            super::fillet::fillet_edges_laws(&b, body, &laws, false)
+        })
+        .and_then(|(out, src)| {
+            // (The local result's edges are merged and its tolerances fitted already.)
+            match local_problem(&b, &out) {
+                Some(e) => Err(KernelError::InvalidResult {
+                    op: "fillet",
+                    why: format!("the local fillet isn't valid: {e}"),
+                }),
+                None => Ok((out, src)),
+            }
+        });
         match local {
             Ok((out, src)) => {
                 let res = Tracked { body: out, src }.into_result(k, body);
@@ -2910,6 +2932,19 @@ pub fn fillet(
                 }
                 local_error = Some(e);
             }
+        }
+    }
+    // A prism's upright edges with a conic section of a setback: built directly
+    // ([`super::fillet_prism::prism_conic_uprights`]), each corner of the section a conic.
+    if let (FilletSize::Setback(sb), FilletProfile::Conic { rho }) = (spec.size, spec.profile) {
+        let es: Vec<usize> = all.iter().map(|e| e.0 as usize).collect();
+        if let Some((out, src)) = super::fillet_prism::prism_conic_uprights(&b, body, &es, sb, rho)
+        {
+            let res = Tracked { body: out, src }.into_result(k, body);
+            if !spec.allow_overflow {
+                check_overflow(k, body, &all, &res)?;
+            }
+            return Ok(res);
         }
     }
     // (A failure of the tool names the local fillet's too: the stage that gave up first.)
@@ -3419,6 +3454,242 @@ fn chain_sides(b: &Body, edges: &[EdgeId], opts: &ChamferOpts) -> ChamferOpts {
         flipped,
         ..opts.clone()
     }
+}
+
+/// Each of `edges`' distances on its two faces (in [`edge_sides`]' order), as [`chamfer`] puts
+/// them for `opts`, measured along the faces. None for an angle's chamfer.
+pub(crate) fn chamfer_distances(
+    b: &Body,
+    edges: &[EdgeId],
+    opts: &ChamferOpts,
+) -> Option<Vec<(usize, [f64; 2])>> {
+    let (d1, d2) = match opts.spec {
+        ChamferSpec::EqualDistance(d) => {
+            return Some(edges.iter().map(|e| (e.0 as usize, [d, d])).collect());
+        }
+        ChamferSpec::TwoDistances(a, c) => (a, c),
+        ChamferSpec::DistanceAngle { .. } => return None,
+    };
+    let opts = first_on_named(b, edges, chain_sides(b, edges, opts));
+    Some(
+        edges
+            .iter()
+            .map(|&e| {
+                let first = usize::from(opts.flip != opts.flipped.contains(&e));
+                let mut d = [d2, d2];
+                d[first] = d1;
+                (e.0 as usize, d)
+            })
+            .collect(),
+    )
+}
+
+/// Face `fi` of `out`, a B-spline strip, with each of its edges that runs along its iso-line
+/// at either end of its range in u (both its ends on it, within a millionth of the range) made
+/// that iso-line exactly: its curve the strip's iso curve, its p-curve on the strip the line
+/// u = const, and on its other face the iso curve's mapped there.
+fn iso_ends(out: &mut Body, fi: usize) {
+    let Surface::Nurbs(n) = &out.faces[fi].surf else {
+        return;
+    };
+    let (du, dv) = (n.du, n.dv);
+    let (u0, u1) = (n.ku[du], n.ku[n.ku.len() - du - 1]);
+    let (v0, v1) = (n.kv[dv], n.kv[n.kv.len() - dv - 1]);
+    let span = (u1 - u0).abs().max(tol::TINY);
+    let surf = out.faces[fi].surf.clone();
+    let mut todo: Vec<(usize, f64)> = Vec::new();
+    for c in out.faces[fi].loops.iter().flatten() {
+        let e = &out.edges[c.edge];
+        let (ta, tb) = super::topo::co_range(e, c.fwd);
+        let (pa, pb) = (c.pc.point(ta), c.pc.point(tb));
+        for ub in [u0, u1] {
+            if (pa.x - ub).abs() <= 1e-6 * span && (pb.x - ub).abs() <= 1e-6 * span {
+                todo.push((c.edge, ub));
+            }
+        }
+    }
+    for (ei, ub) in todo {
+        let Some(iso) = surf.iso_u(ub) else {
+            continue;
+        };
+        let e = out.edges[ei].clone();
+        let (p0, p1) = (out.verts[e.v[0]].p, out.verts[e.v[1]].p);
+        let (s0, s1) = (iso.closest(&p0, v0, v1), iso.closest(&p1, v0, v1));
+        let size = (p1 - p0).norm().max(tol::POINT);
+        if (iso.point(s0) - p0).norm() > 1e-7 * size
+            || (iso.point(s1) - p1).norm() > 1e-7 * size
+            || (s1 - s0).abs() <= tol::TINY
+        {
+            continue;
+        }
+        // (Run as the iso-line runs: the edge's ends swapped, and its uses turned, where it ran
+        // the other way.)
+        let swapped = s1 < s0;
+        let edge = &mut out.edges[ei];
+        edge.curve = iso.clone();
+        edge.t = if swapped { [s1, s0] } else { [s0, s1] };
+        if swapped {
+            edge.v = [e.v[1], e.v[0]];
+        }
+        let t = edge.t;
+        for (gi, f) in out.faces.iter_mut().enumerate() {
+            let fsurf = f.surf.clone();
+            for c in f.loops.iter_mut().flatten() {
+                if c.edge != ei {
+                    continue;
+                }
+                if swapped {
+                    c.fwd = !c.fwd;
+                }
+                c.pc = if gi == fi {
+                    Curve::Line {
+                        o: P3::new(ub, 0.0, 0.0),
+                        d: V3::new(0.0, 1.0, 0.0),
+                    }
+                } else {
+                    super::pcurve::pcurve(&fsurf, &iso, t[0], t[1], None)
+                };
+            }
+        }
+    }
+}
+
+/// [`crate::Kernel::chamfer_variable`]: each law's distances along its edge, at each of its
+/// laws' points (and between, where the offsets' ratio changes), turned into the offsets from
+/// its two faces of the ball whose contacts lie those distances off the edge
+/// ([`super::fillet::chamfer_offsets`]: closed in form where the faces run straight across the
+/// edge and meet at one angle all along it), and the chamfer through those contacts made by
+/// local trimming ([`super::fillet::chamfer_edges_offsets_along`]).
+pub fn chamfer_variable(
+    k: &mut NativeKernel,
+    body: BodyId,
+    laws: &[crate::ChamferLaw],
+) -> Result<OpResult> {
+    let b = std::sync::Arc::clone(k.get(body)?);
+    if laws.is_empty() {
+        return Err(KernelError::InvalidParameter(
+            "Select edges to chamfer".into(),
+        ));
+    }
+    let bad = |why: &str| KernelError::InvalidParameter(why.to_string());
+    // The law's distance at fraction t, linear between its points (constant past its ends).
+    let at = |law: &[(f64, f64)], t: f64| -> Option<f64> {
+        let mut pts: Vec<(f64, f64)> = law.to_vec();
+        pts.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let first = *pts.first()?;
+        let last = *pts.last()?;
+        if t <= first.0 {
+            return Some(first.1);
+        }
+        if t >= last.0 {
+            return Some(last.1);
+        }
+        pts.windows(2)
+            .find(|w| t >= w[0].0 && t <= w[1].0)
+            .map(|w| {
+                let span = w[1].0 - w[0].0;
+                if span <= 0.0 {
+                    w[1].1
+                } else {
+                    w[0].1 + (w[1].1 - w[0].1) * (t - w[0].0) / span
+                }
+            })
+    };
+    let mut offsets: Vec<super::fillet::OffsetsAlong> = Vec::new();
+    for law in laws {
+        let [e] = real_edges(&b, &[law.edge])?[..] else {
+            return Err(bad("A chamfer's edge isn't one of the body's"));
+        };
+        let ei = e.0 as usize;
+        if law.first.is_empty()
+            || law.second.is_empty()
+            || law
+                .first
+                .iter()
+                .chain(&law.second)
+                .any(|&(t, d)| !(t.is_finite() && (-1e-12..=1.0 + 1e-12).contains(&t) && d > 0.0))
+        {
+            return Err(bad(
+                "A variable chamfer's distances must be positive, at fractions of its edge",
+            ));
+        }
+        let [(f0, _), (f1, _)] = edge_sides(&b, ei)?;
+        // Which side the first distances are on.
+        let first_side = match law.face {
+            None => 0,
+            Some(f) => {
+                let fi = f.0 as usize;
+                if fi == f0 {
+                    0
+                } else if fi == f1 {
+                    1
+                } else {
+                    return Err(bad("A variable chamfer's face isn't beside its edge"));
+                }
+            }
+        };
+        // The stations: every point of either law, and the edge's ends; between them where the
+        // offsets' ratio isn't constant, enough more that its linear interpolation holds.
+        let mut ts: Vec<f64> = law
+            .first
+            .iter()
+            .chain(&law.second)
+            .map(|p| p.0.clamp(0.0, 1.0))
+            .chain([0.0, 1.0])
+            .collect();
+        ts.sort_by(f64::total_cmp);
+        ts.dedup_by(|a, b| (*a - *b).abs() <= 1e-12);
+        let dist = |t: f64| -> Option<[f64; 2]> {
+            let (a, c) = (at(&law.first, t)?, at(&law.second, t)?);
+            Some(if first_side == 0 { [a, c] } else { [c, a] })
+        };
+        let offs = |t: f64| -> Result<[f64; 2]> {
+            let d = dist(t).ok_or_else(|| bad("A variable chamfer's law is empty"))?;
+            super::fillet::chamfer_offsets(&b, ei, d).ok_or(KernelError::Unsupported(
+                "a variable chamfer on an edge whose faces don't meet at one angle along it",
+            ))
+        };
+        if !super::fillet::straight_across(&b, ei) {
+            return Err(KernelError::Unsupported(
+                "a variable chamfer on an edge whose faces curve across it",
+            ));
+        }
+        let mut along: Vec<(f64, [f64; 2])> = Vec::new();
+        for w in ts.windows(2) {
+            let (k0, k1) = (offs(w[0])?, offs(w[1])?);
+            let ratio = |k: [f64; 2]| k[1] / k[0];
+            // (The ratio's change between the two: where one offset holds, linear exactly.)
+            let steady = (k0[0] - k1[0]).abs() <= 1e-12 * (1.0 + k0[0])
+                || (k0[1] - k1[1]).abs() <= 1e-12 * (1.0 + k0[1])
+                || (ratio(k0) - ratio(k1)).abs() <= 1e-12 * (1.0 + ratio(k0));
+            let n = if steady { 1 } else { 16 };
+            for i in 0..n {
+                let t = w[0] + (w[1] - w[0]) * i as f64 / n as f64;
+                along.push((t, offs(t)?));
+            }
+        }
+        along.push((1.0, offs(1.0)?));
+        offsets.push((ei, along));
+    }
+    let (mut out, src) = super::fillet::chamfer_edges_offsets_along(&b, body, &offsets)?;
+    // The chamfer's ends where it stops at a face square to its edge: its section there, the
+    // strip's iso-line at the end of its run along the edge, exactly (found as a crossing and
+    // fitted, it is a curve off the strip by thousandths).
+    for fi in 0..out.faces.len() {
+        if src
+            .get(fi)
+            .is_some_and(|s| s.iter().any(|x| matches!(x, FaceSrc::New(_))))
+        {
+            iso_ends(&mut out, fi);
+        }
+    }
+    if let Some(e) = local_problem(&b, &out) {
+        return Err(KernelError::InvalidResult {
+            op: "chamfer",
+            why: format!("the variable chamfer isn't valid: {e}"),
+        });
+    }
+    Ok(Tracked { body: out, src }.into_result(k, body))
 }
 
 /// `opts` (its sides explicit: [`chain_sides`]) with each edge that has one of its two faces

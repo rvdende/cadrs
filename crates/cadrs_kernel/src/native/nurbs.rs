@@ -53,6 +53,27 @@ pub fn find_span(n: usize, p: usize, u: f64, knots: &[f64]) -> usize {
 
 /// The non-zero basis functions and their derivatives up to `d` at `u` (A2.3):
 /// `ders[k][j]` is the k-th derivative of N_{span−p+j, p}.
+/// The `p + 1` basis functions' `d`-th derivatives at `u` in `span`, for a row of an
+/// interpolation's system ([`basis_row_fixed`] without allocating where it can).
+fn basis_row(span: usize, u: f64, p: usize, d: usize, knots: &[f64]) -> Vec<f64> {
+    basis_ders(span, u, p, d, knots).swap_remove(d)
+}
+
+/// [`basis_row`] into an array of [`MAXP`] + 1 (None past that degree, or for a second
+/// derivative).
+fn basis_row_fixed(
+    span: usize,
+    u: f64,
+    p: usize,
+    d: usize,
+    knots: &[f64],
+) -> Option<[f64; MAXP + 1]> {
+    (p <= MAXP && d <= 1).then(|| {
+        let b = basis1(span, u, p, d == 1, knots);
+        if d == 1 { b.d } else { b.v }
+    })
+}
+
 pub fn basis_ders(span: usize, u: f64, p: usize, d: usize, knots: &[f64]) -> Vec<Vec<f64>> {
     let mut ndu = vec![vec![0.0; p + 1]; p + 1];
     let mut left = vec![0.0; p + 1];
@@ -677,24 +698,32 @@ impl NurbsCurve {
         let knots: Vec<f64> = (0..ncp + p + 1)
             .map(|i| t(i as isize - p as isize))
             .collect();
-        let mut a = DMatrix::<f64>::zeros(m, m);
-        for k in 0..m {
-            let span = find_span(ncp - 1, p, params[k], &knots);
-            let nb = basis_ders(span, params[k], p, 0, &knots);
-            for j in 0..=p {
-                a[(k, (span - p + j) % m)] += nb[0][j];
+        // Row k: the basis functions at params[k], at their columns before wrapping.
+        let mut rows: Vec<Vec<(usize, f64)>> = Vec::with_capacity(m);
+        for &u in &params[..m] {
+            let span = find_span(ncp - 1, p, u, &knots);
+            let nb = basis_ders(span, u, p, 0, &knots);
+            rows.push((0..=p).map(|j| (span - p + j, nb[0][j])).collect());
+        }
+        let rhs: [Vec<f64>; 3] = [0, 1, 2].map(|c| pts.iter().map(|q| q[c]).collect());
+        let sol = match cyclic_band_solve(m, &rows, &rhs) {
+            Some(x) => x,
+            None => {
+                let mut a = DMatrix::<f64>::zeros(m, m);
+                for (k, row) in rows.iter().enumerate() {
+                    for &(c, v) in row {
+                        a[(k, c % m)] += v;
+                    }
+                }
+                let lu = a.lu();
+                let mut out: [Vec<f64>; 3] = Default::default();
+                for (c, o) in out.iter_mut().enumerate() {
+                    let b = DVector::from_column_slice(&rhs[c]);
+                    *o = lu.solve(&b)?.iter().copied().collect();
+                }
+                out
             }
-        }
-        let lu = a.lu();
-        let mut sol = [
-            DVector::<f64>::zeros(m),
-            DVector::<f64>::zeros(m),
-            DVector::<f64>::zeros(m),
-        ];
-        for (c, out) in sol.iter_mut().enumerate() {
-            let b = DVector::from_iterator(m, pts.iter().map(|q| q[c]));
-            *out = lu.solve(&b)?;
-        }
+        };
         let cps: Vec<H> = (0..ncp)
             .map(|i| H::new(sol[0][i % m], sol[1][i % m], sol[2][i % m], 1.0))
             .collect();
@@ -821,9 +850,17 @@ impl NurbsCurve {
         let mut outside = false;
         let mut put = |row: usize, u: f64, d: usize| {
             let span = find_span(n - 1, p, u, &knots);
-            let nd = basis_ders(span, u, p, d, &knots);
-            for (j, b) in nd[d].iter().enumerate().take(p + 1) {
-                outside |= !band.set(row, span - p + j, *b);
+            let fixed = basis_row_fixed(span, u, p, d, &knots);
+            let slow;
+            let row_of: &[f64] = match &fixed {
+                Some(f) => &f[..=p],
+                None => {
+                    slow = basis_row(span, u, p, d, &knots);
+                    &slow
+                }
+            };
+            for (j, &b) in row_of.iter().enumerate() {
+                outside |= !band.set(row, span - p + j, b);
             }
         };
         // (The rows in that order too: a point, the first one's derivative after it, the last
@@ -910,12 +947,20 @@ impl NurbsCurve {
         let mut row = 0;
         let mut put = |a: &mut DMatrix<f64>, row: usize, u: f64, d: usize| {
             let span = find_span(n - 1, p, u, &knots);
-            let nd = basis_ders(span, u, p, d, &knots);
-            for j in 0..=p {
+            let fixed = basis_row_fixed(span, u, p, d, &knots);
+            let slow;
+            let row_of: &[f64] = match &fixed {
+                Some(f) => &f[..=p],
+                None => {
+                    slow = basis_row(span, u, p, d, &knots);
+                    &slow
+                }
+            };
+            for (j, &b) in row_of.iter().enumerate() {
                 if banded {
-                    outside |= !band.set(row, span - p + j, nd[d][j]);
+                    outside |= !band.set(row, span - p + j, b);
                 } else {
-                    a[(row, span - p + j)] = nd[d][j];
+                    a[(row, span - p + j)] = b;
                 }
             }
         };
@@ -1564,6 +1609,45 @@ pub struct NurbsSurface {
     pub kv: Vec<f64>,
     /// `cps[i][j]`: i along u, j along v.
     pub cps: Vec<Vec<H>>,
+    /// The steady screw that swept it, where one did ([`ScrewSheet`]): kept for the
+    /// intersections it gives in closed form. None for any other surface, and dropped by
+    /// anything that changes its parameters or shape but a similarity.
+    pub screw: Option<ScrewSheet>,
+}
+
+/// How a B-spline surface was swept by a steady screw: `v` the turn (`rate` radians a unit of
+/// it) about the axis through `o` along the unit `z` (right-handed), rising `lift` along `z` a
+/// radian, and `u` the swept curve's own parameter. Each curve of constant u is then the screw's path of a point of the
+/// curve, as its sections interpolate it, the same as the rail of that point
+/// ([`crate::native::sweep::Screw`]): so where the surface meets one the screw leaves on itself
+/// (a cylinder about its axis), the meeting is such curves (after springrep's orbits, MIT OR
+/// Apache-2.0, https://github.com/springcraft-ai/springrep).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScrewSheet {
+    pub o: P3,
+    pub z: V3,
+    pub lift: f64,
+    pub rate: f64,
+}
+
+impl ScrewSheet {
+    /// The screw seen after the similarity `m` (its turn the other way under a reflection);
+    /// None for any other map.
+    pub fn transformed(&self, m: &Affine) -> Option<Self> {
+        let g = m.m.transpose() * m.m;
+        let s2 = g[(0, 0)];
+        if !(s2 > 0.0) || (g - nalgebra::Matrix3::identity() * s2).abs().max() > 1e-12 * s2 {
+            return None;
+        }
+        let scale = s2.sqrt();
+        let flip = if m.m.determinant() < 0.0 { -1.0 } else { 1.0 };
+        Some(ScrewSheet {
+            o: m.point(&self.o),
+            z: (m.m * self.z).normalize() * flip,
+            lift: self.lift * scale * flip,
+            rate: self.rate,
+        })
+    }
 }
 
 impl NurbsCurve {
@@ -1598,6 +1682,7 @@ impl NurbsSurface {
         cps: Vec<Vec<H>>,
     ) -> crate::Result<Self> {
         let s = Self {
+            screw: None,
             du,
             dv,
             ku,
@@ -1670,6 +1755,7 @@ impl NurbsSurface {
     pub fn restricted(&self, u: (f64, f64), v: (f64, f64)) -> Self {
         let (ku, kv, cps) = self.cut_net(u, v);
         Self {
+            screw: None,
             du: self.du,
             dv: self.dv,
             ku,
@@ -1989,6 +2075,7 @@ impl NurbsSurface {
     /// The surface moved by `m`.
     pub fn transformed(&self, m: &Affine) -> Self {
         Self {
+            screw: self.screw.and_then(|w| w.transformed(m)),
             du: self.du,
             dv: self.dv,
             ku: self.ku.clone(),
@@ -2038,6 +2125,7 @@ impl NurbsSurface {
         }
         let cps: Vec<Vec<H>> = (0..ncp).map(|i| cols[i].cps.clone()).collect();
         Self {
+            screw: None,
             du: curves[0].degree,
             dv: cols[0].degree,
             ku: curves[0].knots.clone(),
@@ -2472,6 +2560,142 @@ impl IsoV<'_> {
     }
 }
 
+/// The solutions of the cyclic system `A x = b` for each of `rhs`, row k of A holding the
+/// entries `rows[k]` at their columns modulo m (a periodic interpolation's: a band that wraps
+/// round the corners). The columns are turned so the band lies along the diagonal, the band
+/// solved by elimination (O(m·w²)), and the corners put back as a correction of their small
+/// rank (Woodbury). None where a pivot vanishes or the answer isn't finite (a dense solve then).
+fn cyclic_band_solve(
+    m: usize,
+    rows: &[Vec<(usize, f64)>],
+    rhs: &[Vec<f64>; 3],
+) -> Option<[Vec<f64>; 3]> {
+    if m < 8 {
+        return None;
+    }
+    // The band's offsets from the diagonal, before turning: its middle is the turn.
+    let (mut lo, mut hi) = (isize::MAX, isize::MIN);
+    for (k, row) in rows.iter().enumerate() {
+        for &(c, v) in row {
+            if v != 0.0 {
+                let d = c as isize - k as isize;
+                lo = lo.min(d);
+                hi = hi.max(d);
+            }
+        }
+    }
+    if lo > hi {
+        return None;
+    }
+    let shift = (lo + hi).div_euclid(2);
+    let (l, u) = ((shift - lo) as usize, (hi - shift) as usize);
+    if l + u + 1 >= m / 2 {
+        return None;
+    }
+    let w = l + u + 1;
+    // The band (row k, column k − l + i at band[k][i]) and the entries that wrap.
+    let mut band = vec![vec![0.0; w]; m];
+    let mut wrap: Vec<(usize, usize, f64)> = Vec::new();
+    for (k, row) in rows.iter().enumerate() {
+        for &(c, v) in row.iter().filter(|e| e.1 != 0.0) {
+            let j = c as isize - shift;
+            let jm = j.rem_euclid(m as isize) as usize;
+            if j >= 0 && (j as usize) < m {
+                band[k][(jm + l) - k] += v;
+            } else {
+                wrap.push((k, jm, v));
+            }
+        }
+    }
+    // Banded LU without pivoting (the band's middle is its largest entry: an interpolation's
+    // matrix is totally positive).
+    for k in 0..m {
+        let piv = band[k][l];
+        if !(piv.abs() > 1e-300) {
+            return None;
+        }
+        for r in k + 1..(k + l + 1).min(m) {
+            // Entry (r, k) is band[r][k + l − r].
+            let f = band[r][k + l - r] / piv;
+            if f == 0.0 {
+                continue;
+            }
+            band[r][k + l - r] = f;
+            for c in k + 1..(k + u + 1).min(m) {
+                let v = band[k][c + l - k];
+                band[r][c + l - r] -= f * v;
+            }
+        }
+    }
+    let solve = |b: &mut [f64]| {
+        for r in 0..m {
+            let mut s = b[r];
+            for k in r.saturating_sub(l)..r {
+                s -= band[r][k + l - r] * b[k];
+            }
+            b[r] = s;
+        }
+        for r in (0..m).rev() {
+            let mut s = b[r];
+            for c in r + 1..(r + u + 1).min(m) {
+                s -= band[r][c + l - r] * b[c];
+            }
+            b[r] = s / band[r][l];
+        }
+    };
+    // The wrapped entries: A = B + Σ e_row · a · e_colᵀ = B + U Vᵀ, one column of U per
+    // distinct wrapped column.
+    let mut cols: Vec<usize> = wrap.iter().map(|w| w.1).collect();
+    cols.sort_unstable();
+    cols.dedup();
+    let r = cols.len();
+    let mut z: Vec<Vec<f64>> = cols
+        .iter()
+        .map(|&c| {
+            let mut uc = vec![0.0; m];
+            for &(k, j, v) in &wrap {
+                if j == c {
+                    uc[k] += v;
+                }
+            }
+            solve(&mut uc);
+            uc
+        })
+        .collect();
+    // (I + Vᵀ Z), r × r.
+    let mut cap = DMatrix::<f64>::identity(r, r);
+    for (i, &ci) in cols.iter().enumerate() {
+        for (j, zj) in z.iter().enumerate() {
+            cap[(i, j)] += zj[ci];
+        }
+    }
+    let lu = cap.lu();
+    let mut out: [Vec<f64>; 3] = Default::default();
+    for (o, b) in out.iter_mut().zip(rhs) {
+        let mut y = b.clone();
+        solve(&mut y);
+        if r > 0 {
+            let vy = DVector::from_iterator(r, cols.iter().map(|&c| y[c]));
+            let wv = lu.solve(&vy)?;
+            for (j, zj) in z.iter_mut().enumerate() {
+                for (yi, zi) in y.iter_mut().zip(zj.iter()) {
+                    *yi -= zi * wv[j];
+                }
+            }
+        }
+        if !y.iter().all(|x| x.is_finite()) {
+            return None;
+        }
+        // Back to the columns before turning: entry j is control point (j + shift) mod m.
+        let mut x = vec![0.0; m];
+        for (j, v) in y.into_iter().enumerate() {
+            x[(j as isize + shift).rem_euclid(m as isize) as usize] = v;
+        }
+        *o = x;
+    }
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2607,6 +2831,7 @@ mod tests {
             })
             .collect();
         let s = NurbsSurface {
+            screw: None,
             du,
             dv,
             ku,
@@ -2796,6 +3021,7 @@ mod tests {
                 k
             };
             let s = NurbsSurface {
+                screw: None,
                 du,
                 dv,
                 ku: knots(nu, du),
@@ -2881,6 +3107,7 @@ mod tests {
                 })
                 .collect();
             let s = NurbsSurface {
+                screw: None,
                 du,
                 dv,
                 ku: clamped(du, &[0.2, 0.55, 0.7]),
@@ -3001,6 +3228,41 @@ mod tests {
         }
     }
 
+    /// Many points (the cyclic band solve, not the dense one), unevenly spaced and of odd
+    /// degrees (an even one has no curve through its knots): the curve passes through each and
+    /// closes.
+    #[test]
+    fn periodic_interpolation_of_many_points_passes_through_them() {
+        for p in [1usize, 3, 5] {
+            let m = 300;
+            let mut params = vec![0.0];
+            for k in 0..m {
+                params.push(params[k] + 1.0 + 0.7 * ((k * 7919 % 13) as f64 / 13.0));
+            }
+            let pts: Vec<P3> = (0..m)
+                .map(|k| {
+                    let a = std::f64::consts::TAU * params[k] / params[m];
+                    P3::new(
+                        a.cos() * (3.0 + (5.0 * a).sin()),
+                        a.sin() * 2.0,
+                        (3.0 * a).cos(),
+                    )
+                })
+                .collect();
+            let c = NurbsCurve::interpolate_periodic(&pts, &params, p).unwrap();
+            for k in 0..m {
+                assert!(
+                    (c.point(params[k]) - pts[k]).norm() < 1e-9,
+                    "degree {p} point {k}"
+                );
+            }
+            assert!(
+                (c.point(params[m]) - pts[0]).norm() < 1e-9,
+                "degree {p} closes"
+            );
+        }
+    }
+
     #[test]
     fn periodic_interpolation_closes_smoothly() {
         let pts = [
@@ -3073,6 +3335,7 @@ mod tests {
             .map(|r| r.iter().map(|p| H::new(p.x, p.y, p.z, 1.0)).collect())
             .collect();
         let s = NurbsSurface {
+            screw: None,
             du: 3,
             dv: 2,
             ku: vec![0.0, 0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0, 1.0],
@@ -3170,6 +3433,7 @@ mod tests {
     #[test]
     fn bilinear_surface_derivatives() {
         let s = NurbsSurface {
+            screw: None,
             du: 1,
             dv: 1,
             ku: vec![0.0, 0.0, 1.0, 1.0],

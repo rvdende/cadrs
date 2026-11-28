@@ -906,7 +906,19 @@ fn point_in_face(f: &WFace, p: &P3, tol: f64) -> InFace {
 
 /// A point inside a face's domain (uv) given its loops as arcs.
 fn interior_point(loops: &[Vec<Arc>], on: Level) -> Option<P2> {
-    interior_points(loops, on).into_iter().next()
+    // (The first of [`interior_points`]: the candidate farthest from the boundary, each one's
+    // clearance measured only as far as it could still beat the best so far.)
+    let polys = arc_polys(loops);
+    let scan = Scan::new(&polys)?;
+    let mut best: Option<(f64, P2)> = None;
+    for q in scan_candidates(loops, &polys, &scan, on) {
+        let floor = best.map_or(f64::NEG_INFINITY, |b| b.0);
+        let d = scan.clearance(&q, floor);
+        if best.is_none_or(|b| d > b.0) {
+            best = Some((d, q));
+        }
+    }
+    best.map(|b| b.1)
 }
 
 /// The p-curve `pc` of `curve` over `t` on the surface `from`, as its p-curve on `to`, where
@@ -1011,6 +1023,18 @@ fn interior_points(loops: &[Vec<Arc>], on: Level) -> Vec<P2> {
     let Some(scan) = Scan::new(&polys) else {
         return Vec::new();
     };
+    let cands = scan_candidates(loops, &polys, &scan, on);
+    let mut cands: Vec<(f64, P2)> = cands
+        .into_iter()
+        .map(|q| (scan.clearance(&q, f64::NEG_INFINITY), q))
+        .collect();
+    cands.sort_by(|a, b| b.0.total_cmp(&a.0));
+    cands.into_iter().map(|(_, p)| p).collect()
+}
+
+/// [`interior_points`]' candidates in scan order: on each scanline, the middle of each inside
+/// interval between the loops' crossings.
+fn scan_candidates(loops: &[Vec<Arc>], polys: &[Vec<P2>], scan: &Scan, on: Level) -> Vec<P2> {
     let mut cands = Vec::new();
     // (The arcs' points are the polygons' own, made once for all the scanlines: a fitted
     // p-curve's 64 points were made again for each of the eleven. One list of crossings too.)
@@ -1018,7 +1042,7 @@ fn interior_points(loops: &[Vec<Arc>], on: Level) -> Vec<P2> {
     for frac in SCAN_FRACTIONS {
         let y = scan.vb.0 + (scan.vb.1 - scan.vb.0) * frac;
         xs.clear();
-        for (l, poly) in loops.iter().zip(&polys) {
+        for (l, poly) in loops.iter().zip(polys) {
             let mut at = 0;
             for a in l {
                 let n = arc_steps(a);
@@ -1050,12 +1074,7 @@ fn interior_points(loops: &[Vec<Arc>], on: Level) -> Vec<P2> {
             k += 2;
         }
     }
-    let mut cands: Vec<(f64, P2)> = cands
-        .into_iter()
-        .map(|q| (scan.clearance(&q, f64::NEG_INFINITY), q))
-        .collect();
-    cands.sort_by(|a, b| b.0.total_cmp(&a.0));
-    cands.into_iter().map(|(_, p)| p).collect()
+    cands
 }
 
 /// The u where arc `a` crosses the height v = `y` between its fractions `s0` and `s1` (its ends
@@ -1314,6 +1333,11 @@ pub fn boolean_bodies_with(a: &Body, b: &Body, op: BoolOp, opts: BoolOptions) ->
 pub(crate) const SMALL_MODEL: f64 = 0.25;
 /// The size (mm) small bodies are scaled to for a boolean.
 pub(crate) const WORKING_SIZE: f64 = 64.0;
+/// Bodies larger than this (mm, as [`SMALL_MODEL`] measures) are scaled down for a boolean, to
+/// [`WORKING_SIZE`] or up to twice it: a part tens of metres across has its tangencies and
+/// coincidences decided by the same absolute tolerances as one of millimetres, a thousand
+/// times tighter for it.
+pub(crate) const LARGE_MODEL: f64 = 1024.0;
 
 /// The ball `a` is (one whole sphere's face and nothing else) with its poles turned onto the
 /// line `other` cuts it about, where they aren't there: the line through the two centres of
@@ -1412,14 +1436,15 @@ fn ball_turned_to(a: &Body, other: &Body, op: BoolOp) -> Option<Body> {
 
 /// [`boolean_bodies_with`] (counted with `CADRS_PROFILE`).
 fn boolean_bodies_counted(a: &Body, b: &Body, op: BoolOp, opts: BoolOptions) -> Result<BoolOut> {
-    // Small bodies are worked on larger: the merge tolerances are absolute ([`tol::POINT`] and
-    // the retries up to a hundred times it), so a part a few microns across would have its
-    // features taken for coincident. Scaled by a power of two, which changes no mantissa, the
+    // Small bodies are worked on larger, and very large ones smaller: the merge tolerances are
+    // absolute ([`tol::POINT`] and the retries up to a hundred times it), so a part a few
+    // microns across would have its features taken for coincident, and one tens of metres
+    // across its tangencies missed. Scaled by a power of two, which changes no mantissa, the
     // boolean runs at an ordinary size and its result is scaled back exactly.
     // (The inputs' boxes, asked for by every stage below, made once.)
     let _boxes = super::topo::keep_boxes(&[a, b]);
     let size = a.bbox().diagonal().max(b.bbox().diagonal());
-    if size > 0.0 && size < SMALL_MODEL {
+    if size > 0.0 && (size < SMALL_MODEL || size > LARGE_MODEL) && size.is_finite() {
         let k = (WORKING_SIZE / size).log2().floor().exp2();
         let grow = Affine {
             m: nalgebra::Matrix3::identity() * k,
@@ -1429,11 +1454,28 @@ fn boolean_bodies_counted(a: &Body, b: &Body, op: BoolOp, opts: BoolOptions) -> 
             m: nalgebra::Matrix3::identity() / k,
             t: V3::zeros(),
         };
-        let mut out =
-            boolean_bodies_counted(&a.transformed(&grow), &b.transformed(&grow), op, opts)?;
-        out.body = out.body.transformed(&shrink);
-        return Ok(out);
+        let scaled = boolean_bodies_counted(&a.transformed(&grow), &b.transformed(&grow), op, opts)
+            .map(|mut out| {
+                out.body = out.body.transformed(&shrink);
+                out
+            });
+        // (A large model's result scaled back is checked, and the boolean done at its own size
+        // where it isn't sound: a shelled part half a metre across came back with an edge off
+        // its vertex.)
+        if size < SMALL_MODEL {
+            return scaled;
+        }
+        if let Ok(out) = scaled
+            && out.body.check().is_empty()
+        {
+            return Ok(out);
+        }
     }
+    boolean_bodies_unscaled(a, b, op, opts)
+}
+
+/// [`boolean_bodies_counted`] at the bodies' own size.
+fn boolean_bodies_unscaled(a: &Body, b: &Body, op: BoolOp, opts: BoolOptions) -> Result<BoolOut> {
     if let Some(r) = apart_set_aside(a, b, op, opts) {
         return r;
     }
@@ -2821,6 +2863,321 @@ pub(crate) fn collapse_slivers(x: &mut Body, lim: f64, moved: &[usize]) -> Vec<u
     keep
 }
 
+/// `a` less a cavity `c` that lies within it but for one plane face flush with one of `a`'s
+/// (a shell's hollow, open through the face it removes): `a`'s faces, the cavity's mouth a new
+/// loop of the face it opens through, and the cavity's other faces turned inside out, joined
+/// along the mouth's edges, with nothing to intersect. Only where `a` is convex (its faces can't
+/// pass through it) and every sampled point of the cavity off that plane is strictly inside it;
+/// None otherwise (the boolean then), or where the result isn't sound.
+pub(crate) fn flush_cavity(a: &Body, c: &Body) -> Option<BoolOut> {
+    if a.solids.len() != 1
+        || c.solids.len() != 1
+        || a.shells.len() != 1
+        || c.shells.len() != 1
+        || !a.shells[0].closed
+        || !c.shells[0].closed
+    {
+        return None;
+    }
+    let outward = |b: &Body, f: usize| match &b.faces[f].surf {
+        Surface::Plane { f: fr } => Some((
+            fr.o,
+            fr.x.cross(&fr.y).normalize() * if b.faces[f].sense { 1.0 } else { -1.0 },
+        )),
+        _ => None,
+    };
+    let size = a.bbox().diagonal().max(tol::POINT);
+    let near = 1e-9 * (size + a.bbox().center().coords.norm());
+    // The one face pair on one plane, facing the same way.
+    let mut pair = None;
+    for fc in 0..c.faces.len() {
+        let Some((oc, nc)) = outward(c, fc) else {
+            continue;
+        };
+        for fa in 0..a.faces.len() {
+            let Some((oa, na)) = outward(a, fa) else {
+                continue;
+            };
+            if (na - nc).norm() <= 1e-12 && (oc - oa).dot(&na).abs() <= near {
+                if pair.is_some() {
+                    return None;
+                }
+                pair = Some((fa, fc, oa, na));
+            }
+        }
+    }
+    let (fa, fc, oa, na) = pair?;
+    if a.faces[fa].loops.len() != 1 || c.faces[fc].loops.len() != 1 {
+        return None;
+    }
+    // `a` convex, and every point of the cavity off the plane strictly inside it.
+    let polys: Vec<Vec<Vec<P2>>> = a
+        .faces
+        .iter()
+        .map(|f| super::classify::face_polygons(a, f))
+        .collect();
+    let cl = super::classify::Classifier::new(a, &polys);
+    if !super::classify::locally_convex(a) {
+        return None;
+    }
+    let tol = 1e-7 * (1.0 + size);
+    let off_plane = |p: &P3| (p - oa).dot(&na).abs() > tol;
+    let inside = |p: &P3| cl.classify(p, tol) == crate::PointClass::Inside;
+    if c.verts.iter().any(|v| off_plane(&v.p) && !inside(&v.p)) {
+        return None;
+    }
+    // A face of a plane, cylinder or cone is made of lines between its edges, so it lies in their
+    // hull, and `a` (convex) holds it where it holds its edges: points along each edge then; any
+    // other face by its loops' sampled points.
+    let ruled = c.faces.iter().all(|f| {
+        matches!(
+            f.surf,
+            Surface::Plane { .. } | Surface::Cylinder { .. } | Surface::Cone { .. }
+        )
+    });
+    if ruled {
+        for e in c.edges.iter().filter(|e| !e.degenerate) {
+            for i in 1..8 {
+                let p = e.point(e.t[0] + (e.t[1] - e.t[0]) * i as f64 / 8.0);
+                if off_plane(&p) && !inside(&p) {
+                    return None;
+                }
+            }
+        }
+    } else {
+        for (fi, f) in c.faces.iter().enumerate() {
+            if fi == fc {
+                continue;
+            }
+            for ring in super::classify::face_polygons(c, f) {
+                for q in ring {
+                    let p = f.surf.eval(q.x, q.y);
+                    if off_plane(&p) && !inside(&p) {
+                        return None;
+                    }
+                }
+            }
+        }
+    }
+    joined_cavity(a, c, &[(fa, fc)], None)
+}
+
+/// `a` with cavity `c` joined to it, each pair's face of `c` flush with its face of `a` (on one
+/// plane, facing the same way) opening the cavity there: `a`'s faces, each mouth (the cavity's
+/// face's loop run the other way) a new loop of its face of `a`, and the cavity's other faces
+/// turned inside out; the cavity's faces traced to `c_face(f)` of the tool where given, else to
+/// its own. None where the result isn't sound.
+fn joined_cavity(
+    a: &Body,
+    c: &Body,
+    pairs: &[(usize, usize)],
+    c_face: Option<&dyn Fn(usize) -> usize>,
+) -> Option<BoolOut> {
+    let mouth_of = |fi: usize| pairs.iter().find(|p| p.1 == fi).map(|p| p.0);
+    // The result: `a`, then the cavity's vertices, edges and faces after them.
+    let mut out = a.clone();
+    let (nv, ne) = (out.verts.len(), out.edges.len());
+    out.verts.extend(c.verts.iter().cloned());
+    for e in &c.edges {
+        let mut e = e.clone();
+        e.v = [e.v[0] + nv, e.v[1] + nv];
+        out.edges.push(e);
+    }
+    let mut from: Vec<Vec<(usize, usize)>> = (0..a.faces.len()).map(|f| vec![(0, f)]).collect();
+    for (fi, f) in c.faces.iter().enumerate() {
+        if mouth_of(fi).is_some() {
+            continue;
+        }
+        let mut f = f.clone();
+        for c in f.loops.iter_mut().flatten() {
+            c.edge += ne;
+        }
+        Body::reverse_face(&mut f);
+        out.faces.push(f);
+        from.push(vec![(1, c_face.map_or(fi, |m| m(fi)))]);
+    }
+    // Each mouth: the cavity's face's loop run the other way, a hole in `a`'s face, its p-curves
+    // on that face's plane.
+    for &(fa, fc) in pairs {
+        if c.faces[fc].loops.len() != 1 {
+            return None;
+        }
+        let mouth: Vec<Coedge> = c.faces[fc].loops[0]
+            .iter()
+            .rev()
+            .map(|co| {
+                let e = &out.edges[co.edge + ne];
+                Coedge {
+                    edge: co.edge + ne,
+                    fwd: !co.fwd,
+                    pc: super::pcurve::pcurve(&out.faces[fa].surf, &e.curve, e.t[0], e.t[1], None),
+                }
+            })
+            .collect();
+        if mouth.is_empty() {
+            return None;
+        }
+        out.faces[fa].loops.push(mouth);
+    }
+    let n = out.faces.len();
+    out.shells = vec![super::topo::Shell {
+        faces: (0..n).collect(),
+        closed: true,
+    }];
+    out.solids = vec![super::topo::Solid { shells: vec![0] }];
+    if !out.check().is_empty() {
+        return None;
+    }
+    Some(BoolOut { body: out, from })
+}
+
+/// Whether two boxes come within `tol` of each other.
+fn boxes_meet(a: &Bbox, b: &Bbox, tol: f64) -> bool {
+    (0..3).all(|k| a.min[k] <= b.max[k] + tol && b.min[k] <= a.max[k] + tol)
+}
+
+/// `a` less `c`, a solid cylinder bored through it: where the only faces of `a` near `c` (by
+/// their boxes) are two planes square to its axis, facing apart across `a`'s material, each
+/// holding the axis's crossing, and `c`'s ends lie beyond both, the cut is the bore between the
+/// two planes joined to `a` as a cavity open at both ([`joined_cavity`]): a hole in each plane,
+/// the cylinder's side between them turned inward, nothing to intersect. (Nothing else of `a`
+/// comes near `c`, so the bore crosses only those planes, its mouths lie within their faces, and
+/// what lies between them is `a`'s, as each plane's face has it behind it.) None otherwise.
+pub(crate) fn through_cut(a: &Body, c: &Body) -> Option<BoolOut> {
+    if a.solids.len() != 1
+        || c.solids.len() != 1
+        || a.shells.len() != 1
+        || c.shells.len() != 1
+        || !a.shells[0].closed
+        || c.faces.len() != 3
+    {
+        return None;
+    }
+    let ci = c
+        .faces
+        .iter()
+        .position(|f| matches!(f.surf, Surface::Cylinder { .. }))?;
+    let Surface::Cylinder { f: fr, r } = &c.faces[ci].surf else {
+        return None;
+    };
+    let r = *r;
+    if super::classify::outward_sign(&c.faces[ci]) != Some(1.0)
+        || c.faces
+            .iter()
+            .enumerate()
+            .any(|(i, f)| i != ci && !matches!(f.surf, Surface::Plane { .. }))
+    {
+        return None;
+    }
+    let (o, z) = (fr.o, fr.z.normalize());
+    let size = a.bbox().diagonal().max(c.bbox().diagonal()).max(tol::POINT);
+    let near = 1e-9 * (size + a.bbox().center().coords.norm());
+    // The faces of `a` near `c`: exactly two planes square to the axis.
+    let cb = c.bbox();
+    let close: Vec<usize> = (0..a.faces.len())
+        .filter(|&f| boxes_meet(&a.face_bbox(f), &cb, 1e-7 * size))
+        .collect();
+    let [f0, f1] = close[..] else {
+        return None;
+    };
+    let plane = |f: usize| -> Option<(P3, V3)> {
+        let Surface::Plane { f: pf } = &a.faces[f].surf else {
+            return None;
+        };
+        let n = pf.x.cross(&pf.y).normalize() * if a.faces[f].sense { 1.0 } else { -1.0 };
+        (n.dot(&z).abs() >= 1.0 - 1e-12).then_some((pf.o, n))
+    };
+    let ((p0, n0), (p1, n1)) = (plane(f0)?, plane(f1)?);
+    let cross = |p: P3, n: V3| (p - o).dot(&n) / z.dot(&n);
+    let (t0, t1) = (cross(p0, n0), cross(p1, n1));
+    // Lower and upper, facing apart: the lower one's outside below it, the upper one's above.
+    let ((lo, tl, nl), (hi, th, nh)) = if t0 < t1 {
+        ((f0, t0, n0), (f1, t1, n1))
+    } else {
+        ((f1, t1, n1), (f0, t0, n0))
+    };
+    let tc: Vec<f64> = c.verts.iter().map(|v| (v.p - o).dot(&z)).collect();
+    let (cmin, cmax) = tc
+        .iter()
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), &t| {
+            (a.min(t), b.max(t))
+        });
+    if !(nl.dot(&z) < 0.0 && nh.dot(&z) > 0.0)
+        || !(th - tl > 1e3 * near)
+        || !(cmin < tl - 1e3 * near && cmax > th + 1e3 * near)
+    {
+        return None;
+    }
+    // The axis crosses each within its face.
+    for (f, t) in [(lo, tl), (hi, th)] {
+        let p = o + z * t;
+        let polys = super::classify::face_polygons(a, &a.faces[f]);
+        let (u, v) = a.faces[f].surf.project(&p, None);
+        if super::classify::in_face(&polys, &a.faces[f].surf, P2::new(u, v), tol::POINT)
+            != InFace::Inside
+        {
+            return None;
+        }
+    }
+    // The bore: the circle at the lower plane extruded to the upper, its seam the tool's.
+    let x = (fr.x - z * fr.x.dot(&z)).try_normalize(tol::TINY)?;
+    let plane0 = Plane {
+        origin: o + z * tl,
+        x_dir: nalgebra::Unit::new_normalize(x),
+        normal: nalgebra::Unit::new_normalize(z),
+    };
+    let region = Region {
+        outer: Loop {
+            curves: vec![Curve2::Circle {
+                center: nalgebra::Point2::origin(),
+                radius: r,
+                source: None,
+            }],
+        },
+        holes: vec![],
+        source: None,
+    };
+    let regions = super::profile::regions(&Profile::new(plane0, vec![region])).ok()?;
+    let merged = super::profile::merge_regions(&regions).ok()?;
+    let bore = super::sweep::sweep_full(
+        &merged,
+        &[],
+        &super::sweep::Prism {
+            plane: plane0,
+            dir: z,
+        },
+        0.0,
+        th - tl,
+        false,
+        true,
+    )
+    .ok()?
+    .body;
+    // Its caps on the two planes, and its side the tool's.
+    let mut pairs = Vec::new();
+    let mut side = None;
+    for (fi, f) in bore.faces.iter().enumerate() {
+        match &f.surf {
+            Surface::Plane { f: pf } => {
+                let n = pf.x.cross(&pf.y).normalize() * if f.sense { 1.0 } else { -1.0 };
+                let fa = if n.dot(&z) > 0.0 { hi } else { lo };
+                let (pa, na) = if fa == f0 { (p0, n0) } else { (p1, n1) };
+                if (n - na).norm() > 1e-9 || (pf.o - pa).dot(&na).abs() > 1e3 * near {
+                    return None;
+                }
+                pairs.push((fa, fi));
+            }
+            Surface::Cylinder { .. } => side = Some(fi),
+            _ => return None,
+        }
+    }
+    side?;
+    if pairs.len() != 2 || pairs[0].0 == pairs[1].0 {
+        return None;
+    }
+    joined_cavity(a, &bore, &pairs, Some(&|_| ci))
+}
+
 /// [`boolean_bodies`], with faces of the two inputs on one surface merged whatever the
 /// operation (a blend's tool face flush with a face it ends against becomes part of it).
 pub fn boolean_bodies_flush(a: &Body, b: &Body, op: BoolOp) -> Result<BoolOut> {
@@ -3929,10 +4286,22 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                     &overlap(fa, fb).grow(1e-3 * faces[fa].bbox.diagonal().max(1e-9)),
                     run_tol,
                 );
+                // (A trace that finds fewer curves lost one, not mended it: a patch's face cut
+                // by a plane where the face reaches the patch's end found none at all, and the
+                // plane's section came apart. The first is kept.)
+                let fewer = r.curves.len() < found.0.len();
                 if super::env_flag!("CADRS_BOOL_DEBUG") {
                     eprintln!(
-                        "ssi {fa}×{fb}: a curve's end dangled; traced again over wider boxes"
+                        "ssi {fa}×{fb}: a curve's end dangled; traced again over wider boxes{}",
+                        if fewer {
+                            ", fewer curves: the first kept"
+                        } else {
+                            ""
+                        }
                     );
+                }
+                if fewer {
+                    return found;
                 }
                 (r.curves, r.singular, found.2, r.coincident)
             })
@@ -4448,7 +4817,7 @@ fn run(a: &Body, b: &Body, mode: Mode, opts: RunOpts) -> Result<BoolOut> {
                 // A piece no longer than the tolerance is a point (two vertices of the inputs
                 // closer than it, both on the curve): no edge.
                 if (ic.c.point(ta) - ic.c.point(tb)).norm() <= tf
-                    && ic.c.length(ta.min(tb), ta.max(tb)) <= tf
+                    && !ic.c.longer_than(ta.min(tb), ta.max(tb), tf)
                 {
                     continue;
                 }
@@ -5641,6 +6010,8 @@ fn touch_voids(b: &mut Body, tol: f64) {
             .iter()
             .map(|f| classify::face_polygons(&out, f))
             .collect();
+        // (One classifier for all the voids' vertices.)
+        let classifier = classify::Classifier::new(&out, &polys);
         for &sh in voids {
             let mut vs: Vec<usize> = b.shells[sh]
                 .faces
@@ -5657,8 +6028,7 @@ fn touch_voids(b: &mut Body, tol: f64) {
             vs.dedup();
             for v in vs {
                 let vx = &b.verts[v];
-                if classify::classify_point(&out, &polys, &vx.p, vx.tol.max(super::tol::POINT))
-                    != PointClass::Outside
+                if classifier.classify(&vx.p, vx.tol.max(super::tol::POINT)) != PointClass::Outside
                 {
                     continue;
                 }
@@ -6167,11 +6537,16 @@ pub(crate) fn assemble_shells_with(b: &mut Body, terms: Option<&[f64]>) -> Resul
     if outer.len() > 1 {
         // (The body's box and its faces' made once here, not once per shell.)
         let _boxes = super::topo::keep_boxes(&[&*b]);
-        let polys: Vec<Vec<Vec<P2>>> = b
-            .faces
-            .iter()
-            .map(|f| classify::face_polygons(b, f))
-            .collect();
+        // (Made only for a shell too large to orient by its volume.)
+        let polys = std::cell::OnceCell::<Vec<Vec<Vec<P2>>>>::new();
+        let polys = || {
+            polys.get_or_init(|| {
+                b.faces
+                    .iter()
+                    .map(|f| classify::face_polygons(b, f))
+                    .collect()
+            })
+        };
         let all: Vec<(usize, f64, bool)> = outer
             .iter()
             .map(|(si, _)| {
@@ -6201,7 +6576,7 @@ pub(crate) fn assemble_shells_with(b: &mut Body, terms: Option<&[f64]>) -> Resul
                 let out = if fs.len() <= 64 {
                     by_volume()
                 } else {
-                    shell_points_out(b, fs, &polys).unwrap_or_else(by_volume)
+                    shell_points_out(b, fs, polys()).unwrap_or_else(by_volume)
                 };
                 (*si, bb.diagonal(), out)
             })
@@ -6222,6 +6597,21 @@ pub(crate) fn assemble_shells_with(b: &mut Body, terms: Option<&[f64]>) -> Resul
         ));
     }
     let mut solids: Vec<Vec<usize>> = outer.iter().map(|(s, _)| vec![*s]).collect();
+    // Each outer shell as a body of its own with its faces' polygons, made once for all the
+    // voids (and only for one whose box holds a void's point).
+    let shell_boxes: Vec<Bbox> = outer
+        .iter()
+        .map(|(s, _)| {
+            let mut bb = Bbox::empty();
+            for &f in &b.shells[*s].faces {
+                bb.union(&b.face_bbox(f));
+            }
+            bb
+        })
+        .collect();
+    type ShellBody = (Body, Vec<Vec<Vec<P2>>>);
+    let shell_bodies: Vec<std::cell::OnceCell<ShellBody>> =
+        outer.iter().map(|_| std::cell::OnceCell::new()).collect();
     for (v, _) in voids {
         // The smallest outer shell containing a point of the void.
         let f = b.shells[v].faces[0];
@@ -6233,13 +6623,19 @@ pub(crate) fn assemble_shells_with(b: &mut Body, terms: Option<&[f64]>) -> Resul
         };
         let mut best: Option<(f64, usize)> = None;
         for (k, (s, vol)) in outer.iter().enumerate() {
-            let sub = super::kernel::subset(b, &b.shells[*s].faces, true);
-            let polys: Vec<Vec<Vec<P2>>> = sub
-                .faces
-                .iter()
-                .map(|f| classify::face_polygons(&sub, f))
-                .collect();
-            if classify::parity_inside(&sub, &polys, &p) && best.is_none_or(|(bv, _)| *vol < bv) {
+            if best.is_some_and(|(bv, _)| *vol >= bv) || !shell_boxes[k].contains(&p) {
+                continue;
+            }
+            let (sub, polys) = shell_bodies[k].get_or_init(|| {
+                let sub = super::kernel::subset(b, &b.shells[*s].faces, true);
+                let polys = sub
+                    .faces
+                    .iter()
+                    .map(|f| classify::face_polygons(&sub, f))
+                    .collect();
+                (sub, polys)
+            });
+            if classify::parity_inside(sub, polys, &p) {
                 best = Some((*vol, k));
             }
         }
@@ -6811,9 +7207,19 @@ fn boolean_opts(
         }
         for (i, &t) in tools.iter().enumerate() {
             let tb = std::sync::Arc::clone(k.get(t)?);
-            let r = {
-                let _kept = (i == 0).then(|| super::topo::keep_boxes_made(&cur, &target_boxes));
-                boolean_bodies_with(&cur, &tb, op, opts)?
+            // A cylinder bored through two planes facing apart, nothing else of the body near it:
+            // its holes and bore joined on, nothing to intersect.
+            let through = (op == BoolOp::Subtract
+                && !opts.within
+                && !crate::native::env_flag!("CADRS_NO_THROUGH_CUT"))
+            .then(|| through_cut(&cur, &tb))
+            .flatten();
+            let r = match through {
+                Some(r) => r,
+                None => {
+                    let _kept = (i == 0).then(|| super::topo::keep_boxes_made(&cur, &target_boxes));
+                    boolean_bodies_with(&cur, &tb, op, opts)?
+                }
             };
             origin = r
                 .from

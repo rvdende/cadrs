@@ -185,6 +185,7 @@ pub fn slab(spec: &SlabSpec) -> Result<super::topo::Body> {
         .map(|j| greville(&spec.knots_v, pv, j) * sy)
         .collect();
     let top = NurbsSurface {
+        screw: None,
         du: pu,
         dv: pv,
         ku: spec.knots_u.clone(),

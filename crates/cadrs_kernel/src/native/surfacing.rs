@@ -888,6 +888,7 @@ fn coons_of_polynomials(path: &[Seg]) -> Option<NurbsSurface> {
         .collect();
     let clamped = |d: usize| [vec![0.0; d + 1], vec![1.0; d + 1]].concat();
     Some(NurbsSurface {
+        screw: None,
         du: p,
         dv: q,
         ku: clamped(p),
@@ -958,6 +959,7 @@ fn coons(path: &[Seg]) -> Result<Body> {
                 cols.push(c.cps);
             }
             NurbsSurface {
+                screw: None,
                 du: 3,
                 dv: 3,
                 ku: rows[0].knots.clone(),

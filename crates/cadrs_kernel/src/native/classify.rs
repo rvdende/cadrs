@@ -239,8 +239,10 @@ pub fn face_polygons_kept(body: &Body, f: &Face) -> KeptPolygons {
         /// Counts `points` more kept, starting a new generation first when they don't fit.
         fn room(&mut self, points: usize) {
             if self.new_points + points > KEPT {
-                self.old = std::mem::take(&mut self.new);
-                self.old_loops = std::mem::take(&mut self.new_loops);
+                let new = std::mem::take(&mut self.new);
+                super::par::discard(std::mem::replace(&mut self.old, new));
+                let loops = std::mem::take(&mut self.new_loops);
+                super::par::discard(std::mem::replace(&mut self.old_loops, loops));
                 self.new_points = 0;
             }
             self.new_points += points;
@@ -249,7 +251,13 @@ pub fn face_polygons_kept(body: &Body, f: &Face) -> KeptPolygons {
     // (Read by every face of both bodies of every boolean, on as many threads as run
     // booleans at once, and nearly always found: readers don't wait for one another.)
     static KEPT_POLYS: std::sync::LazyLock<std::sync::RwLock<Kept>> =
-        std::sync::LazyLock::new(Default::default);
+        std::sync::LazyLock::new(|| {
+            // (Emptied by [`crate::native::clear_caches`].)
+            super::par::kept_cache(|| {
+                *KEPT_POLYS.write().unwrap_or_else(|e| e.into_inner()) = Default::default();
+            });
+            Default::default()
+        });
     // Each loop's key (the surface and the loop's p-curves over their ranges), and the face's
     // (the loops' in order).
     let loop_keys: Vec<u128> = f
@@ -641,6 +649,7 @@ fn ray_surface_with(
     grid: Option<&std::sync::OnceLock<RayGrid>>,
 ) -> Vec<(f64, f64, f64)> {
     let mut ts: Vec<f64> = Vec::new();
+    let mut hits: Vec<(f64, f64, f64)> = Vec::new();
     match s {
         Surface::Plane { f } => {
             let n = f.x.cross(&f.y);
@@ -693,18 +702,33 @@ fn ray_surface_with(
             let fr = Frame::from_z(*o, m.normalize());
             let pl = Surface::Plane { f: fr };
             let (a, b) = c.nurbs_range().unwrap_or((0.0, TAU));
-            for u in super::ssi::curve_surface(c, a, b, &pl) {
+            let us = match c {
+                super::curve::Curve::Nurbs(n) => nurbs_plane_crossings(n, &m.normalize(), o),
+                _ => super::ssi::curve_surface(c, a, b, &pl),
+            };
+            let exact = matches!(c, super::curve::Curve::Nurbs(_));
+            for u in us {
                 let q = c.point(u);
                 // o + t d = q + v dir: solve in least squares.
                 let w = q - o;
                 let (dd, dr, rr) = (d.dot(d), d.dot(dir), dir.dot(dir));
                 let (wd, wr) = (w.dot(d), w.dot(dir));
-                if let Some((t, _v)) = solve2(dd, -dr, dr, -rr, wd, wr) {
-                    ts.push(t);
+                if let Some((t, v)) = solve2(dd, -dr, dr, -rr, wd, wr) {
+                    if exact {
+                        // (The surface's own parameters: no projection.)
+                        hits.push((t, u, v));
+                    } else {
+                        ts.push(t);
+                    }
                 }
             }
         }
         Surface::Nurbs(_) | Surface::Revolution { .. } => {
+            if let Surface::Nurbs(ns) = s
+                && let Some(hits) = ray_ruled(ns, o, d).or_else(|| ray_graph(ns, o, d))
+            {
+                return hits;
+            }
             if let Surface::Revolution {
                 f,
                 m: super::curve::Curve::Line { o: lo, d: ld },
@@ -719,11 +743,470 @@ fn ray_surface_with(
             };
         }
     }
-    let mut out = Vec::new();
+    let mut out = hits;
     for t in ts {
         let p = o + d * t;
         let (u, v) = s.project(&p, None);
         out.push((t, u, v));
+    }
+    out
+}
+
+/// A ray against a ruled B-spline (degree 1 and one span along v, its weights the same along
+/// v: a ruled loft's sides), in closed form: the ruling at u, A(u) + s·D(u), meets the line
+/// o + t·d where the two are coplanar, f(u) = (A(u) − o)·(D(u) × d) = 0, and f·w² is a B-spline
+/// of the two rows' poles (its degree twice u's): sampled a span at a time, each sign change
+/// bisected, then s and t from the two lines. Hits with s outside the ruling are dropped. None
+/// for any other surface, or a ray nearly along a ruling somewhere (the general search then).
+fn ray_ruled(ns: &super::nurbs::NurbsSurface, o: &P3, d: &V3) -> Option<Vec<(f64, f64, f64)>> {
+    use super::nurbs::H;
+    if ns.dv != 1 || ns.kv.len() != 4 || ns.cps.iter().any(|r| r.len() != 2) {
+        return None;
+    }
+    if ns
+        .cps
+        .iter()
+        .any(|r| (r[0].w - r[1].w).abs() > 1e-14 * r[0].w.abs() || !(r[0].w > 0.0))
+    {
+        return None;
+    }
+    let p = ns.du;
+    let k = &ns.ku;
+    let n = ns.cps.len();
+    let (v0, v1) = (ns.kv[1], ns.kv[2]);
+    // A row's homogeneous point at u in span j (de Boor).
+    let row = |j: usize, u: f64, side: usize| -> H {
+        let mut buf = [H::new(0.0, 0.0, 0.0, 0.0); 16];
+        let mut heap: Vec<H>;
+        let q: &mut [H] = if p < 16 {
+            &mut buf[..=p]
+        } else {
+            heap = vec![H::new(0.0, 0.0, 0.0, 0.0); p + 1];
+            &mut heap
+        };
+        for (r, x) in q.iter_mut().enumerate() {
+            *x = ns.cps[j - p + r][side];
+        }
+        for r in 1..=p {
+            for i in (r..=p).rev() {
+                let lo = k[j - p + i];
+                let hi = k[j + 1 + i - r];
+                let a = if hi > lo { (u - lo) / (hi - lo) } else { 0.0 };
+                q[i] = q[i - 1] * (1.0 - a) + q[i] * a;
+            }
+        }
+        q[p]
+    };
+    let dn = d.norm();
+    // The ruling at u: its start and direction.
+    let ruling = |j: usize, u: f64| -> (P3, V3) {
+        let (a, b) = (row(j, u, 0), row(j, u, 1));
+        let w = a.w;
+        let pa = P3::new(a.x / w, a.y / w, a.z / w);
+        (pa, V3::new(b.x - a.x, b.y - a.y, b.z - a.z) / w)
+    };
+    let f = |j: usize, u: f64| -> Option<f64> {
+        let (a, dr) = ruling(j, u);
+        let m = dr.cross(d);
+        if m.norm() <= 1e-9 * dr.norm() * dn {
+            return None;
+        }
+        Some((a - o).dot(&m))
+    };
+    let mut out = Vec::new();
+    for j in p..n {
+        let (u0, u1) = (k[j], k[j + 1]);
+        if u1 <= u0 {
+            continue;
+        }
+        let m = 4 * (2 * p + 1);
+        let at = |i: usize| u0 + (u1 - u0) * i as f64 / m as f64;
+        let mut prev = (at(0), f(j, at(0))?);
+        for i in 1..=m {
+            let u = at(i);
+            let cur = (u, f(j, u)?);
+            let last = j + 1 == n && i == m;
+            let crosses = (prev.1 < 0.0 && cur.1 > 0.0)
+                || (prev.1 > 0.0 && cur.1 < 0.0)
+                || prev.1 == 0.0
+                || (last && cur.1 == 0.0);
+            if crosses {
+                let root = if prev.1 == 0.0 {
+                    prev.0
+                } else if cur.1 == 0.0 {
+                    cur.0
+                } else {
+                    let (mut a, mut b, mut fa) = (prev.0, cur.0, prev.1);
+                    for _ in 0..60 {
+                        let mid = 0.5 * (a + b);
+                        let fm = f(j, mid)?;
+                        if fm == 0.0 || (b - a) <= 1e-15 * (1.0 + mid.abs()) {
+                            a = mid;
+                            b = mid;
+                            break;
+                        }
+                        if (fm < 0.0) == (fa < 0.0) {
+                            a = mid;
+                            fa = fm;
+                        } else {
+                            b = mid;
+                        }
+                    }
+                    0.5 * (a + b)
+                };
+                // o + t d = A + s D.
+                let (a, dr) = ruling(j, root);
+                let w = a - o;
+                let (dd, ds, ss) = (d.dot(d), d.dot(&dr), dr.dot(&dr));
+                let (wd, ws) = (w.dot(d), w.dot(&dr));
+                if let Some((t, sr)) = solve2(dd, -ds, ds, -ss, wd, ws)
+                    && (-1e-12..=1.0 + 1e-12).contains(&sr)
+                    && out.last().is_none_or(|l: &(f64, f64, f64)| {
+                        (root - l.1).abs() > 1e-14 * (1.0 + root.abs())
+                    })
+                {
+                    out.push((t, root, v0 + (v1 - v0) * sr));
+                }
+            }
+            prev = cur;
+        }
+    }
+    Some(out)
+}
+
+/// A height field: a non-rational B-spline whose poles stand over its Greville abscissae on a
+/// plane, `c + g_u·a + g_v·b + h·n` (a, b in the plane, n square to it), so that its point at
+/// (u, v) lies over `c + u·a + v·b` (linear precision) at height n·S(u, v). Its frame `(c, a, b,
+/// n)`, or None for any other surface (or a flat one).
+fn graph_frame(ns: &super::nurbs::NurbsSurface) -> Option<(P3, V3, V3, V3)> {
+    let (nu, nv) = (ns.cps.len(), ns.cps.first()?.len());
+    if nu < 2 || nv < 2 || ns.cps.iter().flatten().any(|h| h.w != 1.0) {
+        return None;
+    }
+    let greville = |k: &[f64], p: usize, n: usize| -> Vec<f64> {
+        (0..n)
+            .map(|i| k[i + 1..=i + p].iter().sum::<f64>() / p.max(1) as f64)
+            .collect()
+    };
+    let pt = |i: usize, j: usize| P3::new(ns.cps[i][j].x, ns.cps[i][j].y, ns.cps[i][j].z);
+    // A quick test first (every ray and projection asks, of every B-spline face): the affine
+    // part cancels in P(i, j) − P(i, 0) − P(0, j) + P(0, 0), which must lie along n for every
+    // pole; three spread over the grid, all along one line, or this is no height field.
+    {
+        let dd = |i: usize, j: usize| pt(i, j) - pt(i, 0) - (pt(0, j) - pt(0, 0));
+        let probes = [dd(nu - 1, nv - 1), dd(nu / 2, nv - 1), dd(nu - 1, nv / 2)];
+        let size = (pt(nu - 1, nv - 1) - pt(0, 0)).norm().max(tol::TINY);
+        let far = pt(0, 0).coords.abs().max();
+        let e = 1e-9 * (size + far);
+        let big = probes.iter().max_by(|a, b| a.norm().total_cmp(&b.norm()))?;
+        if big.norm() > e {
+            let n = big.normalize();
+            if probes.iter().any(|d| d.cross(&n).norm() > e) {
+                return None;
+            }
+        }
+    }
+    let (gu, gv) = (greville(&ns.ku, ns.du, nu), greville(&ns.kv, ns.dv, nv));
+    // The affine part by least squares over the grid (separable: means, then slopes).
+    let m = (nu * nv) as f64;
+    let (mu, mv) = (
+        gu.iter().sum::<f64>() / nu as f64,
+        gv.iter().sum::<f64>() / nv as f64,
+    );
+    let mut c = V3::zeros();
+    let (mut a, mut b) = (V3::zeros(), V3::zeros());
+    let (mut suu, mut svv) = (0.0, 0.0);
+    for (i, x) in gu.iter().enumerate() {
+        for (j, y) in gv.iter().enumerate() {
+            let q = pt(i, j).coords;
+            c += q / m;
+            a += q * (x - mu);
+            b += q * (y - mv);
+            suu += (x - mu).powi(2);
+            svv += (y - mv).powi(2);
+        }
+    }
+    if !(suu > 0.0 && svv > 0.0) {
+        return None;
+    }
+    let (a, b) = (a / suu, b / svv);
+    let c = P3::from(c - a * mu - b * mv);
+    // What the affine part leaves must all lie along one direction n.
+    let size = (pt(nu - 1, nv - 1) - pt(0, 0)).norm().max(tol::TINY);
+    let res: Vec<V3> = (0..nu)
+        .flat_map(|i| (0..nv).map(move |j| (i, j)))
+        .map(|(i, j)| pt(i, j) - (c + a * gu[i] + b * gv[j]))
+        .collect();
+    let big = res.iter().max_by(|x, y| x.norm().total_cmp(&y.norm()))?;
+    if big.norm() <= 1e-9 * size {
+        return None;
+    }
+    let n = big.normalize();
+    // (Rounding: a moved surface's poles carry their place's size in their last digits.)
+    let far = ns.cps.iter().flatten().fold(0.0f64, |m, h| {
+        m.max(h.x.abs()).max(h.y.abs()).max(h.z.abs())
+    });
+    if res
+        .iter()
+        .any(|r| r.cross(&n).norm() > 1e-12 * (size + far))
+    {
+        return None;
+    }
+    // a and b in the plane square to n (their parts along n are height, linear in u and v).
+    let (a, b) = (a - n * a.dot(&n), b - n * b.dot(&n));
+    if a.cross(&b).norm() <= 1e-12 * a.norm() * b.norm() {
+        return None;
+    }
+    let c = c - n * (c - P3::origin()).dot(&n);
+    Some((c, a, b, n))
+}
+
+/// A ray against a height field ([`graph_frame`]) exactly: seen along n the ray is a line in
+/// (u, v), where its height and the surface's differ by f(t), a polynomial between the points
+/// it crosses the knot lines; each sign change is bisected. A ray along n meets it once, over
+/// its foot. None for any other surface.
+fn ray_graph(ns: &super::nurbs::NurbsSurface, o: &P3, d: &V3) -> Option<Vec<(f64, f64, f64)>> {
+    let (c, a, b, n) = graph_frame(ns)?;
+    let ((u0, u1), (v0, v1)) = ns.range();
+    // (u, v) of a point's foot: solve c + u a + v b = foot (a 2 × 2 in the plane).
+    let (aa, ab, bb) = (a.dot(&a), a.dot(&b), b.dot(&b));
+    let det = aa * bb - ab * ab;
+    let uv = |w: V3| -> (f64, f64) {
+        let (wa, wb) = (w.dot(&a), w.dot(&b));
+        ((wa * bb - wb * ab) / det, (wb * aa - wa * ab) / det)
+    };
+    let (q0, q1) = (uv(o - c), uv(*d - n * d.dot(&n)));
+    let height = |u: f64, v: f64| (ns.point(u, v) - c).dot(&n);
+    let mut out = Vec::new();
+    let span = (u1 - u0).max(v1 - v0);
+    if q1.0.abs().max(q1.1.abs()) <= 1e-12 * span {
+        // Along n: the one point over the ray's foot.
+        let (u, v) = q0;
+        let dn = d.dot(&n);
+        if dn == 0.0 || u < u0 || u > u1 || v < v0 || v > v1 {
+            return Some(out);
+        }
+        out.push(((height(u, v) - (o - c).dot(&n)) / dn, u, v));
+        return Some(out);
+    }
+    // The t range over the domain, then its cuts at the knot lines.
+    let (mut lo, mut hi) = (f64::NEG_INFINITY, f64::INFINITY);
+    for (p0, p1, a0, a1) in [(q0.0, q1.0, u0, u1), (q0.1, q1.1, v0, v1)] {
+        if p1 == 0.0 {
+            if p0 < a0 || p0 > a1 {
+                return Some(out);
+            }
+            continue;
+        }
+        let (ta, tb) = ((a0 - p0) / p1, (a1 - p0) / p1);
+        lo = lo.max(ta.min(tb));
+        hi = hi.min(ta.max(tb));
+    }
+    if !(lo < hi) {
+        return Some(out);
+    }
+    let mut ts = vec![lo, hi];
+    for (p0, p1, k) in [(q0.0, q1.0, &ns.ku), (q0.1, q1.1, &ns.kv)] {
+        if p1 != 0.0 {
+            ts.extend(
+                k.iter()
+                    .map(|&x| (x - p0) / p1)
+                    .filter(|&t| t > lo && t < hi),
+            );
+        }
+    }
+    ts.sort_by(f64::total_cmp);
+    ts.dedup();
+    let at = |t: f64| (q0.0 + q1.0 * t, q0.1 + q1.1 * t);
+    let f = |t: f64| {
+        let (u, v) = at(t);
+        let (u, v) = (u.clamp(u0, u1), v.clamp(v0, v1));
+        height(u, v) - (o + d * t - c).dot(&n)
+    };
+    let m = 2 * (ns.du + ns.dv) + 2;
+    for w in ts.windows(2) {
+        let (ta, tb) = (w[0], w[1]);
+        let mut prev = (ta, f(ta));
+        for i in 1..=m {
+            let t = ta + (tb - ta) * i as f64 / m as f64;
+            let cur = (t, f(t));
+            let crosses = (prev.1 < 0.0) != (cur.1 < 0.0) || prev.1 == 0.0;
+            if crosses {
+                // Regula falsi, Illinois style (the end kept twice running has its value
+                // halved): bracketed like bisection, near Newton's speed on a smooth root.
+                let (mut x, mut y, mut fx, mut fy) = (prev.0, cur.0, prev.1, cur.1);
+                let mut side = 0i8;
+                let mut t = x;
+                for _ in 0..100 {
+                    if fx == 0.0 {
+                        t = x;
+                        break;
+                    }
+                    if fy == 0.0 {
+                        t = y;
+                        break;
+                    }
+                    t = (x * fy - y * fx) / (fy - fx);
+                    if !(t > x.min(y) && t < x.max(y)) {
+                        t = 0.5 * (x + y);
+                    }
+                    if (y - x).abs() <= 1e-15 * (1.0 + t.abs()) {
+                        break;
+                    }
+                    let ft = f(t);
+                    if ft == 0.0 {
+                        break;
+                    }
+                    if (ft < 0.0) == (fx < 0.0) {
+                        x = t;
+                        fx = ft;
+                        if side == -1 {
+                            fy *= 0.5;
+                        }
+                        side = -1;
+                    } else {
+                        y = t;
+                        fy = ft;
+                        if side == 1 {
+                            fx *= 0.5;
+                        }
+                        side = 1;
+                    }
+                    if ft.abs() <= 1e-15 * (1.0 + t.abs()) {
+                        break;
+                    }
+                }
+                if out
+                    .last()
+                    .is_none_or(|l: &(f64, f64, f64)| (t - l.0).abs() > 1e-12 * (1.0 + t.abs()))
+                {
+                    let (u, v) = at(t);
+                    out.push((t, u.clamp(u0, u1), v.clamp(v0, v1)));
+                }
+            }
+            prev = cur;
+        }
+    }
+    Some(out)
+}
+
+/// Where a B-spline curve crosses the plane through `o` with unit normal `n`: the sign changes
+/// of g(u) = n·(C(u) − o)·w(u), itself a B-spline whose coefficients are the control points'
+/// (homogeneous) distances. Only a knot span whose coefficients change sign can hold one
+/// (the variation-diminishing property); there g is sampled, and each sign change bisected to
+/// rounding. A touch without a crossing is not one (a ray's parity is unchanged by it).
+fn nurbs_plane_crossings(c: &super::nurbs::NurbsCurve, n: &V3, o: &P3) -> Vec<f64> {
+    let p = c.degree;
+    let k = &c.knots;
+    let no = n.dot(&o.coords);
+    let g: Vec<f64> = c
+        .cps
+        .iter()
+        .map(|h| n.x * h.x + n.y * h.y + n.z * h.z - h.w * no)
+        .collect();
+    let scale = g.iter().fold(0.0f64, |m, x| m.max(x.abs())).max(tol::TINY);
+    // g at u in span j (de Boor on the scalar coefficients).
+    // (On the stack up to degree 15: this runs for every ray against every extruded spline.)
+    let eval = |j: usize, u: f64| -> f64 {
+        let mut buf = [0.0f64; 16];
+        let mut heap: Vec<f64>;
+        let d: &mut [f64] = if p < 16 {
+            &mut buf[..=p]
+        } else {
+            heap = vec![0.0; p + 1];
+            &mut heap
+        };
+        for (r, x) in d.iter_mut().enumerate() {
+            *x = g[j - p + r];
+        }
+        for r in 1..=p {
+            for i in (r..=p).rev() {
+                let lo = k[j - p + i];
+                let hi = k[j + 1 + i - r];
+                let a = if hi > lo { (u - lo) / (hi - lo) } else { 0.0 };
+                d[i] = (1.0 - a) * d[i - 1] + a * d[i];
+            }
+        }
+        d[p]
+    };
+    let mut out: Vec<f64> = Vec::new();
+    let n_cp = c.cps.len();
+    for j in p..n_cp {
+        let (u0, u1) = (k[j], k[j + 1]);
+        if u1 <= u0 {
+            continue;
+        }
+        let co = &g[j - p..=j];
+        let (mn, mx) = co
+            .iter()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), &x| {
+                (a.min(x), b.max(x))
+            });
+        if mn > 0.0 || mx < 0.0 {
+            continue;
+        }
+        let m = 4 * (p + 1);
+        let at = |i: usize| u0 + (u1 - u0) * i as f64 / m as f64;
+        let mut prev = (at(0), eval(j, at(0)));
+        for i in 1..=m {
+            let u = at(i);
+            let cur = (u, eval(j, u));
+            // A sign change in [prev, cur): a root at its left end is its own; one at the
+            // span's right end belongs to the next span (or to the curve's end, kept here).
+            let last = j + 1 == n_cp && i == m;
+            let crosses = (prev.1 < 0.0 && cur.1 > 0.0)
+                || (prev.1 > 0.0 && cur.1 < 0.0)
+                || prev.1 == 0.0
+                || (last && cur.1 == 0.0);
+            if crosses {
+                let root = if prev.1 == 0.0 {
+                    prev.0
+                } else if cur.1 == 0.0 {
+                    cur.0
+                } else {
+                    // Regula falsi, Illinois style: bracketed, near Newton's speed.
+                    let (mut a, mut b, mut fa, mut fb) = (prev.0, cur.0, prev.1, cur.1);
+                    let mut side = 0i8;
+                    let mut t = 0.5 * (a + b);
+                    for _ in 0..100 {
+                        t = (a * fb - b * fa) / (fb - fa);
+                        if !(t > a && t < b) {
+                            t = 0.5 * (a + b);
+                        }
+                        if (b - a) <= 1e-15 * (1.0 + t.abs()) {
+                            break;
+                        }
+                        let ft = eval(j, t);
+                        if ft == 0.0 || ft.abs() <= 1e-15 * scale {
+                            break;
+                        }
+                        if (ft < 0.0) == (fa < 0.0) {
+                            a = t;
+                            fa = ft;
+                            if side == -1 {
+                                fb *= 0.5;
+                            }
+                            side = -1;
+                        } else {
+                            b = t;
+                            fb = ft;
+                            if side == 1 {
+                                fa *= 0.5;
+                            }
+                            side = 1;
+                        }
+                    }
+                    t
+                };
+                if out
+                    .last()
+                    .is_none_or(|&l| root - l > 1e-14 * (1.0 + root.abs()))
+                {
+                    out.push(root);
+                }
+            }
+            prev = cur;
+        }
     }
     out
 }
@@ -842,7 +1325,7 @@ fn ray_revolved_line(f: &Frame, lo: &P3, ld: &V3, o: &P3, d: &V3) -> Option<Vec<
 
 /// A parametric surface's points over a grid of its parameter box, for rays against it
 /// ([`ray_parametric`]): the same for every ray, so made once for the many a classifier casts.
-struct RayGrid {
+pub(crate) struct RayGrid {
     u: (f64, f64),
     v: (f64, f64),
     n: usize,
@@ -1027,6 +1510,20 @@ pub fn ray_hits_among(
     o: &P3,
     d: &V3,
 ) -> Vec<(f64, usize, P3)> {
+    ray_hits_kept(body, polys, among, boxes, None, o, d)
+}
+
+/// [`ray_hits_among`] with each parametric face's [`RayGrid`] kept in `grids` (by face index)
+/// for the next ray: a body asked about many rays makes each face's grid once.
+pub(crate) fn ray_hits_kept(
+    body: &Body,
+    polys: &[Vec<Vec<P2>>],
+    among: &[usize],
+    boxes: Option<&[Bbox]>,
+    grids: Option<&[std::sync::OnceLock<RayGrid>]>,
+    o: &P3,
+    d: &V3,
+) -> Vec<(f64, usize, P3)> {
     RAYS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let bb = body.bbox().grow(1.0);
     let span = bb.diagonal() + (bb.center() - o).norm();
@@ -1038,7 +1535,8 @@ pub fn ray_hits_among(
         {
             continue;
         }
-        for (t, u, v) in ray_surface(&f.surf, o, d, -span, span) {
+        let grid = grids.and_then(|g| g.get(fi));
+        for (t, u, v) in ray_surface_with(&f.surf, o, d, -span, span, grid) {
             let uvs = periodic_candidates(&f.surf, u, v, &polys[fi]);
             for uv in uvs {
                 if in_face(&polys[fi], &f.surf, uv, tol::ROUNDOFF) != InFace::Outside {
@@ -1219,9 +1717,75 @@ pub struct Classifier<'a> {
     /// a ray or a point meets only the faces near it, not every face of the body.
     tree: super::bvh::Bvh,
     bbox: Bbox,
+    /// The box past which a point is outside whatever the tolerance asked (the body's box
+    /// grown by its largest edge or vertex tolerance and the tree's margin).
+    hold: Bbox,
     starts: Vec<Option<(f64, f64)>>,
     /// Each parametric face's grid for rays, made at the first ray that reaches the face.
     grids: Vec<std::sync::OnceLock<RayGrid>>,
+    /// For a convex body of planes, balls, cylinders and frustums: each face and the sign that
+    /// makes its surface's signed distance positive outside the body ([`Self::convex_faces`]).
+    convex: std::sync::OnceLock<Option<Vec<(usize, f64)>>>,
+}
+
+/// The sign that turns `f`'s surface's signed distance positive outside the solid it bounds:
+/// the face's outward normal (its surface's own, turned by its sense) against the distance's
+/// gradient at a point of the face (a mirrored ball's frame turns its normal round, not its
+/// distance). None where either can't be had there.
+pub(crate) fn outward_sign(f: &Face) -> Option<f64> {
+    let ((u0, u1), (v0, v1)) = f.surf.param_box();
+    let (u, v) = (0.5 * (u0 + u1), 0.5 * (v0 + v1));
+    let (u, v) = if u.is_finite() && v.is_finite() {
+        (u, v)
+    } else {
+        (0.0, 0.0)
+    };
+    let p = f.surf.eval(u, v);
+    let n = f.surf.normal(u, v) * if f.sense { 1.0 } else { -1.0 };
+    let g = f.surf.signed_distance_gradient(&p)?;
+    let c = n.dot(&g);
+    (c.abs() > 0.5).then_some(c.signum())
+}
+
+/// Whether one closed solid `b` is convex as a closed surface convex everywhere is (Hadamard):
+/// no edge concave (faces meeting at a convex edge or tangentially) and every curved face of
+/// a plane, ball, cylinder or cone bulging outward ([`outward_sign`]). Unlike a classifier's
+/// test, a rounded box is convex here (its rounds' cylinders don't hold the rest of it).
+pub(crate) fn locally_convex(b: &Body) -> bool {
+    b.solids.len() == 1
+        && b.shells.len() == 1
+        && b.shells[0].closed
+        && b.faces.iter().all(|f| match &f.surf {
+            Surface::Plane { .. } => true,
+            Surface::Sphere { .. } | Surface::Cylinder { .. } | Surface::Cone { .. } => {
+                outward_sign(f) == Some(1.0)
+            }
+            // A torus's outer half (at its major radius or beyond from its axis) curves like a
+            // ball: a puck's rounded rim.
+            Surface::Torus { f: fr, rmaj, rmin } if rmin < rmaj => {
+                let polys = face_polygons(b, f);
+                let outer = |u: f64, v: f64| {
+                    let l = fr.local(&f.surf.eval(u, v));
+                    l.x.hypot(l.y) >= rmaj * (1.0 - 1e-9)
+                };
+                // (Its loops on the outer half, and the middle of the face's own range of v:
+                // a band whose circles are both outside may still run round the inside.)
+                let (lo, hi) = polys
+                    .iter()
+                    .flatten()
+                    .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), q| {
+                        (a.min(q.y), b.max(q.y))
+                    });
+                let u = polys.iter().flatten().next().map_or(0.0, |q| q.x);
+                outward_sign(f) == Some(1.0)
+                    && lo.is_finite()
+                    && outer(u, 0.5 * (lo + hi))
+                    && polys.iter().flatten().all(|q| outer(q.x, q.y))
+            }
+            _ => false,
+        })
+        && (0..b.edges.len())
+            .all(|e| b.edges[e].degenerate || super::fillet::edge_convexity(b, e) != Some(false))
 }
 
 /// A face's polygons made on demand: kept, their (u, v) range and the start for projections.
@@ -1320,6 +1884,13 @@ impl<'a> Classifier<'a> {
         // again.)
         let margin = tol::POINT.max(tol::REL_POINT * (1.0 + bbox.diagonal()));
         let tree = super::bvh::Bvh::new(boxes.iter().map(|b| b.grow(margin)).collect());
+        let worst = body
+            .edges
+            .iter()
+            .map(|e| e.tol)
+            .chain(body.verts.iter().map(|v| v.tol))
+            .fold(0.0f64, f64::max);
+        let hold = bbox.grow(2.0 * worst + 2.0 * margin);
         Classifier {
             body,
             polys: faces,
@@ -1327,15 +1898,95 @@ impl<'a> Classifier<'a> {
             boxes,
             tree,
             bbox,
+            hold,
             starts,
             grids: (0..body.faces.len()).map(|_| Default::default()).collect(),
+            convex: std::sync::OnceLock::new(),
         }
+    }
+
+    /// The body's faces with signs ([`Self::convex`]) where it is convex: one solid of planes,
+    /// spheres, cylinders and cones (no apex) whose curved faces bulge outward, and every
+    /// sampled point of every face's loops on or inside every face's surface (at a concave edge
+    /// one face's points lie outside the other's). Then a point is inside the body exactly
+    /// where it is inside every face's surface. None otherwise, or for a lazy classifier.
+    fn convex_faces(&self) -> Option<&[(usize, f64)]> {
+        self.convex
+            .get_or_init(|| {
+                let b = self.body;
+                // (A cone's apex is the one point edge whose surface's signed distance runs on
+                // past it: a ball's poles lie on it.)
+                let apex = b.edges.iter().any(|e| e.degenerate)
+                    && b.faces
+                        .iter()
+                        .any(|f| matches!(f.surf, Surface::Cone { .. }));
+                if !self.lazy.is_empty()
+                    || b.solids.len() != 1
+                    || b.shells.len() != 1
+                    || b.faces.is_empty()
+                    || apex
+                {
+                    return None;
+                }
+                let mut sides = Vec::with_capacity(b.faces.len());
+                for (fi, f) in b.faces.iter().enumerate() {
+                    let sign = outward_sign(f)?;
+                    // (A curved face must bulge outward: its distance outside grows outward.)
+                    match &f.surf {
+                        Surface::Plane { .. } => {}
+                        Surface::Sphere { .. }
+                        | Surface::Cylinder { .. }
+                        | Surface::Cone { .. }
+                            if sign > 0.0 => {}
+                        _ => return None,
+                    }
+                    sides.push((fi, sign));
+                }
+                let size = self.bbox.diagonal().max(tol::POINT);
+                let slack = 1e-9 * (size + self.bbox.center().coords.norm());
+                let outside = |q: &P3| {
+                    sides.iter().any(|&(fi, sign)| {
+                        b.faces[fi]
+                            .surf
+                            .signed_distance(q)
+                            .is_none_or(|d| d * sign > slack)
+                    })
+                };
+                if b.verts.iter().any(|v| outside(&v.p)) {
+                    return None;
+                }
+                for (fi, f) in b.faces.iter().enumerate() {
+                    for ring in self.face(fi).polys {
+                        if ring.iter().any(|q| outside(&f.surf.eval(q.x, q.y))) {
+                            return None;
+                        }
+                    }
+                }
+                Some(sides)
+            })
+            .as_deref()
     }
 
     /// The (u, v) on face `fi`'s surface nearest `p`: from the face's start, and from the
     /// surface's own search when that stops more than `tol` away.
     fn project(&self, fi: usize, p: &P3, tol: f64) -> (f64, f64) {
         let s = &self.body.faces[fi].surf;
+        // A height field: Newton from the point's foot, which lies over the nearest point of
+        // any point within the tolerance of it (no grid search wanted).
+        if let Surface::Nurbs(ns) = s
+            && let Some((c, a, b, _)) = graph_frame(ns)
+        {
+            let (aa, ab, bb) = (a.dot(&a), a.dot(&b), b.dot(&b));
+            let det = aa * bb - ab * ab;
+            let w = p - c;
+            let (wa, wb) = (w.dot(&a), w.dot(&b));
+            let ((u0, u1), (v0, v1)) = ns.range();
+            let foot = (
+                ((wa * bb - wb * ab) / det).clamp(u0, u1),
+                ((wb * aa - wa * ab) / det).clamp(v0, v1),
+            );
+            return s.project(p, Some(foot));
+        }
         if let Some(h) = self.start(fi) {
             let (u, v) = s.project(p, Some(h));
             if (s.eval(u, v) - p).norm() <= tol {
@@ -1349,6 +2000,49 @@ impl<'a> Classifier<'a> {
     pub fn classify(&self, p: &P3, tol: f64) -> crate::PointClass {
         POINTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let tol = tol.max(tol::ROUNDOFF);
+        // Past the body's box (and the tolerance asked): outside, no ray needed.
+        if !self.hold.grow(tol).contains(p) {
+            return crate::PointClass::Outside;
+        }
+        // A whole ball or ring torus (one closed face, the whole surface): its signed distance
+        // settles every point, on the boundary within the tolerance.
+        if let [f] = self.body.faces.as_slice()
+            && self.body.shells.len() == 1
+            && self.body.shells[0].closed
+            && let Some(d) = match &f.surf {
+                Surface::Sphere { .. } => f.surf.signed_distance(p),
+                Surface::Torus { rmaj, rmin, .. } if rmin < rmaj => f.surf.signed_distance(p),
+                _ => None,
+            }
+            && let Some(sign) = outward_sign(f)
+        {
+            let d = d * sign;
+            return if d > tol {
+                crate::PointClass::Outside
+            } else if d < -tol {
+                crate::PointClass::Inside
+            } else {
+                crate::PointClass::OnBoundary
+            };
+        }
+        // A convex body: inside every face's surface is inside, outside any is outside; only a
+        // point within the tolerance of the boundary is settled face by face below.
+        if let Some(sides) = self.convex_faces() {
+            let d = sides.iter().fold(f64::NEG_INFINITY, |m, &(fi, sign)| {
+                m.max(
+                    self.body.faces[fi]
+                        .surf
+                        .signed_distance(p)
+                        .map_or(f64::INFINITY, |d| d * sign),
+                )
+            });
+            if d > tol {
+                return crate::PointClass::Outside;
+            }
+            if d < -tol {
+                return crate::PointClass::Inside;
+            }
+        }
         let mut near = {
             let mut at = Bbox::empty();
             at.add(p);

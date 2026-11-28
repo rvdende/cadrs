@@ -490,6 +490,7 @@ fn traces(sw: &Sweep, nodes: &[Node], ta: f64, tb: f64, tol: f64) -> HashMap<Nod
 /// The ruled surface from path `a` to path `z` (u along t, v from a to z).
 fn ruled(a: &NurbsCurve, z: &NurbsCurve) -> NurbsSurface {
     NurbsSurface {
+        screw: None,
         du: a.degree,
         dv: 1,
         ku: a.knots.clone(),

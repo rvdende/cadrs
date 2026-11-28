@@ -94,7 +94,8 @@ impl SharedGrids {
 
     fn insert(&mut self, k: (GridAddress, usize), of: GridOf, g: Arc<[P3]>) {
         if self.new_points + g.len() > Self::KEPT {
-            self.old = std::mem::take(&mut self.new);
+            let new = std::mem::take(&mut self.new);
+            super::par::discard(std::mem::replace(&mut self.old, new));
             self.new_points = 0;
         }
         self.new_points += g.len();
@@ -103,7 +104,13 @@ impl SharedGrids {
 }
 
 static SHARED_GRIDS: std::sync::LazyLock<std::sync::Mutex<SharedGrids>> =
-    std::sync::LazyLock::new(Default::default);
+    std::sync::LazyLock::new(|| {
+        // (Emptied by [`crate::native::clear_caches`].)
+        super::par::kept_cache(|| {
+            *SHARED_GRIDS.lock().unwrap_or_else(|e| e.into_inner()) = Default::default();
+        });
+        Default::default()
+    });
 
 impl GridOf {
     fn address(&self) -> GridAddress {
@@ -1028,6 +1035,7 @@ impl Surface {
                 })
                 .collect();
             NurbsSurface {
+                screw: None,
                 du: arc.degree,
                 dv: m.degree,
                 ku: arc.knots.clone(),
@@ -1040,6 +1048,7 @@ impl Surface {
             Surface::Plane { .. } => {
                 let c = |a: f64, b: f64| h(self.eval(a, b), 1.0);
                 NurbsSurface {
+                    screw: None,
                     du: 1,
                     dv: 1,
                     ku: vec![u.0, u.0, u.1, u.1],
@@ -1090,6 +1099,7 @@ impl Surface {
                     })
                     .collect();
                 NurbsSurface {
+                    screw: None,
                     du: cn.degree,
                     dv: 1,
                     ku: cn.knots.clone(),

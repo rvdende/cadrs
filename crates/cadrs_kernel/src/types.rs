@@ -1671,6 +1671,18 @@ pub struct VertexInfo {
     /// The edges that end at it.
     pub edges: Vec<EdgeId>,
 }
+/// How a mesh is made ([`crate::Kernel::tessellate_quality`]): `Fast` for the viewport, a mesh
+/// seeded coarsely and refined only where it misses the chord (a face's bends in one place
+/// don't fill the rest of it with lines); `Accurate` for exports and measurement, seeded as
+/// finely as the surface bends everywhere. Both keep within the chord and angle asked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum TessQuality {
+    /// Coarse seeding, refined where needed: quick, few triangles.
+    Fast,
+    /// Seeding by the surface's bends all over: the default.
+    #[default]
+    Accurate,
+}
 
 /// How finely to tessellate: the largest distance from a triangle or edge segment to the exact
 /// surface (mm), and the largest angle between neighbouring normals (radians).
@@ -1976,6 +1988,21 @@ pub struct FaceReplacement {
     /// than once (a cylinder crossing a side's plane twice), each edge is the crossing inside
     /// it. None: the crossings nearest the old edges.
     pub domain: Option<((f64, f64), (f64, f64))>,
+}
+
+/// A chamfer whose distances vary along one edge (a variable chamfer): `(t, d)` pairs, `t` in
+/// [0, 1] from the edge's `start` to its `end`, each law at least one, linear between.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChamferLaw {
+    /// The edge.
+    pub edge: EdgeId,
+    /// The face the `first` distances are measured on: one of the edge's two (None: its first,
+    /// [`EdgeInfo::faces`]`[0]`).
+    pub face: Option<FaceId>,
+    /// `(t, d)` pairs: the distance `d` (mm) from the edge across `face` at fraction `t`.
+    pub first: Vec<(f64, f64)>,
+    /// `(t, d)` pairs: the distance across the edge's other face.
+    pub second: Vec<(f64, f64)>,
 }
 
 /// A variable radius along one edge (P3.10, PS14.6 Variable fillet): `(t, r)` pairs, `t` in

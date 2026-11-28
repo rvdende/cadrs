@@ -14,9 +14,11 @@
 //!   where the discriminant is positive.
 //!
 //! What comes back are polylines of exact points, a few a stretch and only where the curve runs
-//! through the two faces' boxes; [`super::ssi`] fits them like a traced curve's. A pair that
-//! touches (a double root: the curve crosses itself or shrinks to a point there) is left to the
-//! numeric engine.
+//! through the two faces' boxes; [`super::ssi`] fits them like a traced curve's. Where the
+//! branches meet in a corner (a node, where the curve crosses itself: a cylinder across one
+//! whose side it just reaches) a loop closes there, so that no fit runs through it. A pair that
+//! touches otherwise (a double root inside a stretch, or a curve shrunk to a point) is left to
+//! the numeric engine.
 
 use super::curve::Curve;
 use super::math::*;
@@ -243,11 +245,50 @@ fn polylines(g: Graph, b: &Surface, bb: &Bbox) -> Vec<Poly> {
             .filter(|&(lo, hi)| (g.runs)(0.5 * (lo + hi)))
             .collect()
     };
+    // Whether the branches meet at the turn `t` in a corner (a node: the curve crosses itself
+    // there, the discriminant's root double), from their chords a little way into the stretch
+    // (`into` its direction): at a simple root they leave the shared point opposite ways, as
+    // ±√δ along one direction; at a node at an angle. A curve is fitted only between corners:
+    // a cubic through one rings ever wider as points crowd in.
+    let corner = |t: f64, into: f64, len: f64| {
+        let p = (g.point)(t, 1.0, true).p;
+        let dt = into * 1e-4 * len;
+        let u = (g.point)(t + dt, 1.0, false).p - p;
+        let d = (g.point)(t + dt, -1.0, false).p - p;
+        let (nu, nd) = (u.norm(), d.norm());
+        nu > 0.0 && nd > 0.0 && u.dot(&d) > -0.9 * nu * nd
+    };
     for (lo, hi) in stretches {
         for (w0, w1) in within_turns(lo, hi, g.tbox) {
             let (t0, t1) = (!whole && w0 == lo, !whole && w1 == hi);
             let up = branch(w0, w1, t0, t1, 1.0);
             let mut down = branch(w0, w1, t0, t1, -1.0);
+            let (c0, c1) = (
+                t0 && corner(w0, 1.0, w1 - w0),
+                t1 && corner(w1, -1.0, w1 - w0),
+            );
+            // A loop whose join at its end `hi` is a corner (a node): begun there, so that the
+            // corner is where it closes, which its fit leaves free ([`super::ssi`]'s fit
+            // repeats a closed curve's first point last). A branch whose two ends are one node
+            // closes there by itself.
+            if t0 && t1 && (c0 || c1) {
+                let node = (up[0].p - up[up.len() - 1].p).norm() <= super::tol::POINT;
+                if c0 && c1 && node {
+                    for mut l in [up, down] {
+                        l.pop();
+                        push(l, true);
+                    }
+                    continue;
+                }
+                if c1 && !c0 {
+                    let mut l = up;
+                    l.reverse();
+                    l.extend(down.into_iter().skip(1));
+                    l.pop();
+                    push(l, true);
+                    continue;
+                }
+            }
             match (t0, t1) {
                 // Both ends shared: one loop, up one branch and back down the other.
                 (true, true) => {

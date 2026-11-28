@@ -179,3 +179,307 @@ fn cap_shaved_off_a_ball() {
     let v = k.mass_properties(cap).unwrap().volume;
     assert!((v - exact).abs() < 1e-6 * exact, "{v:e} against {exact:e}");
 }
+
+#[test]
+fn cylinder_crossing_through_a_node_is_fitted_between_corners() {
+    // The suite's calibration: a cylinder of radius 1.5 across one of radius 2 whose side it
+    // just reaches, so their curve crosses itself where they touch. Fitted through that node as
+    // one loop it took 15 000 points (a cubic rings round a corner); each branch closing at the
+    // node takes a few hundred. The volume is ∫ 2√(4 − y²) · 2√(2.25 − (y − 0.5)²) dy.
+    use cadrs_kernel::*;
+    use nalgebra::{Point3, Unit, Vector3};
+    let mut k = DefaultKernel::default();
+    let cyl = |k: &mut DefaultKernel, base: Point3<f64>, axis: Vector3<f64>, radius: f64| {
+        k.primitive(&Primitive::Cylinder {
+            base,
+            axis: Unit::new_normalize(axis),
+            radius,
+            height: 10.0,
+        })
+        .unwrap()
+        .first()
+        .unwrap()
+    };
+    let a = cyl(&mut k, Point3::new(0.0, 0.0, -5.0), Vector3::z(), 2.0);
+    let b = cyl(&mut k, Point3::new(-5.0, 0.5, 0.0), Vector3::x(), 1.5);
+    let i = k
+        .boolean(BoolOp::Intersect, a, &[b])
+        .unwrap()
+        .first()
+        .unwrap();
+    let v = k.mass_properties(i).unwrap().volume;
+    let want = 24.835511089434053;
+    assert!((v - want).abs() <= 1e-9 * want, "volume {v} vs {want}");
+    let body = k.get(i).unwrap();
+    assert!(body.check().is_empty());
+    for e in &body.edges {
+        if let Curve::Nurbs(n) = &e.curve {
+            assert!(
+                n.cps.len() < 2000,
+                "an edge fitted with {} poles",
+                n.cps.len()
+            );
+        }
+    }
+}
+
+#[test]
+fn a_drilled_block_offset_past_its_hole_has_a_dimple_each_end() {
+    // A box a × b × c drilled through by a hole of radius r, offset by d ≥ r: the box grown
+    // (abc + 2(ab + bc + ca)d + πd²(a + b + c) + 4πd³/3) less, at each end of the hole, the
+    // dimple the ball rolled round its rim leaves: πdr² − 2π(r·I₀ − I₁) with
+    // I₀ = ∫₀ʳ√(d² − s²) ds and I₁ = ∫₀ʳ s√(d² − s²) ds.
+    use cadrs_kernel::*;
+    use nalgebra::{Point3, Unit, Vector3};
+    use std::f64::consts::PI;
+    let (a, b, c, r, d) = (5.3, 5.2, 5.6, 0.616, 2.0);
+    let mut k = DefaultKernel::default();
+    let bx = k
+        .primitive(&Primitive::Box {
+            min: Point3::new(0.0, 0.0, 0.0),
+            max: Point3::new(a, b, c),
+        })
+        .unwrap()
+        .first()
+        .unwrap();
+    let hole = k
+        .primitive(&Primitive::Cylinder {
+            base: Point3::new(a / 2.0, b / 2.0, -1.0),
+            axis: Unit::new_normalize(Vector3::z()),
+            radius: r,
+            height: c + 2.0,
+        })
+        .unwrap()
+        .first()
+        .unwrap();
+    let drilled = k
+        .boolean(BoolOp::Subtract, bx, &[hole])
+        .unwrap()
+        .first()
+        .unwrap();
+    let grown = k
+        .offset(
+            drilled,
+            &OffsetSpec {
+                distance: d,
+                faces: vec![],
+                sharp: false,
+            },
+        )
+        .unwrap()
+        .first()
+        .unwrap();
+    let i0 = 0.5 * r * (d * d - r * r).sqrt() + 0.5 * d * d * (r / d).asin();
+    let i1 = (d.powi(3) - (d * d - r * r).powf(1.5)) / 3.0;
+    let dimple = PI * d * r * r - 2.0 * PI * (r * i0 - i1);
+    let want = a * b * c
+        + 2.0 * (a * b + b * c + c * a) * d
+        + PI * d * d * (a + b + c)
+        + 4.0 / 3.0 * PI * d.powi(3)
+        - 2.0 * dimple;
+    let got = k.mass_properties(grown).unwrap().volume;
+    assert!((got - want).abs() <= 1e-9 * want, "volume {got} vs {want}");
+    assert!(k.get(grown).unwrap().check().is_empty());
+}
+
+#[test]
+fn a_drilled_block_offset_short_of_its_hole_narrows_it() {
+    // A box a × b × c drilled through by a hole of radius r, offset by d < r: the box grown
+    // less the hole narrowed to r − d through its height and, over each mouth, the disc of
+    // radius r d high less the quarter of the ring the ball rolled round the rim keeps
+    // (πd²/4 round the circle of radius r − 4d/3π).
+    use cadrs_kernel::*;
+    use nalgebra::{Point3, Unit, Vector3};
+    use std::f64::consts::PI;
+    let (a, b, c, r, d) = (5.3, 5.2, 5.6, 1.2, 0.4);
+    let mut k = DefaultKernel::default();
+    let bx = k
+        .primitive(&Primitive::Box {
+            min: Point3::new(0.0, 0.0, 0.0),
+            max: Point3::new(a, b, c),
+        })
+        .unwrap()
+        .first()
+        .unwrap();
+    let hole = k
+        .primitive(&Primitive::Cylinder {
+            base: Point3::new(a / 2.0, b / 2.0, -1.0),
+            axis: Unit::new_normalize(Vector3::z()),
+            radius: r,
+            height: c + 2.0,
+        })
+        .unwrap()
+        .first()
+        .unwrap();
+    let drilled = k
+        .boolean(BoolOp::Subtract, bx, &[hole])
+        .unwrap()
+        .first()
+        .unwrap();
+    let grown = k
+        .offset(
+            drilled,
+            &OffsetSpec {
+                distance: d,
+                faces: vec![],
+                sharp: false,
+            },
+        )
+        .unwrap()
+        .first()
+        .unwrap();
+    let quarter = PI * d * d / 4.0 * 2.0 * PI * (r - 4.0 * d / (3.0 * PI));
+    let want = a * b * c
+        + 2.0 * (a * b + b * c + c * a) * d
+        + PI * d * d * (a + b + c)
+        + 4.0 / 3.0 * PI * d.powi(3)
+        - PI * (r - d).powi(2) * c
+        - 2.0 * (PI * r * r * d - quarter);
+    let got = k.mass_properties(grown).unwrap().volume;
+    assert!((got - want).abs() <= 1e-9 * want, "volume {got} vs {want}");
+    assert!(k.get(grown).unwrap().check().is_empty());
+}
+
+#[test]
+fn a_frustum_shelled_open_at_its_base_by_its_section() {
+    // A frustum (radii r0 at the base, r1 at the top, h high) shelled t thick open at its
+    // base: the cavity is the frustum with its slanted side moved in by t (its radius t·L/h
+    // less, L the slant length) and its top down by t.
+    use cadrs_kernel::*;
+    use nalgebra::{Point3, Unit, Vector3};
+    use std::f64::consts::PI;
+    let (r0, r1, h, t) = (6.8, 4.5, 6.4, 0.57);
+    let mut k = DefaultKernel::default();
+    let c = k
+        .primitive(&Primitive::Cone {
+            base: Point3::new(1.0, 2.0, 3.0),
+            axis: Unit::new_normalize(Vector3::z()),
+            base_radius: r0,
+            top_radius: r1,
+            height: h,
+        })
+        .unwrap()
+        .first()
+        .unwrap();
+    let base = k
+        .faces(c)
+        .unwrap()
+        .iter()
+        .find(|f| (f.center.z - 3.0).abs() < 1e-9)
+        .map(|f| f.id)
+        .unwrap();
+    let s = k.shell(c, &[base], t).unwrap().first().unwrap();
+    let frustum = |a: f64, b: f64, h: f64| PI * h / 3.0 * (a * a + a * b + b * b);
+    let l = (r0 - r1).hypot(h);
+    let shift = t * l / h;
+    let (a, b) = (r0 - shift, r0 + (r1 - r0) * (h - t) / h - shift);
+    let want = frustum(r0, r1, h) - frustum(a, b, h - t);
+    let got = k.mass_properties(s).unwrap().volume;
+    assert!((got - want).abs() <= 1e-9 * want, "volume {got} vs {want}");
+    assert!(k.get(s).unwrap().check().is_empty());
+}
+
+#[test]
+fn a_coil_meets_a_cylinder_about_its_axis_along_helices() {
+    // A circle screwed three turns about z, and a cylinder about z through its tube: every
+    // side face of the coil keeps its screw, and meets the cylinder in curves of the screw,
+    // their p-curves lines on both surfaces. The booleans agree: |a ∪ b| + |a ∩ b| = |a| + |b|.
+    use cadrs_kernel::native::NativeKernel;
+    use cadrs_kernel::native::surface::Surface;
+    use cadrs_kernel::*;
+    use nalgebra::{Point2, Point3, Unit, Vector3};
+    let mut k = NativeKernel::new();
+    let profile = Profile::new(
+        Plane {
+            origin: Point3::origin(),
+            x_dir: Unit::new_normalize(Vector3::x()),
+            normal: Unit::new_normalize(-Vector3::y()),
+        },
+        vec![Region {
+            outer: Loop {
+                curves: vec![Curve2::Circle {
+                    center: Point2::new(7.79, 0.89),
+                    radius: 0.48,
+                    source: None,
+                }],
+            },
+            holes: vec![],
+            source: None,
+        }],
+    );
+    let axis = Axis {
+        origin: Point3::origin(),
+        dir: Unit::new_normalize(Vector3::z()),
+    };
+    let coil = k
+        .screw(
+            &profile,
+            &ScrewSpec {
+                axis,
+                rise: 0.516,
+                angle: 18.6,
+            },
+        )
+        .unwrap()
+        .bodies[0];
+    let cyl = k
+        .primitive(&Primitive::Cylinder {
+            base: Point3::new(0.0, 0.0, -1.0),
+            axis: Unit::new_normalize(Vector3::z()),
+            radius: 7.697,
+            height: 13.39,
+        })
+        .unwrap()
+        .bodies[0];
+    let (a, b) = (
+        (**k.get(coil).unwrap()).clone(),
+        (**k.get(cyl).unwrap()).clone(),
+    );
+    let sheets: Vec<&Surface> = a
+        .faces
+        .iter()
+        .filter_map(|f| matches!(&f.surf, Surface::Nurbs(_)).then_some(&f.surf))
+        .collect();
+    assert!(!sheets.is_empty());
+    assert!(
+        sheets
+            .iter()
+            .all(|s| matches!(s, Surface::Nurbs(n) if n.screw.is_some()))
+    );
+    let side = &b
+        .faces
+        .iter()
+        .find(|f| matches!(f.surf, Surface::Cylinder { .. }))
+        .unwrap()
+        .surf;
+    let any = ((-100.0, 100.0), (-100.0, 100.0));
+    let bb = Bbox {
+        min: Point3::new(-20.0, -20.0, -20.0),
+        max: Point3::new(20.0, 20.0, 20.0),
+    };
+    let curves = ssi::surface_surface(sheets[0], any, side, any, &bb);
+    assert_eq!(curves.len(), 2, "the tube crosses the cylinder twice");
+    for ic in &curves {
+        let pcs = ic.pcs.as_ref().expect("the screw's p-curves");
+        for (pc, s) in pcs.iter().zip([sheets[0], side]) {
+            let pc = pc.as_ref().unwrap();
+            assert!(matches!(pc, Curve::Line { .. }));
+            for i in 0..=8 {
+                let t = ic.t0 + (ic.t1 - ic.t0) * i as f64 / 8.0;
+                let q = pc.point(t);
+                assert!((s.eval(q.x, q.y) - ic.c.point(t)).norm() <= 1e-8);
+            }
+        }
+    }
+    let u = k.boolean(BoolOp::Union, coil, &[cyl]).unwrap().bodies[0];
+    let i = k.boolean(BoolOp::Intersect, coil, &[cyl]).unwrap().bodies[0];
+    for id in [u, i] {
+        assert!(k.get(id).unwrap().check().is_empty());
+    }
+    let v = |k: &NativeKernel, id| k.mass_properties(id).unwrap().volume;
+    let (vu, vi, va, vb) = (v(&k, u), v(&k, i), v(&k, coil), v(&k, cyl));
+    assert!(
+        (vu + vi - va - vb).abs() <= 1e-7 * (va + vb),
+        "{vu} + {vi} vs {va} + {vb}"
+    );
+}

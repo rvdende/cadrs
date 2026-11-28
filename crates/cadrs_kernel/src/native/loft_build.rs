@@ -258,6 +258,7 @@ pub(crate) fn skin(curves: &[NurbsCurve], v: &[f64]) -> NurbsSurface {
             .map(|i| vec![curves[0].cps[i], curves[1].cps[i]])
             .collect();
         return NurbsSurface {
+            screw: None,
             du: curves[0].degree,
             dv: 1,
             ku: curves[0].knots.clone(),
@@ -314,6 +315,7 @@ fn skin_degree(curves: &[NurbsCurve], v: &[f64], q: usize) -> NurbsSurface {
         );
     }
     NurbsSurface {
+        screw: None,
         du: curves[0].degree,
         dv: q,
         ku: curves[0].knots.clone(),
@@ -611,6 +613,7 @@ fn skin_conditioned(
         );
     }
     NurbsSurface {
+        screw: None,
         du: curves[0].degree,
         dv,
         ku: curves[0].knots.clone(),
@@ -672,6 +675,23 @@ fn assemble(
 
 /// The loft's body from rows of surfaces (bottom to top; each row one surface per section
 /// part, all rows sharing their u knots), the caps and the point ends.
+/// A B-spline curve of degree 1 and two poles of equal weight as the line it is (over the same
+/// parameters); any other as itself.
+fn straight(c: NurbsCurve) -> Curve {
+    if c.degree == 1
+        && c.cps.len() == 2
+        && (c.cps[0].w - c.cps[1].w).abs() <= 1e-14 * c.cps[0].w.abs()
+    {
+        let (a, b) = c.range();
+        let (p, q) = (dehom(&c.cps[0]), dehom(&c.cps[1]));
+        if b > a && (q - p).norm() > tol::DEGENERATE {
+            let d = (q - p) / (b - a);
+            return Curve::Line { o: p - d * a, d };
+        }
+    }
+    Curve::Nurbs(Arc::new(c))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn assemble_rows(
     rows: Vec<Vec<NurbsSurface>>,
@@ -748,18 +768,16 @@ fn assemble_rows(
                     };
                     let c = iso(s, false, at_end);
                     let (a, bb) = c.range();
-                    b.add_edge(Curve::Nurbs(Arc::new(c)), a, bb, vs[r][j], vs[r + 1][j])
+                    b.add_edge(straight(c), a, bb, vs[r][j], vs[r + 1][j])
                 })
                 .collect()
         })
         .collect();
     // A flat patch running into a point (a ruled triangle): a plane face of three edges, no
     // degenerate edge (as OCCT's ruled loft).
-    let triangle = |r: usize, i: usize| -> Option<Surface> {
-        let at_point = (r == 0 && points[0]) || (r + 1 == nr && points[1]);
-        if !at_point {
-            return None;
-        }
+    // A patch whose poles all lie in one plane is that plane (a ruled loft's sides between
+    // parallel straight edges, a prism's): a plane face, its edges' p-curves exact.
+    let flat = |r: usize, i: usize| -> Option<Surface> {
         let pts: Vec<P3> = rows[r][i].cps.iter().flatten().map(dehom).collect();
         let o = pts[0];
         let far = pts
@@ -787,6 +805,13 @@ fn assemble_rows(
             },
         })
     };
+    let triangle = |r: usize, i: usize| -> Option<Surface> {
+        let at_point = (r == 0 && points[0]) || (r + 1 == nr && points[1]);
+        if !at_point {
+            return None;
+        }
+        flat(r, i)
+    };
     // Section edges at each level (none at a point under triangles).
     let mut levels: Vec<Vec<usize>> = Vec::new();
     for r in 0..=nr {
@@ -810,7 +835,7 @@ fn assemble_rows(
             } else if point {
                 b.add_degenerate(b.verts[vs[r][0]].p, ua, ub, vs[r][0])
             } else {
-                b.add_edge(Curve::Nurbs(Arc::new(c)), ua, ub, vs[r][i], vs[r][j])
+                b.add_edge(straight(c), ua, ub, vs[r][i], vs[r][j])
             });
         }
         levels.push(es);
@@ -819,7 +844,7 @@ fn assemble_rows(
     for (r, row) in rows.iter().enumerate() {
         for (i, s) in row.iter().enumerate() {
             let j = if closed_u { (i + 1) % n } else { i + 1 };
-            if let Some(surf) = triangle(r, i) {
+            if let Some(surf) = triangle(r, i).or_else(|| flat(r, i)) {
                 let mut lp = Vec::new();
                 for (e, fwd) in [
                     (levels[r][i], true),
@@ -1912,6 +1937,7 @@ fn loft_sampled(k: &NativeKernel, spec: &LoftSpec, solid: bool) -> Result<Built>
             cols.push(c.cps);
         }
         surfs.push(NurbsSurface {
+            screw: None,
             du: curves[0].degree,
             dv: 3.min(cols[0].len() - 1),
             ku: curves[0].knots.clone(),
@@ -2262,14 +2288,17 @@ pub fn loft_guided(
         for p in &parts {
             all.append(p);
         }
-        // (Within a loop's gap: the walls' curves are fitted to their sections.)
-        super::surfacing::sewn_solid(all, tol::LOOP_GAP)
+        // (Within a loop's gap: the walls' curves are fitted to their sections, to a tolerance
+        // that grows with the part past an ordinary size.)
+        let gap = sew_gap(&all);
+        super::surfacing::sewn_solid(all, gap)
     } else {
         let mut all = Body::default();
         for p in &parts {
             all.append(p);
         }
-        super::surfacing::sew_faces(all, tol::LOOP_GAP)
+        let gap = sew_gap(&all);
+        super::surfacing::sew_faces(all, gap)
     };
     for id in made {
         k.release(id);
@@ -2400,7 +2429,7 @@ fn place_point(curves: &[Curve2], u: f64) -> nalgebra::Point2<f64> {
 }
 
 /// The part of curve `c` from fraction `t0` to `t1` (t0 < t1), as a curve of its kind.
-fn curve_part(c: &Curve2, t0: f64, t1: f64) -> Option<Curve2> {
+pub(crate) fn curve_part(c: &Curve2, t0: f64, t1: f64) -> Option<Curve2> {
     if t0 <= 1e-12 && t1 >= 1.0 - 1e-12 && !matches!(c, Curve2::Circle { .. }) {
         return Some(c.clone());
     }
@@ -2483,7 +2512,7 @@ fn loop_pieces(curves: &[Curve2], u: f64, w: f64, fwd: bool) -> Option<Vec<Curve
 
 /// A sketch curve run the other way (a line's ends swapped, an arc swept back, a Bézier's poles
 /// reversed); None for a closed curve.
-fn reversed2(c: &Curve2) -> Option<Curve2> {
+pub(crate) fn reversed2(c: &Curve2) -> Option<Curve2> {
     Some(match *c {
         Curve2::Line { a, b, source } => Curve2::Line { a: b, b: a, source },
         Curve2::Arc {
@@ -2775,6 +2804,18 @@ fn piece_curve2(p: &super::profile::Piece) -> Option<Curve2> {
             })
         }
         _ => None,
+    }
+}
+
+/// The gap a loft's walls are sewn across: [`tol::LOOP_GAP`], growing with the part past 64 mm
+/// across (its walls' curves are fitted to their sections relative to its size: a square to a
+/// round three times larger left its seams three times as far apart).
+fn sew_gap(b: &Body) -> f64 {
+    let size = b.bbox().diagonal();
+    if size.is_finite() && size > 64.0 {
+        tol::LOOP_GAP * size / 64.0
+    } else {
+        tol::LOOP_GAP
     }
 }
 

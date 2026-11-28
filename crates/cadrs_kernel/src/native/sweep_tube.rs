@@ -4130,6 +4130,7 @@ pub(super) fn tensor(
         })
         .collect();
     NurbsSurface {
+        screw: None,
         du: rows[0].degree,
         dv: deg.min(vs.len() - 1),
         ku: rows[0].knots.clone(),

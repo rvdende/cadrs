@@ -1717,9 +1717,29 @@ pub(crate) fn grown_revolved(b: &Body, d: f64) -> Option<Body> {
     let pt = |x: f64, y: f64| nalgebra::Point2::new(x, y);
     let curves: Vec<Curve2> = match &rev.section {
         Section::Disk { c, r } => {
-            // A ball's disc stays one about the axis; a torus's must stay off it.
-            if c.0 != 0.0 && c.0 <= r + d {
-                return None;
+            // A ball's disc stays one about the axis. A torus's grown to the axis or past it (a
+            // horn or spindle torus): every point beside the axis is nearest the section in its
+            // own half plane, so the grown disc as far as the axis, revolved; touching it, the
+            // whole circle; crossing it, the arc out from the axis and the axis between.
+            let s = r + d;
+            if c.0 > 0.0 && c.0 < s * (1.0 - 1e-12) {
+                let hh = (s * s - c.0 * c.0).sqrt();
+                let beta = hh.atan2(-c.0);
+                let curves = vec![
+                    Curve2::Arc {
+                        center: pt(c.0, c.1),
+                        radius: s,
+                        start_angle: -beta,
+                        sweep: 2.0 * beta,
+                        source: None,
+                    },
+                    Curve2::Line {
+                        a: pt(0.0, c.1 + hh),
+                        b: pt(0.0, c.1 - hh),
+                        source: None,
+                    },
+                ];
+                return revolved_section(&rev, curves);
             }
             if c.0 == 0.0 {
                 // The half disc against the axis.
@@ -1815,6 +1835,152 @@ pub(crate) fn grown_revolved(b: &Body, d: f64) -> Option<Body> {
             out
         }
     };
+    revolved_section(&rev, curves)
+}
+
+/// A solid of revolution of one face (its meridian any curve running from the axis back to it,
+/// meeting it square at both ends: a spheroid's half ellipse) grown by a ball of radius `d`:
+/// every point beside the axis is nearest the solid in its own half plane, so the solid of
+/// revolution of the section grown by `d`, its boundary the meridian's parallel curve (each
+/// point moved `d` along the surface's outward normal there), which ends on the axis too. The
+/// parallel curve, no conic, is interpolated by a cubic B-spline, its points doubled until it
+/// holds to 1e-10 of the size at every span's middle. None for any other body.
+pub(crate) fn grown_meridian(b: &Body, d: f64) -> Option<Body> {
+    (d > 0.0).then(|| offset_meridian(b, d)).flatten()
+}
+
+/// [`grown_meridian`] by a signed distance: shrunk where it is negative, the inner parallel
+/// body, which is the section's inner parallel curve revolved while the distance is less than
+/// the surface's least radius of curvature (in the meridian and about the axis): None past it
+/// (the parallel curve runs back on itself, or crosses the axis).
+pub(crate) fn offset_meridian(b: &Body, d: f64) -> Option<Body> {
+    if d == 0.0 || !d.is_finite() || b.solids.len() != 1 || b.shells.len() != 1 {
+        return None;
+    }
+    let [face] = b.faces.as_slice() else {
+        return None;
+    };
+    let Surface::Revolution { f, .. } = &face.surf else {
+        return None;
+    };
+    let ((u0, u1), (v0, v1)) = super::heal_split::face_uv_box(b, 0)?;
+    if (u1 - u0) < TAU * (1.0 - 1e-9) || !(v1 > v0) {
+        return None;
+    }
+    let size = b.bbox().diagonal();
+    let near = 1e-9 * size.max(tol::POINT);
+    let z = f.z.normalize();
+    let x = f.x.normalize();
+    let sense = if face.sense { 1.0 } else { -1.0 };
+    // The meridian at u = u0 in (ρ, h) about the frame, and its parallel curve's point.
+    let xu = x * u0.cos() + f.y.normalize() * u0.sin();
+    let section = |v: f64| -> Option<((f64, f64), (f64, f64))> {
+        let p = face.surf.eval(u0, v);
+        let n = face.surf.normal(u0, v).try_normalize(tol::TINY)? * sense;
+        let q = p - f.o;
+        let (rho, h) = (q.dot(&xu), q.dot(&z));
+        Some(((rho, h), (rho + d * n.dot(&xu), h + d * n.dot(&z))))
+    };
+    // Ends on the axis, square to it (just off them the meridian runs away from the axis
+    // straight across it): the parallel curve's ends d farther along the axis, away from the
+    // other end. (At the poles themselves the surface has no normal.)
+    let ((r0, h0), _) = section(v0).unwrap_or(((f64::NAN, f64::NAN), (0.0, 0.0)));
+    let ((r1, h1), _) = section(v1).unwrap_or(((f64::NAN, f64::NAN), (0.0, 0.0)));
+    let p0 = face.surf.eval(u0, v0) - f.o;
+    let p1 = face.surf.eval(u0, v1) - f.o;
+    let (r0, h0) = if r0.is_finite() {
+        (r0, h0)
+    } else {
+        (p0.dot(&xu), p0.dot(&z))
+    };
+    let (r1, h1) = if r1.is_finite() {
+        (r1, h1)
+    } else {
+        (p1.dot(&xu), p1.dot(&z))
+    };
+    if r0.abs() > near || r1.abs() > near || (h1 - h0).abs() <= near {
+        return None;
+    }
+    let up = (h1 - h0).signum();
+    let ends = [(0.0, h0 - up * d), (0.0, h1 + up * d)];
+    // Square to the axis: just inside each end the parallel curve is off the axis by about as
+    // much as the meridian, not more than the step.
+    let eps = 1e-6 * (v1 - v0);
+    for (v, h) in [(v0 + eps, ends[0].1), (v1 - eps, ends[1].1)] {
+        let (_, (qr, qh)) = section(v)?;
+        if (qh - h).abs() > 1e-3 * d.abs() || qr < -near {
+            return None;
+        }
+    }
+    let mut n = 32usize;
+    let curve = loop {
+        let vs: Vec<f64> = (0..=n)
+            .map(|i| v0 + (v1 - v0) * i as f64 / n as f64)
+            .collect();
+        let mut pts = Vec::with_capacity(n + 1);
+        for (i, &v) in vs.iter().enumerate() {
+            let (qr, qh) = if i == 0 {
+                ends[0]
+            } else if i == n {
+                ends[1]
+            } else {
+                section(v)?.1
+            };
+            if qr < -near {
+                return None;
+            }
+            pts.push(P3::new(qr, qh, 0.0));
+        }
+        // (Each step of the parallel curve runs the way the meridian's does: past a centre of
+        // curvature it would run back.)
+        for i in 1..vs.len() - 1 {
+            let (Some(((ra, ha), _)), Some(((rb, hb), _))) = (section(vs[i]), section(vs[i + 1]))
+            else {
+                continue;
+            };
+            let along = (pts[i + 1] - pts[i]).dot(&V3::new(rb - ra, hb - ha, 0.0));
+            if along <= 0.0 {
+                return None;
+            }
+        }
+        let c = super::nurbs::NurbsCurve::interpolate(&pts, &vs, 3, None, None);
+        let worst = (0..n)
+            .filter_map(|i| {
+                let v = v0 + (v1 - v0) * (i as f64 + 0.5) / n as f64;
+                let (_, (qr, qh)) = section(v)?;
+                Some((c.point(v) - P3::new(qr, qh, 0.0)).norm())
+            })
+            .fold(0.0, f64::max);
+        if worst <= 1e-10 * size {
+            break c;
+        }
+        if n >= 4096 {
+            return None;
+        }
+        n *= 2;
+    };
+    let (start, end) = (curve.point(v0), curve.point(v1));
+    let curves = vec![
+        super::region2::sketch_spline(&curve, None),
+        Curve2::Line {
+            a: nalgebra::Point2::new(0.0, end.y),
+            b: nalgebra::Point2::new(0.0, start.y),
+            source: None,
+        },
+    ];
+    let rev = Revolved {
+        o: f.o,
+        a: z,
+        e1: xu,
+        e2: z.cross(&xu),
+        section: Section::Polygon(Vec::new()),
+    };
+    revolved_section(&rev, curves)
+}
+
+/// The solid of revolution about `rev`'s axis of the section bounded by `curves` (in its half
+/// plane: x out from the axis, y along it), if it is sound.
+fn revolved_section(rev: &Revolved, curves: Vec<Curve2>) -> Option<Body> {
     let region = Region {
         outer: Loop { curves },
         holes: vec![],
@@ -1837,7 +2003,8 @@ pub(crate) fn grown_revolved(b: &Body, d: f64) -> Option<Body> {
         )
         .ok()?;
     let body = (**k.get(*r.bodies.first()?).ok()?).clone();
-    (body.check().is_empty() && super::mass::body_volume(&body) > 0.0).then_some(body)
+    // (The check finds each solid enclosing a positive volume.)
+    (!body.solids.is_empty() && body.check().is_empty()).then_some(body)
 }
 
 /// A torus or a ball turned a whole turn about an axis that misses it (a torus's own axis along
@@ -3069,7 +3236,10 @@ fn screwed_ball(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<R
                 &ExtrudeSpec::blind(nalgebra::Unit::new_normalize(-tangent), 1.5 * r),
             )?;
             let behind = (**scratch.get(behind.bodies[0])?).clone();
-            let ball = b.transformed(&first);
+            // (The ball with its poles on the screw's axis, as a ball made about it has them:
+            // the plane behind it cuts it along a meridian, wherever the ball's own poles were.)
+            let ball = super::blend::ball_frame(first.point(&centre), r, z, e)
+                .unwrap_or_else(|_| b.transformed(&first));
             let opts = super::boolean::BoolOptions::default();
             let mut halves = Vec::new();
             for op in [BoolOp::Intersect, BoolOp::Subtract] {
@@ -3215,6 +3385,7 @@ fn screwed_ball(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<R
                     super::nurbs::H::new(q.x, q.y, q.z, 1.0)
                 };
                 let surf = Surface::Nurbs(std::sync::Arc::new(super::nurbs::NurbsSurface {
+                    screw: None,
                     du: curve.degree,
                     dv: 1,
                     ku: curve.knots.clone(),
@@ -3438,6 +3609,25 @@ fn sweep_solid_at(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> R
                 return Ok(r);
             }
         }
+        // A cylinder along a radius of the turn axis, turned: its shadow revolved and the pin,
+        // domed, at each end ([`radial_pin_turned`]).
+        match ball_turned_across_axis(k, &b, steps) {
+            Some(Ok(r)) => return Ok(r),
+            Some(Err(e)) => declined(format!("a ball across the axis, its section revolved: {e}")),
+            None => {}
+        }
+        match upright_cylinder_turned(k, &b, steps) {
+            Some(Ok(r)) => return Ok(r),
+            Some(Err(e)) => declined(format!(
+                "a cylinder along the axis, its section revolved: {e}"
+            )),
+            None => {}
+        }
+        match radial_pin_turned(k, &b, steps) {
+            Some(Ok(r)) => return Ok(r),
+            Some(Err(e)) => declined(format!("a radial pin's shadow revolved: {e}")),
+            None => {}
+        }
         if (1..=2).contains(&steps.len()) {
             match super::sweep_faces::by_faces(k, &b, steps) {
                 Ok(r) => return Ok(r),
@@ -3449,10 +3639,12 @@ fn sweep_solid_at(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> R
         }
         // A ball screwed: exactly, its tube and end balls trimmed where they pass through
         // one another.
-        if exact.is_some()
-            && let Some(Ok(r)) = screwed_ball(k, &b, steps)
-        {
-            return Ok(r);
+        if exact.is_some() {
+            match screwed_ball(k, &b, steps) {
+                Some(Ok(r)) => return Ok(r),
+                Some(Err(e)) => declined(format!("a ball screwed, its tube and end balls: {e}")),
+                None => {}
+            }
         }
         // A ball carried by any other motion: the pipe of its radius along its centre's path,
         // a ball at each end, where that path nowhere curves tighter than the ball.
@@ -3544,9 +3736,77 @@ fn sweep_solid_at(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> R
             (axis, TAU / rise, Some((from, to)))
         }
     };
+    let (curves, reach, x, y) = screw_outline(&b, &rev, axis, kk)?;
+    let z = axis.dir.into_inner();
+    let region = Region {
+        outer: Loop { curves },
+        holes: vec![],
+        source: Some(0),
+    };
+    match span {
+        None => {
+            // The half plane through the axis: sketch x out from it, y along it.
+            let plane = Plane {
+                origin: axis.origin,
+                x_dir: nalgebra::Unit::new_normalize(x),
+                normal: nalgebra::Unit::new_normalize(x.cross(&z)),
+            };
+            k.revolve_with(
+                &Profile::new(plane, vec![region]),
+                &RevolveSpec::solid(axis, None),
+            )
+        }
+        Some((from, to)) => {
+            // The plane square to the axis at `from`, its sketch axes x and y; the region turned
+            // to where the screw has it there, then swept up the helix to `to`.
+            let turn = kk * from;
+            let (c, s) = (turn.cos(), turn.sin());
+            let (xr, yr) = (x * c + y * s, y * c - x * s);
+            let plane = Plane {
+                origin: axis.origin + z * from,
+                x_dir: nalgebra::Unit::new_normalize(xr),
+                normal: nalgebra::Unit::new_normalize(xr.cross(&yr)),
+            };
+            // The helix through a point of the region (its first pole's distance, at angle 0
+            // of the plane), rising to `to`.
+            let r0 = reach.max(tol::POINT);
+            let turns = (to - from) * kk / TAU;
+            let path = helix_path(plane.origin, z, xr, yr, r0, TAU / kk, turns);
+            // Swept by the screw's own motion (a path this short is too little of a helix for
+            // the sweep to recognise one).
+            let prof = Profile::new(plane, vec![region]);
+            let regions = super::profile::regions(&prof)?;
+            let faces = super::profile::merge_regions(&regions)?;
+            let segs = super::sweep::path::path_segments(k, &path)?;
+            let helix =
+                super::sweep::frames::Helix::new(plane.origin, z, xr, yr, r0, TAU / kk / TAU, 0.0);
+            let (built, _) = super::sweep::frames::sweep_seg(
+                &faces,
+                &[],
+                plane,
+                &segs,
+                super::sweep::Frames::Control(SweepControl::None),
+                true,
+                Some(helix),
+            )?;
+            Ok(super::features::Tagged::from_built(built).into_result(k))
+        }
+    }
+}
+
+/// The outline of what solid of revolution `rev` (of body `b`) passes through turned about
+/// `axis` (`kk` the turn a unit along it: 0 for a turn alone), in the section's plane (for a
+/// screw, the plane square to the axis at height 0, polar), with its greatest distance from the
+/// axis and the plane's axes x and y: [`sweep_solid_at`]'s, exact where it can be had.
+fn screw_outline(
+    b: &Body,
+    rev: &Revolved,
+    axis: crate::Axis,
+    kk: f64,
+) -> Result<(Vec<Curve2>, f64, V3, V3)> {
     let z = axis.dir.into_inner();
     let sl = Slicer {
-        body: &rev,
+        body: rev,
         origin: axis.origin,
         z,
         k: kk,
@@ -3608,58 +3868,135 @@ fn sweep_solid_at(k: &mut NativeKernel, body: BodyId, motion: &SolidMotion) -> R
             sliced_outline(&sl, &ol, &p2)
         }
     };
+    Ok((curves, reach, x, y))
+}
+
+/// `target` less what `tool` passes through screwed by `motion` (an endless screw between planes
+/// past the target's ends), where the target is a rod about the screw's axis (a cylinder about it
+/// and two planes square to it): within the rod everything is screwed into itself, so the result
+/// is the rod's section (a disc) less the tool's outline in the plane square to the axis
+/// ([`screw_outline`]), screwed up the rod from its one end to the other. None for any other
+/// target or motion, or where the section's region can't be had or the result isn't sound (the
+/// solid sweep and its cut then).
+fn cut_screwed_rod(
+    k: &mut NativeKernel,
+    target: BodyId,
+    tool: &Body,
+    motion: &SolidMotion,
+) -> Option<OpResult> {
+    let SolidMotion::Screw {
+        axis,
+        rise,
+        from,
+        to,
+    } = *motion
+    else {
+        return None;
+    };
+    if !(rise.abs() > tol::POINT) {
+        return None;
+    }
+    let kk = TAU / rise;
+    let z = axis.dir.into_inner().normalize();
+    let rod = std::sync::Arc::clone(k.get(target).ok()?);
+    let size = rod.bbox().diagonal().max(tol::POINT);
+    let near = 1e-9 * (1.0 + size + (axis.origin - P3::origin()).norm());
+    if rod.solids.len() != 1 {
+        return None;
+    }
+    let (mut radius, mut heights) = (None, Vec::new());
+    for f in &rod.faces {
+        match &f.surf {
+            Surface::Cylinder { f: fr, r } => {
+                let w = fr.o - axis.origin;
+                if fr.z.cross(&z).norm() > 1e-12
+                    || (w - z * w.dot(&z)).norm() > near
+                    || radius.is_some_and(|q: f64| (q - r).abs() > near)
+                {
+                    return None;
+                }
+                radius = Some(*r);
+            }
+            Surface::Plane { f: fr } => {
+                if fr.x.cross(&fr.y).normalize().cross(&z).norm() > 1e-12 {
+                    return None;
+                }
+                heights.push((fr.o - axis.origin).dot(&z));
+            }
+            _ => return None,
+        }
+    }
+    let r = radius?;
+    let [h0, h1] = heights[..] else { return None };
+    let (h0, h1) = (h0.min(h1), h0.max(h1));
+    if !(from < h0 - near && to > h1 + near && h1 - h0 > near) {
+        return None;
+    }
+    // (The whole rod, its side's pieces all of one cylinder: its volume the cylinder's.)
+    let want = std::f64::consts::PI * r * r * (h1 - h0);
+    let got = k.mass_properties(target).ok()?.volume;
+    if (got - want).abs() > 1e-9 * want {
+        return None;
+    }
+    let rev = revolved(tool)?;
+    // (In closed form, else traced finely: the result is the outline's own.)
+    let (curves, _, x, y) = with_slices(EXACT, || screw_outline(tool, &rev, axis, kk)).ok()?;
+    let loops = super::region2::disc_less(nalgebra::Point2::origin(), r, &curves)?;
+    let mut loops = loops.into_iter();
+    let outer = loops.next()?;
+    let holes: Vec<Loop> = loops.map(|curves| Loop { curves }).collect();
     let region = Region {
-        outer: Loop { curves },
-        holes: vec![],
+        outer: Loop { curves: outer },
+        holes,
         source: Some(0),
     };
-    match span {
-        None => {
-            // The half plane through the axis: sketch x out from it, y along it.
-            let plane = Plane {
-                origin: axis.origin,
-                x_dir: nalgebra::Unit::new_normalize(x),
-                normal: nalgebra::Unit::new_normalize(x.cross(&z)),
-            };
-            k.revolve_with(
-                &Profile::new(plane, vec![region]),
-                &RevolveSpec::solid(axis, None),
-            )
+    // The plane square to the axis at the rod's lower end, its axes turned to where the screw
+    // has the section there; the region swept up the helix to the upper end.
+    let turn = kk * h0;
+    let (c, s) = (turn.cos(), turn.sin());
+    let (xr, yr) = (x * c + y * s, y * c - x * s);
+    let plane = Plane {
+        origin: axis.origin + z * h0,
+        x_dir: nalgebra::Unit::new_normalize(xr),
+        normal: nalgebra::Unit::new_normalize(xr.cross(&yr)),
+    };
+    let turns = (h1 - h0) * kk / TAU;
+    let path = helix_path(plane.origin, z, xr, yr, r, TAU / kk, turns);
+    let prof = Profile::new(plane, vec![region]);
+    let made = (|| -> Result<OpResult> {
+        let regions = super::profile::regions(&prof)?;
+        let faces = super::profile::merge_regions(&regions)?;
+        let segs = super::sweep::path::path_segments(k, &path)?;
+        let helix =
+            super::sweep::frames::Helix::new(plane.origin, z, xr, yr, r, TAU / kk / TAU, 0.0);
+        let (built, _) = super::sweep::frames::sweep_seg(
+            &faces,
+            &[],
+            plane,
+            &segs,
+            super::sweep::Frames::Control(SweepControl::None),
+            true,
+            Some(helix),
+        )?;
+        Ok(super::features::Tagged::from_built(built).into_result(k))
+    })();
+    let debug = crate::native::env_flag!("CADRS_SWEEP_SOLID_DEBUG");
+    match made {
+        Ok(res) if res.bodies.len() == 1 && k.sound(res.bodies[0]) => Some(res),
+        Ok(res) => {
+            if debug {
+                eprintln!("screwed rod: not sound");
+            }
+            for id in res.bodies {
+                k.release(id);
+            }
+            None
         }
-        Some((from, to)) => {
-            // The plane square to the axis at `from`, its sketch axes x and y; the region turned
-            // to where the screw has it there, then swept up the helix to `to`.
-            let turn = kk * from;
-            let (c, s) = (turn.cos(), turn.sin());
-            let (xr, yr) = (x * c + y * s, y * c - x * s);
-            let plane = Plane {
-                origin: axis.origin + z * from,
-                x_dir: nalgebra::Unit::new_normalize(xr),
-                normal: nalgebra::Unit::new_normalize(xr.cross(&yr)),
-            };
-            // The helix through a point of the region (its first pole's distance, at angle 0
-            // of the plane), rising to `to`.
-            let r0 = reach.max(tol::POINT);
-            let turns = (to - from) * kk / TAU;
-            let path = helix_path(plane.origin, z, xr, yr, r0, TAU / kk, turns);
-            // Swept by the screw's own motion (a path this short is too little of a helix for
-            // the sweep to recognise one).
-            let prof = Profile::new(plane, vec![region]);
-            let regions = super::profile::regions(&prof)?;
-            let faces = super::profile::merge_regions(&regions)?;
-            let segs = super::sweep::path::path_segments(k, &path)?;
-            let helix =
-                super::sweep::frames::Helix::new(plane.origin, z, xr, yr, r0, TAU / kk / TAU, 0.0);
-            let (built, _) = super::sweep::frames::sweep_seg(
-                &faces,
-                &[],
-                plane,
-                &segs,
-                super::sweep::Frames::Control(SweepControl::None),
-                true,
-                Some(helix),
-            )?;
-            Ok(super::features::Tagged::from_built(built).into_result(k))
+        Err(e) => {
+            if debug {
+                eprintln!("screwed rod: {e}");
+            }
+            None
         }
     }
 }
@@ -5370,6 +5707,9 @@ thread_local! {
 
 /// Notes why an exact way declined the sweep or cut being made (the first few are kept).
 pub(crate) fn declined(why: impl std::fmt::Display) {
+    if crate::native::env_flag!("CADRS_SWEEP_DEBUG") {
+        eprintln!("sweep: declined: {why}");
+    }
     DECLINED.with(|d| {
         let mut d = d.borrow_mut();
         if d.len() < 6 {
@@ -5501,6 +5841,11 @@ fn cut_swept_in(
         return Ok(r);
     }
     if let Some(endless) = endless_within(&**k.get(target)?, &b, motion) {
+        // A rod about the screw's axis, square at its ends, that the screw passes wholly through:
+        // its section less what the tool covers of it, screwed up it (no solid sweep, no cut).
+        if let Some(r) = cut_screwed_rod(k, target, &b, &endless) {
+            return Ok(r);
+        }
         // (Its outline exact, then traced finely, then coarsely: a boolean may take the one and
         // not the other.)
         for n in OUTLINES {
@@ -6749,4 +7094,663 @@ fn ball_along(k: &mut NativeKernel, b: &Body, steps: &[RigidStep]) -> Option<Res
         })
     };
     Some(run(k))
+}
+
+/// A whole ball reaching across a turn's axis (its centre nearer the axis than its radius),
+/// turned by one step: everything it passes through, exactly. About the axis, at distance ρ and
+/// height z, the ball covers the angles within w(ρ, z) of its centre's (|p − c|² ≤ r² is
+/// cos φ ≥ (ρ² + d² + z² − r²) / 2ρd, one interval about 0, or the whole circle), so turned from
+/// θ₀ to θ₁ it covers [θ₀ − w, θ₁ + w]: its section in the half plane through its centre (the
+/// disc cut off at the axis) revolved from θ₀ to θ₁, with the whole ball at each end. (A ball
+/// clear of the axis is [`ball_along`]'s.) None for any other body or motion.
+fn ball_turned_across_axis(
+    k: &mut NativeKernel,
+    b: &Body,
+    steps: &[RigidStep],
+) -> Option<Result<OpResult>> {
+    let [RigidStep::Turn { axis, from, to }] = steps else {
+        return None;
+    };
+    let (lo, hi) = (from.min(*to), from.max(*to));
+    let span = hi - lo;
+    let [f] = b.faces.as_slice() else {
+        return None;
+    };
+    let Surface::Sphere { f: fr, r } = &f.surf else {
+        return None;
+    };
+    let r = *r;
+    if b.solids.len() != 1
+        || b.shells.len() != 1
+        || !b.shells[0].closed
+        || super::classify::outward_sign(f) != Some(1.0)
+        || !(span > 0.0 && span < TAU * (1.0 - 1e-9))
+    {
+        return None;
+    }
+    let z = axis.dir.into_inner();
+    let foot = axis.origin + z * (fr.o - axis.origin).dot(&z);
+    let out = fr.o - foot;
+    let d = out.norm();
+    // Across the axis, by more than a sliver (on it, the ball turns into itself).
+    if !(d > 1e-6 * r && d < r * (1.0 - 1e-6)) {
+        return None;
+    }
+    let a = out / d;
+    let turned = |t: f64| a * t.cos() + z.cross(&a) * t.sin();
+    let hh = (r * r - d * d).sqrt();
+    let beta = hh.atan2(-d);
+    let p2 = |x: f64, y: f64| nalgebra::Point2::new(x, y);
+    let run = |k: &mut NativeKernel| -> Result<OpResult> {
+        let dir = turned(lo);
+        let plane = Plane {
+            origin: foot,
+            x_dir: nalgebra::Unit::new_normalize(dir),
+            normal: nalgebra::Unit::new_normalize(dir.cross(&z)),
+        };
+        // The disc about (d, 0) of radius r, out from the axis: its arc from where it leaves
+        // the axis below round to where it meets it above, then down the axis.
+        let section = Region {
+            outer: Loop {
+                curves: vec![
+                    Curve2::Arc {
+                        center: p2(d, 0.0),
+                        radius: r,
+                        start_angle: -beta,
+                        sweep: 2.0 * beta,
+                        source: None,
+                    },
+                    Curve2::Line {
+                        a: p2(0.0, hh),
+                        b: p2(0.0, -hh),
+                        source: None,
+                    },
+                ],
+            },
+            holes: vec![],
+            source: None,
+        };
+        let swept = k.revolve_with(
+            &Profile::new(plane, vec![section]),
+            &RevolveSpec::solid(
+                Axis {
+                    origin: foot,
+                    dir: axis.dir,
+                },
+                Some(span),
+            ),
+        )?;
+        let [swept] = swept.bodies[..] else {
+            return Err(KernelError::InvalidResult {
+                op: "sweep",
+                why: "a ball's revolved section isn't one body".into(),
+            });
+        };
+        let mut ends = Vec::new();
+        for t in [lo, hi] {
+            ends.extend(
+                k.primitive(&Primitive::ball(foot + turned(t) * d, r))?
+                    .bodies,
+            );
+        }
+        let joined = k.boolean(BoolOp::Union, swept, &ends);
+        k.release(swept);
+        for e in ends {
+            k.release(e);
+        }
+        let joined = joined?;
+        let [j] = joined.bodies[..] else {
+            return Err(KernelError::InvalidResult {
+                op: "sweep",
+                why: "a ball's revolved section and its end balls aren't one body".into(),
+            });
+        };
+        Ok(OpResult {
+            bodies: vec![j],
+            ..Default::default()
+        })
+    };
+    Some(run(k))
+}
+
+/// A solid cylinder standing parallel to a turn's axis (not about it), turned by one step:
+/// everything it passes through, exactly, as [`ball_turned_across_axis`] has a ball's. Each of
+/// its slices square to the axis is a disc, which covers the angles about the axis within some
+/// w(ρ) of its centre's (or the whole circle, where the disc holds the axis), so turned from θ₀
+/// to θ₁ the cylinder covers its section in the half plane through its axis (out from the axis,
+/// or from it where the cylinder reaches across it, to the far side) revolved from θ₀ to θ₁,
+/// and itself at each end. None for any other body or motion.
+fn upright_cylinder_turned(
+    k: &mut NativeKernel,
+    b: &Body,
+    steps: &[RigidStep],
+) -> Option<Result<OpResult>> {
+    let [RigidStep::Turn { axis, from, to }] = steps else {
+        return None;
+    };
+    let (lo, hi) = (from.min(*to), from.max(*to));
+    let span = hi - lo;
+    if b.solids.len() != 1 || b.faces.len() != 3 || !(span > 0.0 && span < TAU * (1.0 - 1e-9)) {
+        return None;
+    }
+    let rev = revolved(b)?;
+    let Section::Polygon(corners) = &rev.section else {
+        return None;
+    };
+    let r = corners.iter().map(|c| c.0).fold(0.0, f64::max);
+    let (h0, h1) = corners
+        .iter()
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), c| {
+            (a.min(c.1), b.max(c.1))
+        });
+    let near = 1e-9 * (1.0 + (h1 - h0).max(r));
+    if corners.len() != 4
+        || !(r > near && h1 - h0 > near)
+        || !corners.iter().all(|c| {
+            (c.0.abs() <= near || (c.0 - r).abs() <= near)
+                && ((c.1 - h0).abs() <= near || (c.1 - h1).abs() <= near)
+        })
+    {
+        return None;
+    }
+    let z = axis.dir.into_inner();
+    let a = rev.a.normalize();
+    if a.cross(&z).norm() > 1e-12 {
+        return None;
+    }
+    // Its axis's foot on the turn axis, how far out it stands, and its ends' heights there.
+    let foot = axis.origin + z * (rev.o - axis.origin).dot(&z);
+    let out = rev.o - foot;
+    let d = out.norm();
+    if !(d > 1e-6 * r) {
+        return None;
+    }
+    let dir0 = out / d;
+    let s = a.dot(&z);
+    let (z0, z1) = ((h0 * s).min(h1 * s), (h0 * s).max(h1 * s));
+    let (rho0, rho1) = ((d - r).max(0.0), d + r);
+    let turned = |t: f64| dir0 * t.cos() + z.cross(&dir0) * t.sin();
+    let p2 = |x: f64, y: f64| nalgebra::Point2::new(x, y);
+    let line = |p: nalgebra::Point2<f64>, q: nalgebra::Point2<f64>| Curve2::Line {
+        a: p,
+        b: q,
+        source: None,
+    };
+    let run = |k: &mut NativeKernel| -> Result<OpResult> {
+        let dir = turned(lo);
+        let plane = Plane {
+            origin: foot,
+            x_dir: nalgebra::Unit::new_normalize(dir),
+            normal: nalgebra::Unit::new_normalize(dir.cross(&z)),
+        };
+        let section = Region {
+            outer: Loop {
+                curves: vec![
+                    line(p2(rho0, z0), p2(rho1, z0)),
+                    line(p2(rho1, z0), p2(rho1, z1)),
+                    line(p2(rho1, z1), p2(rho0, z1)),
+                    line(p2(rho0, z1), p2(rho0, z0)),
+                ],
+            },
+            holes: vec![],
+            source: None,
+        };
+        let swept = k.revolve_with(
+            &Profile::new(plane, vec![section]),
+            &RevolveSpec::solid(
+                Axis {
+                    origin: foot,
+                    dir: axis.dir,
+                },
+                Some(span),
+            ),
+        )?;
+        let [swept] = swept.bodies[..] else {
+            return Err(KernelError::InvalidResult {
+                op: "sweep",
+                why: "a cylinder's revolved section isn't one body".into(),
+            });
+        };
+        // The cylinder at each end of the turn.
+        let mut ends = Vec::new();
+        for t in [0.0, 1.0] {
+            let (q, d) = rigid_at(steps, t);
+            ends.push(k.insert(b.transformed(&Affine {
+                m: q.into_inner(),
+                t: d,
+            })));
+        }
+        let joined = k.boolean(BoolOp::Union, swept, &ends);
+        k.release(swept);
+        for e in ends {
+            k.release(e);
+        }
+        let joined = joined?;
+        let [j] = joined.bodies[..] else {
+            return Err(KernelError::InvalidResult {
+                op: "sweep",
+                why: "a cylinder's revolved section and its ends aren't one body".into(),
+            });
+        };
+        Ok(OpResult {
+            bodies: vec![j],
+            ..Default::default()
+        })
+    };
+    Some(run(k))
+}
+
+/// A solid cylinder lying along a radius of a turn's axis (its own axis meets the turn's square
+/// to it, the cylinder clear of it), turned by one step: everything it passes through, exactly.
+/// About the turn axis, at distance ρ and height z (measured from where the axes meet, along the
+/// turn axis), the cylinder of radius r from x₀ to x₁ out along its axis covers the angles within
+/// some w(ρ, z) of its own, with a gap about its own for ρ past x₁ (beyond its far end) that the
+/// turn fills; its shadow in (ρ, z) is |z| ≤ r, x₀ ≤ ρ ≤ √(x₁² + r² − z²). Turned from θ₀ to θ₁
+/// it covers [θ₀ − w, θ₁ + w] there: the shadow revolved from θ₀ to θ₁, with at each end the
+/// cylinder and the gap beyond it, which is the ball of radius √(x₁² + r²) about where the axes
+/// meet, cut off by the plane of its far end: the pin domed. (The turn must be at least the
+/// cylinder's angular width, 2·atan(r / x₀), so the gaps close.) The result's volume is held to
+/// the shadow's by Pappus and the domed pin's. None for any other body or motion.
+fn radial_pin_turned(
+    k: &mut NativeKernel,
+    b: &Body,
+    steps: &[RigidStep],
+) -> Option<Result<OpResult>> {
+    let [RigidStep::Turn { axis, from, to }] = steps else {
+        return None;
+    };
+    let (lo, hi) = (from.min(*to), from.max(*to));
+    let span = hi - lo;
+    if b.solids.len() != 1 || b.faces.len() != 3 || !(span > 0.0) {
+        return None;
+    }
+    let rev = revolved(b)?;
+    let Section::Polygon(corners) = &rev.section else {
+        return None;
+    };
+    // The section a rectangle against the axis: the cylinder's radius and its two ends.
+    let r = corners.iter().map(|c| c.0).fold(0.0, f64::max);
+    let (h0, h1) = corners
+        .iter()
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), c| {
+            (a.min(c.1), b.max(c.1))
+        });
+    let size = (h1 - h0).max(r);
+    let near = 1e-9 * (1.0 + size);
+    if corners.len() != 4
+        || !(r > near && h1 - h0 > near)
+        || !corners.iter().all(|c| {
+            (c.0.abs() <= near || (c.0 - r).abs() <= near)
+                && ((c.1 - h0).abs() <= near || (c.1 - h1).abs() <= near)
+        })
+    {
+        return None;
+    }
+    let z = axis.dir.into_inner();
+    let mut a = rev.a.normalize();
+    if a.dot(&z).abs() > 1e-12 {
+        return None;
+    }
+    // Where the axes meet: the foot on the turn axis of the cylinder's axis, which must pass
+    // through it.
+    let c = axis.origin + z * (rev.o - axis.origin).dot(&z);
+    let off = rev.o - c;
+    if (off - a * off.dot(&a)).norm() > near {
+        return None;
+    }
+    let (mut x0, mut x1) = (off.dot(&a) + h0, off.dot(&a) + h1);
+    if x1 <= 0.0 {
+        a = -a;
+        (x0, x1) = (-x1, -x0);
+    }
+    let w = (r / x0).atan();
+    if !(x0 > near) || span < 2.0 * w * (1.0 + 1e-9) || span + 2.0 * w >= TAU * (1.0 - 1e-9) {
+        return None;
+    }
+    let rs = x1.hypot(r);
+    let turned = |t: f64| a * t.cos() + z.cross(&a) * t.sin();
+    let p2 = |x: f64, y: f64| nalgebra::Point2::new(x, y);
+    let line = |p: nalgebra::Point2<f64>, q: nalgebra::Point2<f64>| Curve2::Line {
+        a: p,
+        b: q,
+        source: None,
+    };
+    let arc = |t0: f64, sw: f64| Curve2::Arc {
+        center: p2(0.0, 0.0),
+        radius: rs,
+        start_angle: t0,
+        sweep: sw,
+        source: None,
+    };
+    let region = |curves: Vec<Curve2>| Region {
+        outer: Loop { curves },
+        holes: vec![],
+        source: None,
+    };
+    let tip = (r / x1).atan();
+    let run = |k: &mut NativeKernel| -> Result<OpResult> {
+        // The shadow, in the half plane at θ₀: out along the pin, up the turn axis.
+        let dir = turned(lo);
+        let plane = Plane {
+            origin: c,
+            x_dir: nalgebra::Unit::new_normalize(dir),
+            normal: nalgebra::Unit::new_normalize(dir.cross(&z)),
+        };
+        let shadow = region(vec![
+            line(p2(x0, -r), p2(x1, -r)),
+            arc(-tip, 2.0 * tip),
+            line(p2(x1, r), p2(x0, r)),
+            line(p2(x0, r), p2(x0, -r)),
+        ]);
+        let swept = k.revolve_with(
+            &Profile::new(plane, vec![shadow]),
+            &RevolveSpec::solid(
+                Axis {
+                    origin: c,
+                    dir: axis.dir,
+                },
+                Some(span),
+            ),
+        )?;
+        let [swept] = swept.bodies[..] else {
+            return Err(KernelError::InvalidResult {
+                op: "sweep",
+                why: "a pin's swept shadow isn't one body".into(),
+            });
+        };
+        // The pin domed, at each end of the turn, the half of it outside the turn: its half
+        // section (out along it, up the turn axis) revolved half a turn about its own axis,
+        // from up the turn axis away from the turn. (Its flat face, its section through both
+        // axes, is the shadow: it meets the shadow's revolve along that face, where a whole pin
+        // would also touch the slot's roof and floor along lines, tangent, which the union
+        // finds slowly.)
+        let mut ends = Vec::new();
+        for (t, back) in [(lo, 1.0), (hi, -1.0)] {
+            let dir = turned(t);
+            let plane = Plane {
+                origin: c,
+                x_dir: nalgebra::Unit::new_normalize(dir),
+                normal: nalgebra::Unit::new_normalize(dir.cross(&z)),
+            };
+            let half = region(vec![
+                line(p2(x0, 0.0), p2(rs, 0.0)),
+                arc(0.0, tip),
+                line(p2(x1, r), p2(x0, r)),
+                line(p2(x0, r), p2(x0, 0.0)),
+            ]);
+            // (Turned about +dir, up the turn axis goes to −(z × dir): back against the turn.)
+            let pin = k.revolve_with(
+                &Profile::new(plane, vec![half]),
+                &RevolveSpec::solid(
+                    Axis {
+                        origin: c,
+                        dir: nalgebra::Unit::new_normalize(dir * back),
+                    },
+                    Some(PI),
+                ),
+            )?;
+            ends.extend(pin.bodies);
+        }
+        let joined = k.boolean(BoolOp::Union, swept, &ends);
+        k.release(swept);
+        for e in ends {
+            k.release(e);
+        }
+        let joined = joined?;
+        let [j] = joined.bodies[..] else {
+            return Err(KernelError::InvalidResult {
+                op: "sweep",
+                why: "a pin's swept shadow and its ends aren't one body".into(),
+            });
+        };
+        // Pappus's shadow, and a half of a domed pin at each end.
+        let cap = rs - x1;
+        let want = span * r * (rs * rs - x0 * x0 - r * r / 3.0)
+            + std::f64::consts::PI * r * r * (x1 - x0)
+            + std::f64::consts::PI * cap * cap * (3.0 * rs - cap) / 3.0;
+        let got = super::mass::body_volume(k.get(j)?);
+        if (got - want).abs() > 1e-9 * want {
+            k.release(j);
+            return Err(KernelError::InvalidResult {
+                op: "sweep",
+                why: format!("a pin's swept volume {got}, not {want}"),
+            });
+        }
+        Ok(OpResult {
+            bodies: vec![j],
+            ..Default::default()
+        })
+    };
+    Some(run(k))
+}
+
+/// [`super::offset::round::shell`]'s inward shell `t` thick of a solid of revolution whose
+/// section is a convex polygon (its faces planes square to the axis, cylinders and cones about
+/// it), open at the `remove` faces, by its section: the cavity is the section with each kept
+/// face's edge moved in by t (the removed faces' and the axis's left where they are), the
+/// shell the section less that, revolved. Each face of the result on a face of the body's
+/// surface is traced to it; the walls moved in are left for the caller to trace. None for any
+/// other body, a cavity that meets the section's boundary in more than one stretch (a side
+/// removed between two caps), or a result whose volume isn't the sections' by Pappus.
+pub(crate) fn shelled_revolved(
+    b: &Body,
+    remove: &[usize],
+    t: f64,
+) -> Option<(Body, Vec<Vec<super::blend::FaceSrc>>)> {
+    type V2 = (f64, f64);
+    let rev = revolved(b)?;
+    let Section::Polygon(outer) = &rev.section else {
+        return None;
+    };
+    let n = outer.len();
+    let size = b.bbox().diagonal().max(t);
+    let near = 1e-9 * (1.0 + size);
+    let on_axis = |p: V2| p.0.abs() <= near;
+    let at = |p: V2| rev.o + rev.e1 * p.0 + rev.a * p.1;
+    // Each edge's face (None along the axis); every face some edge's.
+    let mut edge_face: Vec<Option<usize>> = Vec::with_capacity(n);
+    for i in 0..n {
+        let (p, q) = (outer[i], outer[(i + 1) % n]);
+        if on_axis(p) && on_axis(q) {
+            edge_face.push(None);
+            continue;
+        }
+        let m = at((0.5 * (p.0 + q.0), 0.5 * (p.1 + q.1)));
+        let on: Vec<usize> = (0..b.faces.len())
+            .filter(|&fi| b.faces[fi].surf.distance(&m) <= 1e-7 * (1.0 + size))
+            .collect();
+        let [f] = on[..] else { return None };
+        edge_face.push(Some(f));
+    }
+    if (0..b.faces.len()).any(|fi| !edge_face.contains(&Some(fi)))
+        || remove.iter().any(|f| !edge_face.contains(&Some(*f)))
+    {
+        return None;
+    }
+    // The cavity: the section clipped by each kept edge's line moved in by t (each vertex
+    // with whether the edge from it is such a line).
+    let mut cav: Vec<(V2, bool)> = outer.iter().map(|&p| (p, false)).collect();
+    for i in 0..n {
+        let Some(f) = edge_face[i] else { continue };
+        if remove.contains(&f) {
+            continue;
+        }
+        let (p, q) = (outer[i], outer[(i + 1) % n]);
+        let (dx, dy) = (q.0 - p.0, q.1 - p.1);
+        let l = dx.hypot(dy);
+        // Inward: to the left of the counter-clockwise boundary.
+        let (nx, ny) = (-dy / l, dx / l);
+        let off = nx * p.0 + ny * p.1 + t;
+        let h = |v: V2| nx * v.0 + ny * v.1 - off;
+        let m = cav.len();
+        let mut out: Vec<(V2, bool)> = Vec::with_capacity(m + 2);
+        for k in 0..m {
+            let ((a, fa), (bq, _)) = (cav[k], cav[(k + 1) % m]);
+            let (ha, hb) = (h(a), h(bq));
+            let cut = |s: f64| (a.0 + (bq.0 - a.0) * s, a.1 + (bq.1 - a.1) * s);
+            match (ha >= 0.0, hb >= 0.0) {
+                (true, true) => out.push((a, fa)),
+                (true, false) => {
+                    out.push((a, fa));
+                    out.push((cut(ha / (ha - hb)), true));
+                }
+                (false, true) => out.push((cut(ha / (ha - hb)), fa)),
+                (false, false) => {}
+            }
+        }
+        out.dedup_by(|x, y| (x.0.0 - y.0.0).hypot(x.0.1 - y.0.1) <= near);
+        if out.len() >= 2 && {
+            let (f0, fl) = (out[0].0, out[out.len() - 1].0);
+            (f0.0 - fl.0).hypot(f0.1 - fl.1) <= near
+        } {
+            out.pop();
+        }
+        if out.len() < 3 {
+            return None;
+        }
+        cav = out;
+    }
+    let area = |poly: &[V2]| {
+        let m = poly.len();
+        let (mut a, mut mo) = (0.0, 0.0);
+        for i in 0..m {
+            let (p, q) = (poly[i], poly[(i + 1) % m]);
+            let c = p.0 * q.1 - q.0 * p.1;
+            a += c;
+            mo += c * (p.0 + q.0);
+        }
+        (a / 2.0, std::f64::consts::TAU * mo / 6.0)
+    };
+    let cav_pts: Vec<V2> = cav.iter().map(|c| c.0).collect();
+    let (ca, cv) = area(&cav_pts);
+    if !(ca > near * size) {
+        return None;
+    }
+    // The moved lines one stretch of the cavity's boundary: from cs round to ce.
+    let m = cav.len();
+    let starts: Vec<usize> = (0..m)
+        .filter(|&k| cav[k].1 && !cav[(k + m - 1) % m].1)
+        .collect();
+    let [cs] = starts[..] else { return None };
+    let mut ce = cs;
+    while cav[ce].1 {
+        ce = (ce + 1) % m;
+        if ce == cs {
+            return None;
+        }
+    }
+    // The shell's section: from cs along the outer boundary to ce, back along the moved lines.
+    let param = |v: V2| -> Option<(usize, f64)> {
+        (0..n).find_map(|i| {
+            let (p, q) = (outer[i], outer[(i + 1) % n]);
+            let (dx, dy) = (q.0 - p.0, q.1 - p.1);
+            let l2 = dx * dx + dy * dy;
+            let s = ((v.0 - p.0) * dx + (v.1 - p.1) * dy) / l2;
+            let (fx, fy) = (p.0 + dx * s, p.1 + dy * s);
+            ((fx - v.0).hypot(fy - v.1) <= near && (-1e-12..=1.0 + 1e-12).contains(&s))
+                .then_some((i, s))
+        })
+    };
+    let (ps, pe) = (cav[cs].0, cav[ce].0);
+    let (is, ss) = param(ps)?;
+    let (ie, se) = param(pe)?;
+    let mut ring: Vec<V2> = vec![ps];
+    // The outer corners between: from is's end to ie's start (all round where both lie on
+    // one edge, ce before cs).
+    let mut steps = (ie + n - is) % n;
+    if steps == 0 && se < ss {
+        steps = n;
+    }
+    for k in 1..=steps {
+        ring.push(outer[(is + k) % n]);
+    }
+    ring.push(pe);
+    let mut k = ce;
+    while k != cs {
+        k = (k + m - 1) % m;
+        if k != cs {
+            ring.push(cav[k].0);
+        }
+    }
+    ring.dedup_by(|x, y| (x.0 - y.0).hypot(x.1 - y.1) <= near);
+    if ring.len() >= 2
+        && (ring[0].0 - ring[ring.len() - 1].0).hypot(ring[0].1 - ring[ring.len() - 1].1) <= near
+    {
+        ring.pop();
+    }
+    if ring.len() < 3 {
+        return None;
+    }
+    let (_, rv) = area(&ring);
+    let (_, ov) = area(outer);
+    if (rv - (ov - cv)).abs() > 1e-9 * ov.abs() {
+        return None;
+    }
+    let pt = |p: V2| nalgebra::Point2::new(p.0, p.1);
+    let curves: Vec<Curve2> = (0..ring.len())
+        .map(|i| Curve2::Line {
+            a: pt(ring[i]),
+            b: pt(ring[(i + 1) % ring.len()]),
+            source: None,
+        })
+        .collect();
+    let region = Region {
+        outer: Loop { curves },
+        holes: vec![],
+        source: Some(0),
+    };
+    let plane = Plane {
+        origin: rev.o,
+        x_dir: nalgebra::Unit::new_normalize(rev.e1),
+        normal: nalgebra::Unit::new_normalize(rev.e1.cross(&rev.a)),
+    };
+    let axis = Axis {
+        origin: rev.o,
+        dir: nalgebra::Unit::new_normalize(rev.a),
+    };
+    let mut k = NativeKernel::new();
+    let r = k
+        .revolve_with(
+            &Profile::new(plane, vec![region]),
+            &RevolveSpec::solid(axis, None),
+        )
+        .ok()?;
+    let body = (**k.get(*r.bodies.first()?).ok()?).clone();
+    let got = super::mass::body_volume(&body);
+    if !body.check().is_empty() || (got - rv).abs() > 1e-9 * rv.abs().max(1e-12) {
+        return None;
+    }
+    // Each face on a face of the body's surface, facing the same way: that face's.
+    let src = (0..body.faces.len())
+        .map(|fi| {
+            let f = &body.faces[fi];
+            let uvs: Vec<P2> = f
+                .loops
+                .iter()
+                .flatten()
+                .map(|c| {
+                    let e = &body.edges[c.edge];
+                    let q = c.pc.point(e.mid_t());
+                    P2::new(q.x, q.y)
+                })
+                .collect();
+            let (u, v) = uvs.iter().fold((0.0, 0.0), |s, q| (s.0 + q.x, s.1 + q.y));
+            let (u, v) = (u / uvs.len() as f64, v / uvs.len() as f64);
+            let p = f.surf.eval(u, v);
+            let nf = f.surf.normal(u, v).normalize() * if f.sense { 1.0 } else { -1.0 };
+            (0..b.faces.len())
+                .find(|&g| {
+                    let og = &b.faces[g];
+                    og.surf.distance(&p) <= 1e-7 * (1.0 + size) && {
+                        let (ou, ov) = og.surf.project(&p, None);
+                        let no =
+                            og.surf.normal(ou, ov).normalize() * if og.sense { 1.0 } else { -1.0 };
+                        no.dot(&nf) > 0.99
+                    }
+                })
+                .map(|g| vec![super::blend::FaceSrc::Input(g)])
+                .unwrap_or_default()
+        })
+        .collect();
+    Some((body, src))
 }

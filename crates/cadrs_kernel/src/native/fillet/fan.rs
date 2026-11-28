@@ -422,6 +422,7 @@ pub(super) fn fan_face(
             .map(|h| vec![hom(&fan.apex, h[3]), *h])
             .collect();
         let surf = Surface::Nurbs(std::sync::Arc::new(NurbsSurface {
+            screw: None,
             du: r.degree,
             dv: 1,
             ku: r.knots.clone(),

@@ -44,7 +44,7 @@ pub fn pcurve_or(
         .or(fit)
         .unwrap_or_else(|| {
             let t = super::boolean::profiling().then(web_time::Instant::now);
-            let pc = fitted(s, c, t0, t1);
+            let pc = fitted_kept(s, c, t0, t1);
             if let Some(t) = t {
                 FITTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 FITTED_NS.fetch_add(
@@ -597,6 +597,93 @@ pub(super) fn iso_line(s: &Surface, c: &Curve, t0: f64, t1: f64) -> Option<Curve
 /// 1e-9, took 333 points as a cubic.
 const FIT_DEGREE: usize = 5;
 
+/// [`fitted`], kept by its inputs (two generations of at most this many): every boolean of a
+/// part with another fits its edges' p-curves on the same surfaces again (a coil's end circles
+/// on its sweep, ten booleans a case).
+fn fitted_kept(s: &Surface, c: &Curve, t0: f64, t1: f64) -> Curve {
+    const KEPT: usize = 1024;
+    #[derive(Default)]
+    struct Kept {
+        new: rustc_hash::FxHashMap<u128, Curve>,
+        old: rustc_hash::FxHashMap<u128, Curve>,
+    }
+    static KEPT_FITS: std::sync::LazyLock<std::sync::Mutex<Kept>> =
+        std::sync::LazyLock::new(|| {
+            // (Emptied by [`crate::native::clear_caches`].)
+            super::par::kept_cache(|| {
+                *KEPT_FITS.lock().unwrap_or_else(|e| e.into_inner()) = Default::default();
+            });
+            Default::default()
+        });
+    // A circle on a sphere is kept in the sphere's own frame, to a part in 10¹¹ of its radius:
+    // its p-curve is the same wherever the two stand together (a filleted solid's corners, the
+    // same solid moved), and fitted there.
+    let mut canonical: Option<(Surface, Curve)> = None;
+    let mut h = super::fingerprint::Key128::new();
+    match (s, c) {
+        (Surface::Sphere { f, r }, Curve::Circle { c: cc, x, y, r: rc }) => {
+            let l = f.local(cc);
+            let dir = |v: &V3| V3::new(v.dot(&f.x), v.dot(&f.y), v.dot(&f.z));
+            let (lx, ly) = (dir(x), dir(y));
+            let q = |v: f64| (v / (r * 1e-11)).round();
+            h.f64s(&[-1.5e300, *r, q(*rc)]);
+            h.f64s(&[
+                q(l.x),
+                q(l.y),
+                q(l.z),
+                q(lx.x * r),
+                q(lx.y * r),
+                q(lx.z * r),
+            ]);
+            h.f64s(&[q(ly.x * r), q(ly.y * r), q(ly.z * r)]);
+            canonical = Some((
+                Surface::Sphere {
+                    f: Frame {
+                        o: P3::origin(),
+                        x: V3::x(),
+                        y: V3::y(),
+                        z: V3::z(),
+                    },
+                    r: *r,
+                },
+                Curve::Circle {
+                    c: P3::from(l),
+                    x: lx,
+                    y: ly,
+                    r: *rc,
+                },
+            ));
+        }
+        _ => {
+            h.surface(s);
+            h.curve(c);
+        }
+    }
+    h.f64s(&[t0, t1]);
+    let key = h.key();
+    {
+        let mut k = KEPT_FITS.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(pc) = k.new.get(&key).cloned() {
+            return pc;
+        }
+        if let Some(pc) = k.old.remove(&key) {
+            k.new.insert(key, pc.clone());
+            return pc;
+        }
+    }
+    let pc = match &canonical {
+        Some((s, c)) => fitted(s, c, t0, t1),
+        None => fitted(s, c, t0, t1),
+    };
+    let mut k = KEPT_FITS.lock().unwrap_or_else(|e| e.into_inner());
+    if k.new.len() >= KEPT {
+        let new = std::mem::take(&mut k.new);
+        super::par::discard(std::mem::replace(&mut k.old, new));
+    }
+    k.new.insert(key, pc.clone());
+    pc
+}
+
 /// Interpolates projected points with the curve's own parameters.
 fn fitted(s: &Surface, c: &Curve, t0: f64, t1: f64) -> Curve {
     // Followed continuously across the surface's seams (brought back into a closed
@@ -665,6 +752,72 @@ pub(crate) fn carried(
         .then_some(pc)
 }
 
+/// [`fitted_by`] span by span between a B-spline's knots of full multiplicity (the degree:
+/// spans meeting in position only) inside [t0, t1], each span's fit moved by whole periods to
+/// start where the last ended and joined to it. None for a curve without such knots, or with
+/// more than 32.
+fn fitted_by_spans(
+    s: &Surface,
+    c: &Curve,
+    t0: f64,
+    t1: f64,
+    project: &dyn Fn(f64, Option<(f64, f64)>) -> P2,
+) -> Option<Curve> {
+    let Curve::Nurbs(n) = c else { return None };
+    let (lo, hi) = (t0.min(t1), t0.max(t1));
+    let pad = 1e-9 * (hi - lo).abs().max(tol::TINY);
+    let mut cuts: Vec<f64> = Vec::new();
+    let k = &n.knots;
+    let mut i = 0;
+    while i < k.len() {
+        let mut j = i;
+        while j + 1 < k.len() && k[j + 1] == k[i] {
+            j += 1;
+        }
+        if j + 1 - i >= n.degree && k[i] > lo + pad && k[i] < hi - pad {
+            cuts.push(k[i]);
+        }
+        i = j + 1;
+    }
+    if cuts.is_empty() || cuts.len() > 32 || n.degree < 2 {
+        return None;
+    }
+    let periods = closed_periods(s);
+    let mut stops = vec![lo];
+    stops.extend(cuts);
+    stops.push(hi);
+    let mut out: Option<NurbsCurve> = None;
+    for w in stops.windows(2) {
+        let Curve::Nurbs(piece) = fitted_by(s, c, w[0], w[1], project) else {
+            return None;
+        };
+        let mut piece = (*piece).clone();
+        if let Some(prev) = &out {
+            if piece.degree != prev.degree {
+                return None;
+            }
+            // (The same point's (u, v), maybe a turn apart.)
+            let (a, b) = (prev.point(prev.range().1), piece.point(piece.range().0));
+            for (axis, period) in periods.iter().enumerate() {
+                if let Some(p) = period {
+                    let gap = if axis == 0 { a.x - b.x } else { a.y - b.y };
+                    let turns = (gap / p).round() * p;
+                    if turns != 0.0 {
+                        for cp in piece.cps.iter_mut() {
+                            cp[axis] += turns * cp.w;
+                        }
+                    }
+                }
+            }
+        }
+        out = Some(match out {
+            Some(prev) => prev.joined(&piece),
+            None => piece,
+        });
+    }
+    out.map(|n| Curve::Nurbs(Arc::new(n)))
+}
+
 /// [`fitted`] with `project` for the (u, v) of the curve's point at a parameter (hinted by a
 /// neighbour's).
 fn fitted_by(
@@ -674,6 +827,13 @@ fn fitted_by(
     t1: f64,
     project: &dyn Fn(f64, Option<(f64, f64)>) -> P2,
 ) -> Curve {
+    // A B-spline whose spans meet with no more than position in common (a conic of rational
+    // arcs at double knots: its speed jumps there, so its projection kinks): each span fitted
+    // by itself and the fits joined, where one quintic across the kinks takes hundreds of
+    // points (an ellipse round a cone, 800).
+    if let Some(fit) = fitted_by_spans(s, c, t0, t1, project) {
+        return fit;
+    }
     let pieces = c.pieces(t0, t1);
     let mut ts: Vec<f64> = Vec::new();
     // A few samples a piece to start (refined below where the fit is off).
